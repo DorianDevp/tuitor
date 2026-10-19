@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "nodenext",
+    // orders.ts imports nothing, so it compiles as a script: its first statement is the
+    // first one Node runs, where stopOnEntry stops, rather than CommonJS boilerplate.
+    "moduleDetection": "auto",
+    "strict": true,
+    "rootDir": ".",
+    "outDir": "dist",
+    // dist/orders.js.map maps the JavaScript Node runs back to orders.ts.
+    "sourceMap": true
+  },
+  "files": ["orders.ts"]
+}

@@ -1,0 +1,20 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "orders",
+      "type": "pwa-node",
+      "request": "launch",
+      // What tsc built; breakpoints in orders.ts reach it through dist/orders.js.map.
+      "program": "${workspaceFolder}/dist/orders.js",
+      "outFiles": ["${workspaceFolder}/dist/**/*.js"],
+      "cwd": "${workspaceFolder}",
+      // The program's output comes to OUTPUT through js-debug. "integratedTerminal" would
+      // ask tuitor for a terminal, which it cannot give (see the README).
+      "console": "internalConsole",
+      // Stop on the first line, so there is time to set breakpoints on the first run.
+      "stopOnEntry": true,
+      "skipFiles": ["<node_internals>/**"]
+    }
+  ]
+}

@@ -34,9 +34,9 @@ neither, the current directory gets a tab only if it is a project (it has a
 launch configuration or a kind tuitor knows, see below); otherwise tuitor starts
 with an empty tab, and `O` opens a project in it.
 
-[`examples/`](examples) has a small program for PHP, Rust, C, Node.js and a
-web page in Chromium, each with a launch.json, a `run.sh` that sets it up and
-starts tuitor on it, and a walk through a first session.
+[`examples/`](examples) has a small program for PHP, Rust, C, Node.js, a web
+page in Chromium and TypeScript, each with a launch.json, a `run.sh` that sets
+it up and starts tuitor on it, and a walk through a first session.
 
 ### PHP in a container
 
