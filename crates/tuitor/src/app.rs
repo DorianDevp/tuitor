@@ -91,12 +91,14 @@ impl Cursor {
 /// What SOURCE shows: the execution point (follow) or a file the user opened.
 #[derive(Debug, Default)]
 pub struct SourceState {
+    /// The file the user opened or moved the cursor in; the next automatic change
+    /// (`App::jump_to_execution`) drops it.
     pub browse: Option<PathBuf>,
     /// 1-based line of the cursor.
     pub cursor: u32,
     /// First visible line (1-based), kept by the renderer.
     pub top: Cell<u32>,
-    /// Put the cursor at a third of the height on the next render.
+    /// Centre the cursor vertically on the next render.
     pub recenter: Cell<bool>,
 }
 
@@ -318,9 +320,7 @@ impl App {
             if self.ui.session == Some(sid) {
                 self.ui.viewing.remove(&sid);
                 self.ui.stack.pos = 0;
-                if self.ui.source.browse.is_none() {
-                    self.follow_execution();
-                }
+                self.jump_to_execution();
             }
         }
     }
@@ -385,7 +385,7 @@ impl App {
             Action::HistoryLive => {
                 let sid = self.require_session()?;
                 self.ui.viewing.remove(&sid);
-                self.follow_execution();
+                self.jump_to_execution();
                 Ok("live".into())
             }
             Action::BpToggle(location) => self.bp_toggle(location),
@@ -481,13 +481,13 @@ impl App {
             Action::Right => self.horizontal(1),
             Action::Open => self.open(),
             Action::Follow => {
-                self.ui.source.browse = None;
-                self.follow_execution();
+                self.jump_to_execution();
                 Ok("following execution".into())
             }
             Action::Vendor => {
                 self.ui.show_vendor = !self.ui.show_vendor;
                 self.ui.stack.pos = 0;
+                self.jump_to_execution();
                 Ok(if self.ui.show_vendor { "library frames shown" } else { "library frames collapsed" }.into())
             }
             Action::Find(query) => {
@@ -568,7 +568,7 @@ impl App {
             self.ui.viewing.insert(sid, target);
         }
         self.ui.stack.pos = 0;
-        self.follow_execution();
+        self.jump_to_execution();
         Ok(if target == len {
             format!("#{target} {location} · live")
         } else {
@@ -647,8 +647,7 @@ impl App {
         let index = self.ui.session.and_then(|sid| ids.iter().position(|i| *i == sid)).unwrap_or(0);
         let next = ids[(index as isize + delta).rem_euclid(ids.len() as isize) as usize];
         self.ui.session = Some(next);
-        self.ui.source.browse = None;
-        self.follow_execution();
+        self.jump_to_execution();
         let name = self.engine.session(next).map(|s| s.name.clone()).unwrap_or_default();
         Ok(name)
     }
@@ -661,11 +660,11 @@ impl App {
         if let Some(sid) = self.ui.session
             && self.ui.viewing.remove(&sid).is_some()
         {
-            self.follow_execution();
+            self.jump_to_execution();
             return Ok("back to the live stop".into());
         }
-        if self.ui.source.browse.take().is_some() {
-            self.follow_execution();
+        if self.ui.source.browse.is_some() {
+            self.jump_to_execution();
             return Ok("following execution".into());
         }
         Ok(String::new())
@@ -688,7 +687,7 @@ impl App {
             Pane::Stack => {
                 let len = self.stack_rows().len();
                 self.ui.stack.move_by(delta, len);
-                self.follow_execution();
+                self.jump_to_execution();
             }
             Pane::Watch => {
                 let len = self.engine.watches().len();
@@ -719,6 +718,8 @@ impl App {
                 } else {
                     self.ui.viewing.insert(sid, target as u32);
                 }
+                self.ui.stack.pos = 0;
+                self.jump_to_execution();
             }
         }
         Ok(String::new())
@@ -767,8 +768,7 @@ impl App {
                 if let Some(StackRow::Collapsed { .. }) = self.stack_rows().get(self.ui.stack.pos) {
                     self.ui.show_vendor = true;
                 }
-                self.ui.source.browse = None;
-                self.follow_execution();
+                self.jump_to_execution();
                 Ok(String::new())
             }
             Pane::Breakpoints => {
@@ -780,7 +780,7 @@ impl App {
             }
             Pane::History => {
                 self.ui.view = View::Overview;
-                self.follow_execution();
+                self.jump_to_execution();
                 Ok("showing the selected stop".into())
             }
             _ => Ok(String::new()),
@@ -826,11 +826,12 @@ impl App {
         }
     }
 
-    /// Points SOURCE at the selected frame of the viewed stop.
-    pub fn follow_execution(&mut self) {
-        if self.ui.source.browse.is_some() {
-            return;
-        }
+    /// Points SOURCE at the selected frame of the viewed stop, with the cursor on its line
+    /// and that line centred. Every automatic change of the view calls this (a new stop,
+    /// another recorded stop, frame or session, `.`), so it drops whatever the user was
+    /// browsing.
+    pub fn jump_to_execution(&mut self) {
+        self.ui.source.browse = None;
         if let Some(frame) = self.selected_frame() {
             self.ui.source.cursor = frame.line.max(1);
             self.ui.source.recenter.set(true);

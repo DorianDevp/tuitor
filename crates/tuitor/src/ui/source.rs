@@ -66,16 +66,8 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
     let exec_is_top = frame.zip(top_frame).is_some_and(|(a, b)| a.id == b.id);
     let cursor = app.ui.source.cursor.clamp(1, lines.max(1));
 
-    let mut top = app.ui.source.top.get().max(1);
-    if app.ui.source.recenter.replace(false) {
-        top = cursor.saturating_sub(height / 3).max(1);
-    }
-    if cursor < top {
-        top = cursor;
-    } else if cursor >= top + height {
-        top = cursor + 1 - height;
-    }
-    top = top.min(lines.saturating_sub(height) + 1).max(1);
+    let recenter = app.ui.source.recenter.replace(false);
+    let top = window_top(app.ui.source.top.get(), cursor, height, lines, recenter);
     app.ui.source.top.set(top);
 
     let canonical = tuitor_canonical(&path);
@@ -149,6 +141,20 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
             p.segs(cx + 3, y, &segs, inner.right());
         }
     }
+}
+
+/// First visible line of `height` rows over a file of `lines` lines that shows `cursor`:
+/// with `recenter` the cursor line is in the middle, otherwise `top` scrolls only as far as
+/// needed. The window never starts before line 1 nor ends after the last line of a file
+/// longer than it.
+fn window_top(top: u32, cursor: u32, height: u32, lines: u32, recenter: bool) -> u32 {
+    let mut top = if recenter { cursor.saturating_sub(height.saturating_sub(1) / 2) } else { top };
+    if cursor < top {
+        top = cursor;
+    } else if cursor >= top + height {
+        top = cursor + 1 - height;
+    }
+    top.min(lines.saturating_sub(height) + 1).max(1)
 }
 
 fn marker(bp: &Breakpoint, hit: bool) -> (&'static str, ratatui::style::Color) {
@@ -306,7 +312,30 @@ fn tuitor_canonical(path: &std::path::Path) -> std::path::PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::mentions;
+    use super::{mentions, window_top};
+
+    #[test]
+    fn recentring_puts_the_cursor_in_the_middle_within_the_file() {
+        // 17 rows over 79 lines: 8 above and 8 below line 50.
+        assert_eq!(window_top(1, 50, 17, 79, true), 42);
+        // An even height leaves the extra row below.
+        assert_eq!(window_top(1, 50, 16, 79, true), 43);
+        // Near the top the window starts at line 1 rather than above it.
+        assert_eq!(window_top(30, 5, 17, 79, true), 1);
+        assert_eq!(window_top(30, 9, 17, 79, true), 1);
+        // Near the end it stops at the last line.
+        assert_eq!(window_top(1, 77, 17, 79, true), 63);
+        // A file shorter than the window starts at line 1.
+        assert_eq!(window_top(4, 8, 17, 10, true), 1);
+    }
+
+    #[test]
+    fn moving_the_cursor_scrolls_only_as_far_as_needed() {
+        assert_eq!(window_top(42, 55, 17, 79, false), 42);
+        assert_eq!(window_top(42, 59, 17, 79, false), 43);
+        assert_eq!(window_top(42, 40, 17, 79, false), 40);
+        assert_eq!(window_top(70, 75, 17, 79, false), 63);
+    }
 
     #[test]
     fn whole_word_mentions() {
