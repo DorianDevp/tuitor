@@ -14,6 +14,7 @@
 
 use std::fmt::Write as _;
 use std::path::Path;
+use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -28,26 +29,45 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
 use crate::runner::Inbox;
+use crate::signals::Signals;
 use crate::ui;
 
 const WAIT: Duration = Duration::from_secs(20);
 
+/// Runs the script, or as much of it as comes before an error or a signal, then ends
+/// every session; returns the status to exit with.
 pub async fn run(
     mut app: App,
     mut rx: Inbox,
     config: Option<LaunchConfig>,
     script: &Path,
-    (width, height): (u16, u16),
-) -> Result<()> {
+    size: (u16, u16),
+    mut signals: Signals,
+) -> Result<ExitCode> {
     app.headless = true;
     let text = std::fs::read_to_string(script).with_context(|| format!("reading {}", script.display()))?;
-    let base = script.parent().unwrap_or(Path::new("."));
-    let mut terminal = Terminal::new(TestBackend::new(width, height))?;
     if let Some(config) = config {
         app.start(config);
     }
+    let result = tokio::select! {
+        result = run_lines(&mut app, &mut rx, script, &text, size) => result.map(|()| ExitCode::SUCCESS),
+        code = signals.recv() => Ok(code),
+    };
+    app.shutdown().await;
+    result
+}
+
+async fn run_lines(
+    app: &mut App,
+    rx: &mut Inbox,
+    script: &Path,
+    text: &str,
+    (width, height): (u16, u16),
+) -> Result<()> {
+    let base = script.parent().unwrap_or(Path::new("."));
+    let mut terminal = Terminal::new(TestBackend::new(width, height))?;
     // `@wait stop` means a stop after the last action, even if it already arrived.
-    let mut mark = stops(&app);
+    let mut mark = stops(app);
 
     for (number, line) in text.lines().enumerate() {
         let line = line.trim();
@@ -59,40 +79,39 @@ pub async fn run(
             let (directive, arg) = rest.split_once(' ').unwrap_or((rest, ""));
             match directive {
                 "wait" => {
-                    wait(&mut app, &mut rx, arg.trim(), mark).await.with_context(context)?;
-                    mark = stops(&app);
+                    wait(app, rx, arg.trim(), mark).await.with_context(context)?;
+                    mark = stops(app);
                 }
                 "sleep" => {
                     let ms: u64 = arg.trim().parse().with_context(context)?;
-                    pump_for(&mut app, &mut rx, Duration::from_millis(ms)).await;
+                    pump_for(app, rx, Duration::from_millis(ms)).await;
                 }
                 "clock" => {
                     let ms: u64 = arg.trim().parse().with_context(context)?;
                     app.ui.clock = Some(Duration::from_millis(ms));
                 }
                 "key" => {
-                    mark = stops(&app);
+                    mark = stops(app);
                     for key in arg.split_whitespace() {
                         app.on_key(key_event(key).with_context(context)?);
-                        drain(&mut app, &mut rx);
+                        drain(app, rx);
                     }
                 }
                 "dump" => {
-                    pump_for(&mut app, &mut rx, Duration::from_millis(150)).await;
-                    terminal.draw(|frame| ui::draw(frame, &app))?;
+                    pump_for(app, rx, Duration::from_millis(150)).await;
+                    terminal.draw(|frame| ui::draw(frame, app))?;
                     let path = base.join(arg.trim());
                     std::fs::write(&path, to_ansi(terminal.backend().buffer())).with_context(context)?;
                 }
                 other => bail!("{}: unknown directive @{other}", context()),
             }
         } else {
-            mark = stops(&app);
+            mark = stops(app);
             app.execute(line, None);
-            pump_for(&mut app, &mut rx, Duration::from_millis(50)).await;
+            pump_for(app, rx, Duration::from_millis(50)).await;
         }
-        terminal.draw(|frame| ui::draw(frame, &app))?;
+        terminal.draw(|frame| ui::draw(frame, app))?;
     }
-    app.shutdown().await;
     Ok(())
 }
 
