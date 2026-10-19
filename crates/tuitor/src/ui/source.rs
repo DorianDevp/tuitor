@@ -300,7 +300,13 @@ fn empty(p: &mut Painter<'_>, app: &App, inner: Rect) {
         }
         y += 1;
         for item in configs.iter().take(listed) {
-            p.text(x + 4, y, item, fg(FAINT), inner.right());
+            // A recent project's path shows its end, which tells it apart.
+            let item = if tab.project.is_some() {
+                item.into()
+            } else {
+                truncate_left(item, usize::from(inner.right().saturating_sub(x + 5)))
+            };
+            p.text(x + 4, y, &item, fg(FAINT), inner.right());
             y += 1;
         }
         y += 1;
