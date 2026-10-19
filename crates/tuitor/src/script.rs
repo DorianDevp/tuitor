@@ -8,6 +8,7 @@
 //! @wait stop                     until a new stop is recorded
 //! @wait running | exited         until the active session is in that state
 //! @sleep 300                     milliseconds
+//! @clock 700                     animations at 700 ms (by default they hold still)
 //! @dump overview.ans             save the screen
 //! ```
 
@@ -63,6 +64,10 @@ pub async fn run(
                 "sleep" => {
                     let ms: u64 = arg.trim().parse().with_context(context)?;
                     pump_for(&mut app, &mut rx, Duration::from_millis(ms)).await;
+                }
+                "clock" => {
+                    let ms: u64 = arg.trim().parse().with_context(context)?;
+                    app.ui.clock = Some(Duration::from_millis(ms));
                 }
                 "key" => {
                     mark = stops(&app);

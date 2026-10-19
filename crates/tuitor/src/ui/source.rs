@@ -1,10 +1,13 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use tuitor_core::breakpoints::Breakpoint;
+use tuitor_core::session::SessionState;
 use tuitor_core::snapshot::Change;
 
+use super::logo::{self, Size};
 use super::paint::{Painter, Panel, seg, truncate, truncate_left};
 use super::syntax::{Lang, highlight};
 use super::theme::*;
@@ -240,8 +243,28 @@ fn one_line(value: &str) -> String {
 }
 
 fn empty(p: &mut Painter<'_>, app: &App, inner: Rect) {
-    let x = inner.x + 3;
+    let configs = app.configs.len().min(6);
+    // The message, a gap, the configurations with a line above and a gap below, then two hints.
+    let hints_height = if configs == 0 { 4 } else { 6 + configs as u16 };
+    let logo = [Size::Full, Size::Small].into_iter().find(|size| {
+        let (w, h) = size.cells();
+        w + 2 * logo::PAD <= inner.width && 1 + h + 1 + hints_height <= inner.height
+    });
+
+    let mut x = inner.x + 3;
     let mut y = inner.y + 1;
+    if let Some(size) = logo {
+        let (w, h) = size.cells();
+        let logo_x = match size {
+            Size::Full => inner.x + (inner.width - w) / 2,
+            Size::Small => x,
+        };
+        y = inner.y + ((inner.height - h - 1 - hints_height) / 2).max(1);
+        logo::draw(p, logo_x, y, size, waves_clock(app));
+        x = logo_x + size.indent();
+        y += h + 1;
+    }
+
     let line = |p: &mut Painter<'_>, y: u16, key: &str, text: &str| {
         let x2 = p.text(x, y, key, bold(KEY), inner.right());
         p.text(x2.max(x + 4), y, text, fg(DIM), inner.right());
@@ -256,7 +279,7 @@ fn empty(p: &mut Painter<'_>, app: &App, inner: Rect) {
     if !app.configs.is_empty() {
         line(p, y, "S", "start a launch configuration:");
         y += 1;
-        for config in app.configs.iter().take(6) {
+        for config in app.configs.iter().take(configs) {
             p.text(x + 4, y, &format!("{}  ({})", config.name, config.adapter), fg(FAINT), inner.right());
             y += 1;
         }
@@ -264,6 +287,17 @@ fn empty(p: &mut Painter<'_>, app: &App, inner: Rect) {
     }
     line(p, y, "f", "find a file, then b toggles a breakpoint on the cursor line");
     line(p, y + 1, "/", "command line · ? lists every command and its key");
+}
+
+/// Time for the waves, or `None` to hold them still: they never move while a
+/// program is stopped or something is open over them.
+fn waves_clock(app: &App) -> Option<Duration> {
+    let stopped = app.engine.sessions().iter().any(|s| s.state == SessionState::Stopped);
+    let clock = app.ui.clock.filter(|_| !stopped && app.ui.overlay.is_none());
+    if clock.is_some() {
+        app.ui.animating.set(true);
+    }
+    clock
 }
 
 fn tuitor_canonical(path: &std::path::Path) -> std::path::PathBuf {

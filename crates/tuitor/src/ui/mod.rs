@@ -1,9 +1,10 @@
 //! Drawing. Every frame is rendered from scratch from `App`; nothing here mutates
-//! state except the scroll offsets kept in `Cell`s.
+//! state except the scroll offsets and the animation flag kept in `Cell`s.
 
 mod breakpoints;
 mod history;
 mod locals;
+mod logo;
 mod logs;
 mod overlays;
 pub mod paint;
@@ -29,6 +30,7 @@ pub const MIN_WIDTH: u16 = 100;
 pub const MIN_HEIGHT: u16 = 28;
 
 pub fn draw(frame: &mut Frame, app: &App) {
+    app.ui.animating.set(false);
     let area = frame.area();
     let mut p = Painter { buf: frame.buffer_mut() };
     p.fill(area, BG);
@@ -129,7 +131,7 @@ fn history_value_area(body: Rect) -> Rect {
 fn topbar(p: &mut Painter<'_>, app: &App, area: Rect) {
     p.fill(area, BAR);
     let y = area.y;
-    let mut x = p.text(1, y, "◆ ", bold(AMBER), area.right());
+    let mut x = logo::mark(p, 1, y) + 1;
     x = p.text(x, y, "TUITOR", bold(TITLE), area.right());
     x = p.text(x + 1, y, "│", fg(GHOST), area.right()) + 1;
     for view in View::ALL {

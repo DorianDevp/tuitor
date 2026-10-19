@@ -1,17 +1,23 @@
-//! The interactive loop: terminal input, engine messages and a clock tick.
+//! The interactive loop: terminal input, engine messages and a clock tick, faster
+//! while an animation is on screen.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::StreamExt;
 use ratatui::DefaultTerminal;
 use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::time::MissedTickBehavior;
 use tuitor_core::EngineMsg;
 use tuitor_core::config::LaunchConfig;
 
 use crate::app::App;
 use crate::ui;
+
+/// Redraw interval while an animation is on screen; otherwise the clock in the
+/// top bar needs one redraw a second.
+const FRAME: Duration = Duration::from_millis(80);
 
 pub async fn run(mut app: App, mut rx: UnboundedReceiver<EngineMsg>, start: Option<LaunchConfig>) -> Result<()> {
     let mut terminal = ratatui::init();
@@ -39,7 +45,11 @@ async fn event_loop(
     start(app, config);
     let mut input = EventStream::new();
     let mut tick = tokio::time::interval(Duration::from_secs(1));
+    let mut frame_tick = tokio::time::interval(FRAME);
+    frame_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let started = Instant::now();
     loop {
+        app.ui.clock = Some(started.elapsed());
         terminal.draw(|frame| ui::draw(frame, app))?;
         if app.quit {
             return Ok(());
@@ -59,6 +69,7 @@ async fn event_loop(
                 app.after_engine();
             }
             _ = tick.tick() => {}
+            _ = frame_tick.tick(), if app.ui.animating.get() => {}
         }
     }
 }

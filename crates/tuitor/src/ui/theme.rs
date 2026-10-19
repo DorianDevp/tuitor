@@ -4,7 +4,7 @@
 
 use ratatui::style::{Color, Modifier, Style};
 
-const fn rgb(hex: u32) -> Color {
+pub const fn rgb(hex: u32) -> Color {
     Color::Rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
 }
 
@@ -51,6 +51,13 @@ pub fn tag(tag: &str) -> Color {
         "go" => rgb(0x82b3c0),
         _ => rgb(0xa899c4),
     }
+}
+
+/// `a` moved toward `b` by `amount` (0 is `a`, 1 is `b`).
+pub fn mix(a: Color, b: Color, amount: f32) -> Color {
+    let (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) = (a, b) else { return b };
+    let channel = |from: u8, to: u8| (f32::from(from) + (f32::from(to) - f32::from(from)) * amount).round() as u8;
+    Color::Rgb(channel(r1, r2), channel(g1, g2), channel(b1, b2))
 }
 
 pub fn fg(color: Color) -> Style {

@@ -3,6 +3,7 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crossterm::event::KeyEvent;
 use tuitor_core::breakpoints::Toggle;
@@ -130,6 +131,12 @@ pub struct Ui {
     pub pending: Vec<Key>,
     pub recent: Vec<String>,
     seen_stops: HashMap<SessionId, usize>,
+    /// Time for animations, set by the loop before each frame. `None` draws them
+    /// still, which keeps headless screens the same on every run.
+    pub clock: Option<Duration>,
+    /// Set by the renderer when the frame holds a moving animation, so the loop
+    /// redraws faster only then.
+    pub animating: Cell<bool>,
 }
 
 pub struct App {
@@ -172,6 +179,8 @@ impl App {
                 pending: Vec::new(),
                 recent: Vec::new(),
                 seen_stops: HashMap::new(),
+                clock: None,
+                animating: Cell::new(false),
             },
             sources: Default::default(),
             quit: false,
