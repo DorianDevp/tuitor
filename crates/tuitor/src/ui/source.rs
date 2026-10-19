@@ -295,7 +295,7 @@ fn waves_clock(app: &App) -> Option<Duration> {
     let stopped = app.engine.sessions().iter().any(|s| s.state == SessionState::Stopped);
     let clock = app.ui.clock.filter(|_| !stopped && app.ui.overlay.is_none());
     if clock.is_some() {
-        app.ui.animating.set(true);
+        app.ui.animate(logo::FRAME);
     }
     clock
 }

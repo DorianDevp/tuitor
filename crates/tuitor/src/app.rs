@@ -134,9 +134,16 @@ pub struct Ui {
     /// Time for animations, set by the loop before each frame. `None` draws them
     /// still, which keeps headless screens the same on every run.
     pub clock: Option<Duration>,
-    /// Set by the renderer when the frame holds a moving animation, so the loop
-    /// redraws faster only then.
-    pub animating: Cell<bool>,
+    /// Set by the renderer when the frame holds a moving animation: how soon it
+    /// changes next, so the loop redraws only then.
+    pub animating: Cell<Option<Duration>>,
+}
+
+impl Ui {
+    /// Asks for the next frame within `after`; the soonest request wins.
+    pub fn animate(&self, after: Duration) {
+        self.animating.set(Some(self.animating.get().map_or(after, |due| due.min(after))));
+    }
 }
 
 pub struct App {
@@ -180,7 +187,7 @@ impl App {
                 recent: Vec::new(),
                 seen_stops: HashMap::new(),
                 clock: None,
-                animating: Cell::new(false),
+                animating: Cell::new(None),
             },
             sources: Default::default(),
             quit: false,

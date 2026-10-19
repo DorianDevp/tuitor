@@ -3,8 +3,9 @@
 //! over the lower one's. The pixels are assets/logo_white.svg sampled on the
 //! 9.954-unit grid its wordmark is drawn on.
 //!
-//! The stripe colours are bright, so the logo appears in full only where no data
-//! is shown; the top bar gets a small muted mark.
+//! The logo appears in full only where no data is shown. The top bar gets a one-row
+//! version: the logo turned on its side, each stripe a bar as tall as the stripe
+//! reaches left.
 
 use std::f32::consts::TAU;
 use std::ops::Range;
@@ -13,7 +14,7 @@ use std::time::Duration;
 use ratatui::style::Color;
 
 use super::paint::Painter;
-use super::theme::{BAR, BG, WHITE, bold, mix, rgb};
+use super::theme::{BG, WHITE, bold, mix, rgb};
 
 /// 89 × 21 pixels. The heart over the "i" uses finer cells in the SVG and is
 /// copied cell for cell, so it keeps its notch and point.
@@ -65,8 +66,6 @@ const STRIPE_END: f32 = 20.0;
 /// Columns left of the logo that a swaying stripe may reach.
 pub const PAD: u16 = 2;
 const NAME: &str = "tuitor";
-/// How much of the stripe colours the top bar's mark keeps.
-const MARK_STRENGTH: f32 = 0.4;
 
 /// One sway, in milliseconds.
 const PERIOD_MS: u128 = 2800;
@@ -74,6 +73,21 @@ const PERIOD_MS: u128 = 2800;
 const AMPLITUDE: f32 = 1.5;
 /// Phase lag between neighbouring stripes, so the sway runs down the stack.
 const LAG: f32 = 0.7;
+/// Time between frames while the logo sways: its edges glide, so every frame
+/// differs. Nothing animated is redrawn more often.
+pub const FRAME: Duration = Duration::from_millis(80);
+
+/// Lower blocks by height in eighths of a cell.
+const EIGHTHS: [&str; 9] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+/// A top bar wave's height, in eighths, for a stripe whose left edge is at 0 …
+const WAVE_TOP: f32 = 7.5;
+/// … and what each pixel further right takes off. The sway then moves a wave by
+/// under one eighth each way, so the bar stays calm.
+const WAVE_SLOPE: f32 = 0.55;
+/// How finely the top bar looks ahead for the waves' next step.
+const WAVE_STEP: Duration = Duration::from_millis(10);
+/// Columns of the top bar's logo: the waves, a space and the name.
+pub const BAR_WIDTH: u16 = STRIPES.len() as u16 + 1 + NAME.len() as u16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Size {
@@ -157,15 +171,42 @@ pub fn draw(p: &mut Painter<'_>, x: u16, y: u16, size: Size, t: Option<Duration>
     }
 }
 
-/// The top bar's mark: the logo's second and third stripes with the step between
-/// them, muted so they stay quieter than the colours that mean something.
+/// Heights in eighths of the top bar's waves at time `t`. They follow the big
+/// logo's sway, so the two move in step; `None` is the resting frame, the logo's
+/// own steps.
+fn waves(t: Option<Duration>) -> [usize; STRIPES.len()] {
+    std::array::from_fn(|stripe| {
+        let left = STRIPES[stripe].left + sway(stripe, t);
+        (WAVE_TOP - WAVE_SLOPE * left).round().clamp(1.0, 8.0) as usize
+    })
+}
+
+/// How long after `t` the waves next change, but at least a frame. They move in
+/// steps, so the loop redraws only for one.
+pub fn next_wave(t: Duration) -> Duration {
+    let now = waves(Some(t));
+    let period = Duration::from_millis(PERIOD_MS as u64);
+    let mut after = FRAME;
+    while after < period && waves(Some(t + after)) == now {
+        after += WAVE_STEP;
+    }
+    after
+}
+
+/// The top bar's logo: the waves, then the name if `room` holds all of it.
 /// Returns the end x.
-pub fn mark(p: &mut Painter<'_>, x: u16, y: u16) -> u16 {
-    let muted = |stripe: usize| mix(BAR, STRIPES[stripe].color, MARK_STRENGTH);
-    put(p, x, y, None, Some(muted(2)));
-    put(p, x + 1, y, Some(muted(1)), Some(muted(2)));
-    put(p, x + 2, y, Some(muted(1)), Some(muted(2)));
-    x + 3
+pub fn bar(p: &mut Painter<'_>, x: u16, y: u16, room: u16, t: Option<Duration>) -> u16 {
+    let mut end = x;
+    for (height, stripe) in waves(t).into_iter().zip(&STRIPES) {
+        if let Some(cell) = p.buf.cell_mut((end, y)) {
+            cell.set_symbol(EIGHTHS[height]).set_fg(stripe.color);
+        }
+        end += 1;
+    }
+    if room >= BAR_WIDTH {
+        end = p.text(end + 1, y, NAME, bold(WHITE), u16::MAX);
+    }
+    end
 }
 
 /// Colour of pixel (x, y), or `None` where the background shows.
@@ -286,5 +327,58 @@ mod tests {
             }
         }
         assert_eq!(render(Size::Full, None), render(Size::Full, None));
+    }
+
+    #[test]
+    fn top_bar_waves_rest_on_the_logo_steps_and_ripple_calmly() {
+        // At rest the stripes stand on end: the yellow one, reaching furthest left, is the tallest.
+        let rest = waves(None);
+        assert_eq!(rest, [4, 6, 7, 6, 4, 3]);
+        let period = PERIOD_MS as u64;
+        let mut moving = 0;
+        for ms in (0..period).step_by(40) {
+            let frame = waves(at(ms));
+            assert_eq!(frame, waves(at(ms + 1000 * period)));
+            for (now, still) in frame.into_iter().zip(rest) {
+                assert!((1..=8).contains(&now) && now.abs_diff(still) <= 1, "{frame:?} at {ms} ms");
+            }
+            moving += usize::from(frame != rest);
+        }
+        assert!(moving > 10, "the waves barely move: {moving} frames");
+    }
+
+    #[test]
+    fn waves_are_redrawn_only_when_they_change() {
+        let period = Duration::from_millis(PERIOD_MS as u64);
+        for ms in (0..PERIOD_MS as u64).step_by(30) {
+            let t = Duration::from_millis(ms);
+            let after = next_wave(t);
+            assert!((FRAME..period).contains(&after), "{after:?} at {ms} ms");
+            assert_ne!(waves(Some(t + after)), waves(Some(t)), "at {ms} ms");
+            if after > FRAME {
+                assert_eq!(waves(Some(t + after - WAVE_STEP)), waves(Some(t)), "late at {ms} ms");
+            }
+        }
+        // Over a period that is under two thirds of the frames the swaying logo needs.
+        let (mut t, mut redraws) = (Duration::ZERO, 0);
+        while t < period {
+            t += next_wave(t);
+            redraws += 1;
+        }
+        assert!(redraws * 3 < period.as_millis() / FRAME.as_millis() * 2, "{redraws} redraws");
+    }
+
+    #[test]
+    fn top_bar_logo_keeps_the_stripe_colours_and_drops_its_name_when_crowded() {
+        let draw_bar = |room| {
+            let mut buf = Buffer::empty(Rect::new(0, 0, 20, 1));
+            let end = bar(&mut Painter { buf: &mut buf }, 1, 0, room, None);
+            let row: String = (0..20).map(|x| buf[(x, 0)].symbol()).collect();
+            let colors: Vec<Color> = (1..7).map(|x| buf[(x, 0)].fg).collect();
+            (end, row.trim_end().to_owned(), colors)
+        };
+        let stripes: Vec<Color> = STRIPES.iter().map(|s| s.color).collect();
+        assert_eq!(draw_bar(BAR_WIDTH), (1 + BAR_WIDTH, " ▄▆▇▆▄▃ tuitor".to_owned(), stripes.clone()));
+        assert_eq!(draw_bar(BAR_WIDTH - 1), (7, " ▄▆▇▆▄▃".to_owned(), stripes));
     }
 }

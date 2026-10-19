@@ -14,6 +14,8 @@ pub mod syntax;
 pub mod theme;
 mod watch;
 
+use std::time::Duration;
+
 use chrono::Local;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -23,14 +25,14 @@ use tuitor_core::session::SessionState;
 use crate::app::{App, Pane};
 use crate::command::View;
 use crate::overlay::Overlay;
-use paint::{Painter, seg};
+use paint::{Painter, Seg, seg};
 use theme::*;
 
 pub const MIN_WIDTH: u16 = 100;
 pub const MIN_HEIGHT: u16 = 28;
 
 pub fn draw(frame: &mut Frame, app: &App) {
-    app.ui.animating.set(false);
+    app.ui.animating.set(None);
     let area = frame.area();
     let mut p = Painter { buf: frame.buffer_mut() };
     p.fill(area, BG);
@@ -131,8 +133,12 @@ fn history_value_area(body: Rect) -> Rect {
 fn topbar(p: &mut Painter<'_>, app: &App, area: Rect) {
     p.fill(area, BAR);
     let y = area.y;
-    let mut x = logo::mark(p, 1, y) + 1;
-    x = p.text(x, y, "TUITOR", bold(TITLE), area.right());
+    let right = topbar_right(app);
+    let tabs: u16 = View::ALL.iter().map(|view| view.name().len() as u16 + 2).sum();
+    // The logo gives way first: it drops its name before a session is cut. Around
+    // it: the margin, " │ " before the tabs and the gap after them.
+    let room = area.width.saturating_sub(1 + 3 + tabs + 2 + paint::width(&right));
+    let mut x = logo::bar(p, 1, y, room, bar_clock(app));
     x = p.text(x + 1, y, "│", fg(GHOST), area.right()) + 1;
     for view in View::ALL {
         let label = format!(" {} ", view.name().to_uppercase());
@@ -145,7 +151,24 @@ fn topbar(p: &mut Painter<'_>, app: &App, area: Rect) {
         }
     }
     let views_end = x + 2;
+    p.segs_right(area.right(), y, &right, views_end);
+}
 
+/// Time for the top bar's waves, or `None` to rest them. They move while nothing
+/// waits to be read: with no session, or while the active one starts, runs or has
+/// ended, so they also quietly show a running program. They rest while it is
+/// stopped or something is open over them.
+fn bar_clock(app: &App) -> Option<Duration> {
+    let stopped = app.active().is_some_and(|s| s.state == SessionState::Stopped);
+    let clock = app.ui.clock.filter(|_| !stopped && app.ui.overlay.is_none());
+    if let Some(t) = clock {
+        app.ui.animate(logo::next_wave(t));
+    }
+    clock
+}
+
+/// The sessions and the time, right-aligned in the top bar.
+fn topbar_right(app: &App) -> Vec<Seg<'static>> {
     let mut right = Vec::new();
     for session in app.engine.sessions() {
         let active = app.ui.session == Some(session.id);
@@ -167,7 +190,7 @@ fn topbar(p: &mut Painter<'_>, app: &App, area: Rect) {
         right.push(seg("│ ", fg(GHOST)));
     }
     right.push(seg(Local::now().format("%H:%M:%S ").to_string(), fg(DIM)));
-    p.segs_right(area.right(), y, &right, views_end);
+    right
 }
 
 fn context(p: &mut Painter<'_>, app: &App, area: Rect) {

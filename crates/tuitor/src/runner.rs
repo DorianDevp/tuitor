@@ -1,5 +1,5 @@
-//! The interactive loop: terminal input, engine messages and a clock tick, faster
-//! while an animation is on screen.
+//! The interactive loop: terminal input, engine messages, a clock tick, and a
+//! redraw when an animation on screen next changes.
 
 use std::time::{Duration, Instant};
 
@@ -8,16 +8,11 @@ use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::StreamExt;
 use ratatui::DefaultTerminal;
 use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::time::MissedTickBehavior;
 use tuitor_core::EngineMsg;
 use tuitor_core::config::LaunchConfig;
 
 use crate::app::App;
 use crate::ui;
-
-/// Redraw interval while an animation is on screen; otherwise the clock in the
-/// top bar needs one redraw a second.
-const FRAME: Duration = Duration::from_millis(80);
 
 pub async fn run(mut app: App, mut rx: UnboundedReceiver<EngineMsg>, start: Option<LaunchConfig>) -> Result<()> {
     let mut terminal = ratatui::init();
@@ -44,9 +39,8 @@ async fn event_loop(
 ) -> Result<()> {
     start(app, config);
     let mut input = EventStream::new();
+    // The time in the top bar needs one redraw a second.
     let mut tick = tokio::time::interval(Duration::from_secs(1));
-    let mut frame_tick = tokio::time::interval(FRAME);
-    frame_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let started = Instant::now();
     loop {
         app.ui.clock = Some(started.elapsed());
@@ -54,6 +48,7 @@ async fn event_loop(
         if app.quit {
             return Ok(());
         }
+        let frame = app.ui.animating.get();
         tokio::select! {
             event = input.next() => match event {
                 Some(Ok(Event::Key(key))) if key.kind != KeyEventKind::Release => app.on_key(key),
@@ -69,7 +64,7 @@ async fn event_loop(
                 app.after_engine();
             }
             _ = tick.tick() => {}
-            _ = frame_tick.tick(), if app.ui.animating.get() => {}
+            _ = tokio::time::sleep(frame.unwrap_or_default()), if frame.is_some() => {}
         }
     }
 }
