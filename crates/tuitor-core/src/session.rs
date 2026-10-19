@@ -39,6 +39,9 @@ pub(crate) struct PendingStop {
 
 pub struct Session {
     pub id: SessionId,
+    /// The session whose adapter asked for this one with `startDebugging`. js-debug runs
+    /// each Node process or browser page in such a child; the parent only launches them.
+    pub parent: Option<SessionId>,
     pub name: String,
     pub tag: String,
     pub adapter: AdapterSpec,
@@ -75,6 +78,7 @@ impl Session {
     pub(crate) fn new(id: SessionId, name: String, adapter: AdapterSpec, config: LaunchConfig, tag: String) -> Self {
         Self {
             id,
+            parent: None,
             name,
             tag,
             adapter,
@@ -127,6 +131,13 @@ impl Session {
     /// The latest snapshot while its variable references are still valid.
     pub fn live(&self) -> Option<&Snapshot> {
         self.latest().filter(|s| s.live && self.is_stopped())
+    }
+
+    pub(crate) fn mark_exited(&mut self) {
+        self.state = SessionState::Exited;
+        if let Some(last) = self.history.last_mut() {
+            last.live = false;
+        }
     }
 
     pub(crate) fn mark_running(&mut self) {

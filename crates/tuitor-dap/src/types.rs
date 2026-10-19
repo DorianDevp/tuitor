@@ -40,7 +40,8 @@ impl InitializeArguments {
             supports_variable_type: true,
             supports_variable_paging: false,
             supports_run_in_terminal_request: false,
-            supports_start_debugging_request: false,
+            // Child sessions: js-debug runs each Node process or browser page in one.
+            supports_start_debugging_request: true,
         }
     }
 }

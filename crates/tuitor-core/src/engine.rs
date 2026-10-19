@@ -10,7 +10,7 @@ use anyhow::{Result, anyhow, bail};
 use chrono::Local;
 use serde_json::Value;
 use tokio::sync::mpsc;
-use tuitor_dap::protocol::ResponseMessage;
+use tuitor_dap::protocol::{RequestMessage, ResponseMessage};
 use tuitor_dap::requests::{
     Attach, ConfigurationDone, Continue, Disconnect, Initialize, Launch, Next, Pause, Request, SetBreakpoints,
     SetExceptionBreakpoints, StepIn, StepOut, Terminate, Threads, Variables,
@@ -32,6 +32,9 @@ use crate::snapshot::{Snapshot, Var, VarPath, WatchValue};
 const OUTPUT_LINES: usize = 10_000;
 const EVENT_LINES: usize = 1_000;
 const KILL_GRACE: Duration = Duration::from_secs(2);
+/// Why tuitor turns down `runInTerminal`: its terminal is its own screen.
+const NO_TERMINAL: &str = "the configuration asks to run the program in a terminal, which tuitor cannot give it; \
+                           set \"console\": \"internalConsole\" (its output then shows in OUTPUT)";
 
 pub struct EngineOptions {
     pub adapters: Adapters,
@@ -226,17 +229,22 @@ impl Engine {
         let name = self.unique_name(&tag);
         self.log_event(sid, "starting", format!("{} · {}", config.name, describe(&transport)));
         self.sessions.push(Session::new(sid, name, spec, config, tag));
+        self.connect(sid, transport);
+        Ok(sid)
+    }
 
+    fn connect(&self, sid: SessionId, transport: Transport) {
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = Client::connect(transport).await;
             let _ = tx.send(EngineMsg(Msg::Connected { sid, result }));
         });
-        Ok(sid)
     }
 
-    /// Ends the session's debuggee and adapter.
+    /// Ends the session's debuggee and adapter. A child session runs part of the program
+    /// its parent launched, so stopping it stops the parent, which ends the children.
     pub fn stop(&mut self, sid: SessionId) -> Result<()> {
+        let sid = self.root(sid);
         let session = self.session_ref(sid)?;
         let client = session.client.clone().ok_or_else(|| anyhow!("{} is not connected", session.name))?;
         if session.capabilities.supports_terminate_request {
@@ -260,8 +268,10 @@ impl Engine {
         Ok(())
     }
 
-    /// Starts the same configuration again in a new session.
+    /// Starts the same configuration again in a new session; for a child session, its
+    /// parent's, since the adapter made up the child's.
     pub fn restart(&mut self, sid: SessionId) -> Result<SessionId> {
+        let sid = self.root(sid);
         let config = self.session_ref(sid)?.config.clone();
         if self.session_ref(sid)?.is_alive() {
             self.stop(sid)?;
@@ -305,7 +315,13 @@ impl Engine {
     }
 
     pub fn pause(&mut self, sid: SessionId) -> Result<()> {
+        let running: Vec<SessionId> =
+            self.children(sid).filter(|c| c.is_alive() && !c.is_stopped()).map(|c| c.id).collect();
         let session = self.session_ref(sid)?;
+        // A parent that runs its targets in child sessions has no threads of its own.
+        if session.threads.is_empty() && !running.is_empty() {
+            return running.into_iter().try_for_each(|child| self.pause(child));
+        }
         if session.is_stopped() {
             bail!("{} is already stopped", session.name);
         }
@@ -491,10 +507,18 @@ impl Engine {
                 if let (Ok(session), Ok(response)) = (self.session_mut(sid), result) {
                     session.threads = response.threads;
                 }
+                self.name_after_target(sid);
             }
             Msg::Done { sid, command, result } => {
-                if let Err(err) = result {
-                    self.notice(Some(sid), Level::Error, format!("{command}: {}", short_error(&err)));
+                match result {
+                    Err(err) => self.notice(Some(sid), Level::Error, format!("{command}: {}", short_error(&err))),
+                    // The session is over; js-debug then closes the connection without `terminated`.
+                    Ok(()) if command == Disconnect::COMMAND => {
+                        if let Ok(session) = self.session_mut(sid) {
+                            session.mark_exited();
+                        }
+                    }
+                    Ok(()) => {}
                 }
                 if command == SetExceptionBreakpoints::COMMAND {
                     self.configuration_answered(sid);
@@ -612,35 +636,116 @@ impl Engine {
     fn on_incoming(&mut self, sid: SessionId, incoming: Incoming) {
         match incoming {
             Incoming::Event(event) => self.on_event(sid, event),
-            Incoming::Request(request) => {
-                let client = self.session_ref(sid).ok().and_then(|s| s.client.clone());
-                if let Some(client) = client {
-                    let _ = client.respond(&request, false, Value::Null);
-                }
-                self.notice(
-                    Some(sid),
-                    Level::Warn,
-                    format!("adapter asked for `{}`, which tuitor does not support yet", request.command),
-                );
-            }
+            Incoming::Request(request) => self.on_reverse_request(sid, &request),
             Incoming::Response(response) => self.on_response(sid, response),
             Incoming::Log(line) => self.push_output(sid, OutputKind::Adapter, &format!("{line}\n")),
             Incoming::Closed => {
                 self.breakpoints.unbind_session(sid);
                 if let Ok(session) = self.session_mut(sid) {
                     let was_alive = session.is_alive();
-                    session.state = SessionState::Exited;
+                    session.mark_exited();
                     session.client = None;
-                    if let Some(last) = session.history.last_mut() {
-                        last.live = false;
-                    }
                     let name = session.name.clone();
                     if was_alive {
                         self.notice(Some(sid), Level::Warn, format!("{name}: adapter disconnected"));
                     }
                 }
+                self.end_children(sid);
                 self.log_event(sid, "closed", String::new());
             }
+        }
+    }
+
+    /// Requests from the adapter to tuitor. Each gets an answer, so that the adapter never
+    /// waits for one that will not come.
+    fn on_reverse_request(&mut self, sid: SessionId, request: &RequestMessage) {
+        let Some(client) = self.session_ref(sid).ok().and_then(|s| s.client.clone()) else { return };
+        let (level, refusal) = match request.command.as_str() {
+            "startDebugging" => match self.start_child(sid, &request.arguments) {
+                Ok(()) => {
+                    let _ = client.respond(request, true, Value::Null);
+                    return;
+                }
+                Err(err) => (Level::Error, format!("startDebugging: {err:#}")),
+            },
+            // js-debug still answers `launch` with success, so this is all the user hears of it.
+            "runInTerminal" => (Level::Error, NO_TERMINAL.to_owned()),
+            other => (Level::Warn, format!("tuitor does not support `{other}`")),
+        };
+        let _ = client.respond_error(request, &refusal);
+        self.log_event(sid, "refused", request.command.clone());
+        self.notice(Some(sid), level, refusal);
+    }
+
+    /// Starts the session an adapter asks for with `startDebugging`, as a child of the one
+    /// that asked: a new connection to the same adapter (js-debug serves every session on
+    /// its port) that sends the adapter's configuration back and is configured like any other.
+    fn start_child(&mut self, parent: SessionId, arguments: &Value) -> Result<()> {
+        let Some(Value::Object(configuration)) = arguments.get("configuration") else {
+            bail!("no configuration");
+        };
+        let request = match arguments.get("request").and_then(Value::as_str) {
+            Some("launch") => RequestKind::Launch,
+            Some("attach") => RequestKind::Attach,
+            other => bail!("unknown request {other:?}"),
+        };
+        let parent_session = self.session_ref(parent)?;
+        let spec = parent_session.adapter.clone();
+        let transport = match parent_session.client.as_ref().and_then(Client::address) {
+            Some(address) => Transport::Tcp(address.to_owned()),
+            // An adapter on stdio serves one session per process.
+            None => self.transport(&spec)?,
+        };
+        // js-debug names the target: the script and its pid, or the page's title.
+        let title = configuration.get("name").and_then(Value::as_str).unwrap_or("child").to_owned();
+        let name = self.unique(format!("{} › {title}", parent_session.name));
+        let detail = format!("{title} · child of {}", parent_session.name);
+        let tag = parent_session.tag.clone();
+        let config =
+            LaunchConfig { name: title, adapter: spec.name.clone(), request, arguments: configuration.clone() };
+
+        let sid = self.next_session;
+        self.next_session += 1;
+        self.log_event(sid, "starting", detail);
+        let mut session = Session::new(sid, name, spec, config, tag);
+        session.parent = Some(parent);
+        self.sessions.push(session);
+        // The code runs in the children, so breakpoints go to them from now on.
+        self.breakpoints.unbind_session(parent);
+        self.connect(sid, transport);
+        Ok(())
+    }
+
+    /// Renames a child session after its target's current title. js-debug names the child
+    /// when the target appears, which for a page is before it loads (`about:blank`), and
+    /// names the target's one thread after its title from then on.
+    fn name_after_target(&mut self, sid: SessionId) {
+        let Ok(session) = self.session_ref(sid) else { return };
+        let (Some(parent), [thread]) = (session.parent, session.threads.as_slice()) else { return };
+        if thread.name.is_empty() || thread.name == session.config.name {
+            return;
+        }
+        let title = thread.name.clone();
+        let parent_name = self.session(parent).map(|p| p.name.clone()).unwrap_or_default();
+        let name = self.unique(format!("{parent_name} › {title}"));
+        if let Ok(session) = self.session_mut(sid) {
+            session.name = name;
+            session.config.name = title;
+        }
+    }
+
+    /// Ends the child sessions of a parent that ended: they ran part of its program.
+    fn end_children(&mut self, parent: SessionId) {
+        let children: Vec<(SessionId, Client)> =
+            self.children(parent).filter(|c| c.is_alive()).filter_map(|c| Some((c.id, c.client.clone()?))).collect();
+        for (sid, client) in children {
+            let args = DisconnectArguments { terminate_debuggee: true };
+            // The adapter may be gone already; then there is nothing left to end.
+            self.call::<Disconnect>(sid, &client, args, move |r| Msg::Done {
+                sid,
+                command: "disconnect",
+                result: r.map(drop).or(Ok(())),
+            });
         }
     }
 
@@ -661,6 +766,12 @@ impl Engine {
         match event {
             Event::Initialized => {
                 let Ok(session) = self.session_mut(sid) else { return };
+                if session.configured || session.configure_pending {
+                    // js-debug's server says it again once a child session's adapter takes over
+                    // after `launch`. That adapter already has what the first configuration sent,
+                    // and answers breakpoints sent again with an empty list.
+                    return self.log_event(sid, "ignored", "initialized again; already configured".into());
+                }
                 if session.launch_sent {
                     self.configure(sid);
                 } else {
@@ -704,10 +815,7 @@ impl Engine {
             Event::Terminated => {
                 let client = self.session_ref(sid).ok().and_then(|s| s.client.clone());
                 if let Ok(session) = self.session_mut(sid) {
-                    session.state = SessionState::Exited;
-                    if let Some(last) = session.history.last_mut() {
-                        last.live = false;
-                    }
+                    session.mark_exited();
                 }
                 if let Some(client) = client {
                     let args = DisconnectArguments { terminate_debuggee: false };
@@ -717,6 +825,7 @@ impl Engine {
                         result: r.map(drop).or(Ok(())),
                     });
                 }
+                self.end_children(sid);
                 let name = self.session_ref(sid).map(|s| s.name.clone()).unwrap_or_default();
                 self.notice(Some(sid), Level::Info, format!("{name} terminated"));
                 self.log_event(sid, "terminated", String::new());
@@ -739,6 +848,9 @@ impl Engine {
                 let pid = body.system_process_id.map(|p| format!(" pid {p}")).unwrap_or_default();
                 self.log_event(sid, "process", format!("{}{pid}", body.name));
             }
+            // js-debug announces each of the hundreds of scripts Node loads; they would push
+            // everything else out of EVENTS.
+            Event::Other { event, .. } if event == "loadedSource" => {}
             Event::Other { event, .. } => self.log_event(sid, &event, String::new()),
         }
     }
@@ -926,6 +1038,7 @@ impl Engine {
             .sessions
             .iter()
             .filter(|s| s.configured && s.is_alive() && s.handles(path))
+            .filter(|s| self.children(s.id).next().is_none())
             .filter_map(|s| Some((s.id, s.client.clone()?)))
             .collect();
         for (sid, client) in targets {
@@ -991,6 +1104,18 @@ impl Engine {
         self.sessions.iter_mut().find(|s| s.id == sid).ok_or_else(|| anyhow!("no session {sid}"))
     }
 
+    fn children(&self, parent: SessionId) -> impl Iterator<Item = &Session> {
+        self.sessions.iter().filter(move |s| s.parent == Some(parent))
+    }
+
+    /// The session that was started from a configuration, at the top of `sid`'s parents.
+    fn root(&self, mut sid: SessionId) -> SessionId {
+        while let Some(parent) = self.session(sid).and_then(|s| s.parent) {
+            sid = parent;
+        }
+        sid
+    }
+
     fn transport(&self, spec: &AdapterSpec) -> Result<Transport> {
         let command = || -> Result<AdapterCommand> {
             let program = spec
@@ -1025,7 +1150,11 @@ impl Engine {
 
     fn unique_name(&self, tag: &str) -> String {
         let base = self.workspace.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let name = format!("{base}·{tag}");
+        self.unique(format!("{base}·{tag}"))
+    }
+
+    /// `name`, or `name#2`, `name#3`, … when a live session already has it.
+    fn unique(&self, name: String) -> String {
         let taken = |candidate: &str| self.sessions.iter().any(|s| s.name == candidate && s.is_alive());
         if !taken(&name) {
             return name;

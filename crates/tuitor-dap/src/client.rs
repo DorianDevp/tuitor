@@ -111,6 +111,8 @@ struct Inner {
     pending: Mutex<HashMap<i64, Reply>>,
     seq: AtomicI64,
     child: Mutex<Option<Child>>,
+    /// `host:port` of an adapter reached over TCP.
+    address: Option<String>,
 }
 
 /// Where the response to a request goes.
@@ -132,7 +134,7 @@ impl Client {
                     return Err(Error::Closed);
                 };
                 forward_lines(stderr, tx.clone());
-                Client::from_io(stdout, stdin, Some(child), tx)
+                Client::from_io(stdout, stdin, Some(child), None, tx)
             }
             Transport::Server(cmd) => {
                 let port = free_port()?;
@@ -147,20 +149,27 @@ impl Client {
                 if let Some(stderr) = child.stderr.take() {
                     forward_lines(stderr, tx.clone());
                 }
-                let stream = connect_with_retry(&format!("127.0.0.1:{port}")).await?;
+                let addr = format!("127.0.0.1:{port}");
+                let stream = connect_with_retry(&addr).await?;
                 let (read, write) = stream.into_split();
-                Client::from_io(read, write, Some(child), tx)
+                Client::from_io(read, write, Some(child), Some(addr), tx)
             }
             Transport::Tcp(addr) => {
                 let stream = connect_with_retry(&addr).await?;
                 let (read, write) = stream.into_split();
-                Client::from_io(read, write, None, tx)
+                Client::from_io(read, write, None, Some(addr), tx)
             }
         };
         Ok((client, rx))
     }
 
-    fn from_io<R, W>(reader: R, writer: W, child: Option<Child>, incoming: mpsc::UnboundedSender<Incoming>) -> Client
+    fn from_io<R, W>(
+        reader: R,
+        writer: W,
+        child: Option<Child>,
+        address: Option<String>,
+        incoming: mpsc::UnboundedSender<Incoming>,
+    ) -> Client
     where
         R: AsyncRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin + Send + 'static,
@@ -171,6 +180,7 @@ impl Client {
             pending: Mutex::new(HashMap::new()),
             seq: AtomicI64::new(1),
             child: Mutex::new(child),
+            address,
         });
 
         tokio::spawn(async move {
@@ -236,15 +246,36 @@ impl Client {
 
     /// Answers a reverse request received as [`Incoming::Request`].
     pub fn respond(&self, request: &RequestMessage, success: bool, body: Value) -> Result<(), Error> {
+        self.send_response(request, success, None, body)
+    }
+
+    /// Turns down a reverse request, saying why in the response's `message`.
+    pub fn respond_error(&self, request: &RequestMessage, message: &str) -> Result<(), Error> {
+        self.send_response(request, false, Some(message.to_owned()), Value::Null)
+    }
+
+    fn send_response(
+        &self,
+        request: &RequestMessage,
+        success: bool,
+        message: Option<String>,
+        body: Value,
+    ) -> Result<(), Error> {
         let msg = ProtocolMessage::Response(ResponseMessage {
             seq: self.inner.seq.fetch_add(1, Ordering::Relaxed),
             request_seq: request.seq,
             success,
             command: request.command.clone(),
-            message: None,
+            message,
             body,
         });
         self.send(&msg)
+    }
+
+    /// `host:port` of an adapter reached over TCP (`Server` or `Tcp` transport). An adapter
+    /// that asks for child sessions with `startDebugging` serves them on the same address.
+    pub fn address(&self) -> Option<&str> {
+        self.inner.address.as_deref()
     }
 
     /// Kills the adapter process, if this client started one.
@@ -411,7 +442,7 @@ mod tests {
         let (ours, theirs) = tokio::io::duplex(64 * 1024);
         let (read, write) = tokio::io::split(ours);
         let (tx, rx) = mpsc::unbounded_channel();
-        (Client::from_io(read, write, None, tx), rx, theirs)
+        (Client::from_io(read, write, None, None, tx), rx, theirs)
     }
 
     async fn reply(peer: &mut FramedRead<tokio::io::ReadHalf<tokio::io::DuplexStream>, DapCodec>) -> Value {
@@ -499,6 +530,25 @@ mod tests {
 
         let err = pending.await.expect("join").expect_err("must fail");
         assert_eq!(err.to_string(), "launch: port 9003 already in use");
+    }
+
+    #[tokio::test]
+    async fn refuses_reverse_requests_with_a_reason() {
+        let (client, mut incoming, peer) = fake_adapter().await;
+        let (peer_read, peer_write) = tokio::io::split(peer);
+        let mut peer_read = FramedRead::new(peer_read, DapCodec::default());
+        let mut peer_write = FramedWrite::new(peer_write, DapCodec::default());
+
+        let request = serde_json::json!({"seq": 9, "type": "request", "command": "runInTerminal", "arguments": {}});
+        peer_write.send(Bytes::from(request.to_string())).await.expect("send");
+        let Some(Incoming::Request(request)) = incoming.recv().await else { panic!("expected a reverse request") };
+        client.respond_error(&request, "no terminal").expect("respond");
+
+        let response = reply(&mut peer_read).await;
+        assert_eq!(response["type"], "response");
+        assert_eq!(response["request_seq"], 9);
+        assert_eq!(response["success"], false);
+        assert_eq!(response["message"], "no terminal");
     }
 
     #[tokio::test]
