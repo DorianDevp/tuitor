@@ -9,7 +9,7 @@ use tuitor_dap::types::{Capabilities, Thread};
 use crate::breakpoints::BreakpointId;
 use crate::config::{AdapterSpec, LaunchConfig};
 use crate::log::OutputKind;
-use crate::snapshot::{Snapshot, VarPath};
+use crate::snapshot::{ScopeVars, Snapshot, VarPath};
 use crate::tmpdir::TempDir;
 
 pub type SessionId = u32;
@@ -64,6 +64,8 @@ pub struct Session {
     pub(crate) stopped_thread: Option<i64>,
     /// Bumped whenever execution moves; results computed for an older epoch are dropped.
     pub(crate) epoch: u64,
+    /// Frames of the live stop whose scopes are being read.
+    pub(crate) reading: BTreeSet<usize>,
     pub(crate) launch_sent: bool,
     pub(crate) configure_pending: bool,
     pub(crate) pending_stop: Option<PendingStop>,
@@ -98,6 +100,7 @@ impl Session {
             tmp: None,
             stopped_thread: None,
             epoch: 0,
+            reading: BTreeSet::new(),
             launch_sent: false,
             configure_pending: false,
             pending_stop: None,
@@ -143,6 +146,27 @@ impl Session {
         self.latest().filter(|s| s.live && self.is_stopped())
     }
 
+    /// Whether the scopes of frame `frame` of the live stop are on their way.
+    pub fn reading_frame(&self, frame: usize) -> bool {
+        self.reading.contains(&frame)
+    }
+
+    /// Execution moved: what was being read for the stop before is of no use.
+    pub(crate) fn moved_on(&mut self) {
+        self.epoch += 1;
+        self.reading.clear();
+    }
+
+    /// Remembers scopes shown for the first time; those shown by default start expanded,
+    /// and from then on it is up to the user.
+    pub(crate) fn see_scopes(&mut self, scopes: &[ScopeVars]) {
+        for scope in scopes {
+            if self.seen_scopes.insert(scope.name.clone()) && scope.default_open {
+                self.expanded.insert(vec![scope.name.clone()]);
+            }
+        }
+    }
+
     pub(crate) fn mark_exited(&mut self) {
         self.state = SessionState::Exited;
         if let Some(last) = self.history.last_mut() {
@@ -152,7 +176,7 @@ impl Session {
 
     pub(crate) fn mark_running(&mut self) {
         self.state = SessionState::Running;
-        self.epoch += 1;
+        self.moved_on();
         if let Some(last) = self.history.last_mut() {
             last.live = false;
         }

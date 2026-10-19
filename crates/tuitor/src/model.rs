@@ -127,8 +127,9 @@ impl Tab {
         }
     }
 
-    pub fn viewed_ids(&self) -> Option<(SessionId, u32)> {
-        Some((self.ui.session?, self.viewed()?.number))
+    /// The session, stop and frame whose variables LOCALS shows.
+    pub fn viewed_frame(&self) -> Option<(SessionId, u32, usize)> {
+        Some((self.ui.session?, self.viewed()?.number, self.selected_frame_index()))
     }
 
     /// True when an older stop is shown instead of the latest one.
@@ -141,18 +142,20 @@ impl Tab {
         self.active()?.snapshot(number.checked_sub(1)?)
     }
 
+    /// What changed in the selected frame since the previous stop.
     pub fn changes(&self) -> HashMap<VarPath, Change> {
         match self.viewed() {
-            Some(snapshot) => diff(self.previous(), snapshot),
+            Some(snapshot) => diff(self.previous(), snapshot, self.selected_frame_index()),
             None => HashMap::new(),
         }
     }
 
+    /// The variables of the frame selected in STACK, as rows.
     pub fn local_rows(&self) -> Vec<LocalRow> {
         let (Some(session), Some(snapshot)) = (self.active(), self.viewed()) else { return Vec::new() };
         let changes = self.changes();
         let mut rows = Vec::new();
-        for scope in &snapshot.scopes {
+        for scope in snapshot.scopes(self.selected_frame_index()).unwrap_or_default() {
             let path = vec![scope.name.clone()];
             let expanded = session.expanded.contains(&path);
             rows.push(LocalRow {
@@ -217,14 +220,17 @@ impl Tab {
         rows
     }
 
-    pub fn selected_frame(&self) -> Option<&Frame> {
-        let snapshot = self.viewed()?;
-        let index = match self.stack_rows().get(self.ui.stack.pos) {
+    /// Index of the frame selected in STACK; the top frame's, 0, by default.
+    pub fn selected_frame_index(&self) -> usize {
+        match self.stack_rows().get(self.ui.stack.pos) {
             Some(StackRow::Frame(i)) => *i,
             Some(StackRow::Collapsed { first, .. }) => *first,
             None => 0,
-        };
-        snapshot.frames.get(index)
+        }
+    }
+
+    pub fn selected_frame(&self) -> Option<&Frame> {
+        self.viewed()?.frames.get(self.selected_frame_index())
     }
 
     /// File shown in SOURCE.

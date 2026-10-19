@@ -11,11 +11,11 @@ use crate::tab::Tab;
 
 const MAX_CELL: u16 = 16;
 
-/// Columns: watches first, then top-level variables of the viewed stop.
+/// Columns: watches first, then top-level variables of the viewed stop's top frame.
 fn columns(tab: &Tab) -> Vec<String> {
     let mut cols: Vec<String> = tab.engine.watches().to_vec();
     if let Some(snapshot) = tab.viewed() {
-        for scope in snapshot.scopes.iter().filter(|s| s.default_open) {
+        for scope in snapshot.scopes(0).unwrap_or_default().iter().filter(|s| s.default_open) {
             for var in scope.vars.iter().flatten() {
                 if !cols.contains(&var.name) {
                     cols.push(var.name.clone());

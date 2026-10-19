@@ -77,11 +77,8 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
     let breakpoints: HashMap<u32, &Breakpoint> =
         tab.engine.breakpoints().in_file(&canonical).map(|b| (b.line, b)).collect();
     let hit: Vec<u32> = tab.viewed().map(|s| s.hit_breakpoints.clone()).unwrap_or_default();
-    let inline = if exec_is_top && tab.ui.source.browse.is_none() {
-        inline_values(tab, &file.lines, top, exec)
-    } else {
-        HashMap::new()
-    };
+    let inline =
+        if tab.ui.source.browse.is_none() { inline_values(tab, &file.lines, top, exec) } else { HashMap::new() };
     let lang = Lang::from_path(&path);
     let browsing = tab.ui.source.browse.is_some() || focus;
 
@@ -212,13 +209,15 @@ fn fit_inline(values: &[InlineValue], room: u16) -> Option<Vec<super::paint::Seg
     None
 }
 
-/// Values next to the last line (up to the execution line) where each variable appears.
+/// Values of the shown frame's variables next to the last line (up to its execution line)
+/// where each appears.
 fn inline_values(tab: &Tab, lines: &[String], top: u32, exec: Option<u32>) -> HashMap<u32, Vec<InlineValue>> {
     let mut out: HashMap<u32, Vec<InlineValue>> = HashMap::new();
     let (Some(snapshot), Some(exec)) = (tab.viewed(), exec) else { return out };
     let changes = tab.changes();
     let first = top.max(exec.saturating_sub(40)).max(1);
-    for scope in snapshot.scopes.iter().filter(|s| s.default_open) {
+    let scopes = snapshot.scopes(tab.selected_frame_index()).unwrap_or_default();
+    for scope in scopes.iter().filter(|s| s.default_open) {
         for var in scope.vars.iter().flatten() {
             let last =
                 (first..=exec).rev().find(|n| lines.get((*n - 1) as usize).is_some_and(|l| mentions(l, &var.name)));

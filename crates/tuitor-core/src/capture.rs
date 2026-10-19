@@ -1,5 +1,6 @@
 //! Reads the program state at a stop: stack, scopes of the top frame, variables
-//! (including paths the user keeps expanded) and watch expressions.
+//! (including paths the user keeps expanded) and watch expressions; and the scopes of
+//! another frame, once it is picked.
 
 use std::path::{Path, PathBuf};
 
@@ -21,8 +22,8 @@ const PREFETCH_MAX_CHILDREN: i64 = 100;
 
 pub(crate) struct Capture {
     pub thread_id: i64,
+    /// The top frame with its scopes read.
     pub frames: Vec<Frame>,
-    pub scopes: Vec<ScopeVars>,
     pub watches: Vec<WatchValue>,
 }
 
@@ -47,46 +48,58 @@ pub(crate) async fn capture(
 
     let trace =
         client.request::<StackTrace>(StackTraceArguments { thread_id, start_frame: 0, levels: MAX_FRAMES }).await?;
-    let frames: Vec<Frame> = trace.stack_frames.into_iter().map(frame).collect();
+    let mut frames: Vec<Frame> = trace.stack_frames.into_iter().map(frame).collect();
 
-    let mut scopes = Vec::new();
     let mut watch_values = Vec::with_capacity(watches.len());
-    if let Some(top) = frames.first() {
-        let response = client.request::<Scopes>(ScopesArguments { frame_id: top.id }).await?;
-        let mut prefetch_budget = PREFETCH_REQUESTS;
-        for (index, scope) in response.scopes.into_iter().enumerate() {
-            let path = vec![scope.name.clone()];
-            let default_open = is_default_scope(&scope, index);
-            let wanted = (default_open && !seen_scopes.contains(&scope.name)) || expanded.contains(&path);
-            let vars = if wanted {
-                let mut vars = fetch_vars(&client, scope.variables_reference).await.unwrap_or_default();
-                expand_paths(&client, &scope.name, &mut vars, &expanded).await;
-                if default_open {
-                    prefetch_children(&client, &mut vars, &mut prefetch_budget).await;
-                    // Paths kept expanded under a collapsed variable are reachable now that its
-                    // children were read ahead, and are part of this stop when it is reopened.
-                    expand_paths(&client, &scope.name, &mut vars, &expanded).await;
-                }
-                Some(vars)
-            } else {
-                None
-            };
-            scopes.push(ScopeVars {
-                default_open,
-                name: scope.name,
-                reference: scope.variables_reference,
-                expensive: scope.expensive,
-                vars,
-            });
-        }
-
+    if let Some(top) = frames.first_mut() {
+        top.scopes = Some(scopes(&client, top.id, &expanded, &seen_scopes).await?);
         for expr in watches {
             let value = evaluate(&client, &expr, Some(top.id), "watch").await.map_err(|e| short_error(&e));
             watch_values.push(WatchValue { expr, value });
         }
     }
 
-    Ok(Capture { thread_id, frames, scopes, watches: watch_values })
+    Ok(Capture { thread_id, frames, watches: watch_values })
+}
+
+/// The scopes of frame `frame_id`. Those shown by default are read with their variables,
+/// one level of their children ahead and the paths in `expanded`, unless the user collapsed
+/// them (`seen_scopes`); any other only when the user expanded it.
+pub(crate) async fn scopes(
+    client: &Client,
+    frame_id: i64,
+    expanded: &[VarPath],
+    seen_scopes: &[String],
+) -> Result<Vec<ScopeVars>, Error> {
+    let response = client.request::<Scopes>(ScopesArguments { frame_id }).await?;
+    let mut scopes = Vec::new();
+    let mut prefetch_budget = PREFETCH_REQUESTS;
+    for (index, scope) in response.scopes.into_iter().enumerate() {
+        let path = vec![scope.name.clone()];
+        let default_open = is_default_scope(&scope, index);
+        let wanted = (default_open && !seen_scopes.contains(&scope.name)) || expanded.contains(&path);
+        let vars = if wanted {
+            let mut vars = fetch_vars(client, scope.variables_reference).await.unwrap_or_default();
+            expand_paths(client, &scope.name, &mut vars, expanded).await;
+            if default_open {
+                prefetch_children(client, &mut vars, &mut prefetch_budget).await;
+                // Paths kept expanded under a collapsed variable are reachable now that its
+                // children were read ahead, and are part of this stop when it is reopened.
+                expand_paths(client, &scope.name, &mut vars, expanded).await;
+            }
+            Some(vars)
+        } else {
+            None
+        };
+        scopes.push(ScopeVars {
+            default_open,
+            name: scope.name,
+            reference: scope.variables_reference,
+            expensive: scope.expensive,
+            vars,
+        });
+    }
+    Ok(scopes)
 }
 
 pub(crate) async fn fetch_vars(client: &Client, reference: i64) -> Result<Vec<Var>, Error> {
@@ -208,6 +221,7 @@ fn frame(f: StackFrame) -> Frame {
         line: u32::try_from(f.line).unwrap_or(0),
         column: u32::try_from(f.column).unwrap_or(0),
         library,
+        scopes: None,
     }
 }
 

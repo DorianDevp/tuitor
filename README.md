@@ -166,6 +166,14 @@ whose target did; expand it to see what.
 `[` and `]` step through recorded stops. An older stop is shown read-only with
 the values captured at that moment; nothing is re-read from the program.
 
+LOCALS shows the variables of the frame selected in STACK, and SOURCE their
+values at its line; LOCALS names a frame other than the top one. The top
+frame's variables are read at every stop, another frame's once it is selected
+while the program is stopped there, so a recorded stop has those of the frames
+looked at then. `▲` and `△` compare a frame with the same call at the previous
+stop. `x` evaluates in the selected frame; watches are evaluated in the top
+frame, so that each is one series from stop to stop.
+
 ## Keys
 
 Every key runs a command; `/` opens the command line with the same commands and
@@ -402,5 +410,5 @@ TUITOR_DLV="$(go env GOPATH)/bin/dlv" cargo test -p tuitor-core --test go -- --i
 
 - FLOW (file waterfall from the first breakpoint) from the mockups
 - `runInTerminal`: programs that need a terminal of their own (`"console": "integratedTerminal"`)
-- Locals of a frame other than the top one; sources without a path
+- Sources without a path
 - Opening the current location in Neovim

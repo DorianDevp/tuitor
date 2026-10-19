@@ -322,7 +322,7 @@ pub static COMMANDS: &[Spec] = &[
     Spec {
         name: "eval",
         arg: Arg::Required("‹expr›"),
-        help: "evaluate in the current frame",
+        help: "evaluate in the frame selected in STACK",
         group: Group::Data,
         parse: |a| Ok(Action::Eval(text(a))),
     },
