@@ -276,6 +276,9 @@ directory, and the programs it starts inherit it. tuitor removes it once the
 adapter has exited, when its session ends or tuitor quits; js-debug would
 otherwise leave a directory there at every start, with the profile of the
 browser it started. `env` in `adapters.toml` can set another `TMPDIR`.
+SIGTERM, SIGHUP (its terminal closed) and SIGINT end tuitor as quitting does:
+it disconnects the adapters, removes their directories and puts the terminal
+back, then exits with 128 and the signal's number.
 
 ### Installing adapters
 

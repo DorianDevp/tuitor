@@ -8,11 +8,13 @@ mod paths;
 mod picker;
 mod runner;
 mod script;
+mod signals;
 mod sources;
 mod tab;
 mod ui;
 
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
@@ -24,6 +26,7 @@ use tuitor_core::store::Store;
 
 use crate::app::App;
 use crate::keymap::Keymap;
+use crate::signals::Signals;
 
 /// A terminal debugger that shows everything at once.
 #[derive(Parser)]
@@ -79,7 +82,7 @@ enum Command {
     Configs,
 }
 
-fn main() -> Result<()> {
+fn main() -> Result<ExitCode> {
     let cli = Cli::parse();
     let config_dir = dirs::config_dir().map(|d| d.join("tuitor"));
     let _log = init_logging();
@@ -95,7 +98,7 @@ fn main() -> Result<()> {
         Some(Command::Configs) => {
             let mut projects = vec![first];
             projects.extend(others.iter().map(|dir| Project::open(dir, &store, None)));
-            return print_configs(&projects, &adapters, &store);
+            return print_configs(&projects, &adapters, &store).map(|()| ExitCode::SUCCESS);
         }
         Some(Command::Exec { adapter, program, args }) => Some(exec_config(adapter, program, args, &workspace)?),
         Some(Command::Listen { port, maps }) => Some(listen_config(*port, maps, &workspace)?),
@@ -113,6 +116,8 @@ fn main() -> Result<()> {
 
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     runtime.block_on(async move {
+        // Before anything is started that a signal would leave behind.
+        let signals = Signals::new().context("listening for signals")?;
         let (inbox, rx) = mpsc::unbounded_channel();
         let mut app = App::new(keymap, adapters, store, inbox);
         let mut projects: Vec<Project> = open_first.then_some(first).into_iter().collect();
@@ -131,8 +136,8 @@ fn main() -> Result<()> {
             app.tabs.activate(id);
         }
         match &cli.script {
-            Some(script) => script::run(app, rx, start, script, parse_size(&cli.size)?).await,
-            None => runner::run(app, rx, start).await,
+            Some(script) => script::run(app, rx, start, script, parse_size(&cli.size)?, signals).await,
+            None => runner::run(app, rx, start, signals).await,
         }
     })
 }
