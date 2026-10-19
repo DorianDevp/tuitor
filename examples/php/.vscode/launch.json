@@ -5,7 +5,9 @@
       "name": "Listen for Xdebug",
       "type": "php",
       "request": "launch",
-      "port": 9003
+      "port": 9003,
+      // Stop on the first line, so there is time to set breakpoints on the first run.
+      "stopOnEntry": true
     },
     {
       // For compose.yaml. Only here: a mapping also rewrites local breakpoints, so PHP run
@@ -14,7 +16,8 @@
       "type": "php",
       "request": "launch",
       "port": 9003,
-      "pathMappings": { "/app": "${workspaceFolder}" }
+      "pathMappings": { "/app": "${workspaceFolder}" },
+      "stopOnEntry": true
     }
   ]
 }

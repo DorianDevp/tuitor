@@ -30,7 +30,8 @@ tuitor configs                 # what tuitor sees: configurations and adapters
 `-C <dir>` sets the workspace (default: current directory).
 
 [`examples/`](examples) has a small program for PHP, Rust and C, each with a
-launch.json and a walk through a first session.
+launch.json, a `run.sh` that sets it up and starts tuitor on it, and a walk
+through a first session.
 
 ### PHP in a container
 

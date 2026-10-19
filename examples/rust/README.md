@@ -8,6 +8,16 @@ Needs Rust and gdb 14 or newer built with Python; see
 [Installing adapters](../../README.md#installing-adapters).
 
 ```sh
+./run.sh    # checks those, builds orders and tuitor, starts tuitor
+```
+
+tuitor stops at the start of main; quitting it (`Q`) ends the script.
+`TUITOR=/path/to/tuitor ./run.sh` uses that binary instead of building tuitor
+from this repository, and arguments go to tuitor (`./run.sh --script demo.tsc`).
+
+By hand:
+
+```sh
 cargo build
 tuitor      # starts .vscode/launch.json and stops at the start of main
 ```
