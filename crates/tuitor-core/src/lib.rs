@@ -12,5 +12,6 @@ pub mod project;
 pub mod session;
 pub mod snapshot;
 pub mod store;
+mod tmpdir;
 
 pub use engine::{Engine, EngineMsg, EngineOptions, Level, Notice, Step};

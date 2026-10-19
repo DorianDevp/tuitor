@@ -10,6 +10,7 @@ use anyhow::{Result, anyhow, bail};
 use chrono::Local;
 use serde_json::Value;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use tuitor_dap::protocol::{RequestMessage, ResponseMessage};
 use tuitor_dap::requests::{
     Attach, ConfigurationDone, Continue, Disconnect, Initialize, Launch, Next, Pause, Request, SetBreakpoints,
@@ -28,6 +29,7 @@ use crate::log::{Bounded, EventLine, OutputKind, OutputLine};
 use crate::persist::{self, Persisted};
 use crate::session::{ExceptionFilter, PendingStop, Session, SessionId, SessionState};
 use crate::snapshot::{Snapshot, Var, VarPath, WatchValue};
+use crate::tmpdir::TempDir;
 
 const OUTPUT_LINES: usize = 10_000;
 const EVENT_LINES: usize = 1_000;
@@ -146,6 +148,8 @@ pub struct Engine {
     output: Bounded<OutputLine>,
     events: Bounded<EventLine>,
     notices: Vec<Notice>,
+    /// Adapter processes being ended, whose temporary directories go once they have exited.
+    releasing: Vec<JoinHandle<()>>,
 }
 
 impl Engine {
@@ -171,6 +175,7 @@ impl Engine {
             output: Bounded::new(OUTPUT_LINES),
             events: Bounded::new(EVENT_LINES),
             notices,
+            releasing: Vec::new(),
         };
         (engine, rx)
     }
@@ -229,14 +234,16 @@ impl Engine {
             let known: Vec<&str> = self.adapters.names().collect();
             anyhow!("no adapter for type `{}` (known: {})", config.adapter, known.join(", "))
         })?;
-        let transport = self.transport(&spec)?;
+        let (transport, tmp) = self.transport(&spec)?;
 
         let sid = self.next_session;
         self.next_session += 1;
         let tag = self.tag_for(&spec);
         let name = self.unique_name(&tag);
         self.log_event(sid, "starting", format!("{} · {}", config.name, describe(&transport)));
-        self.sessions.push(Session::new(sid, name, spec, config, tag));
+        let mut session = Session::new(sid, name, spec, config, tag);
+        session.tmp = tmp;
+        self.sessions.push(session);
         self.connect(sid, transport);
         Ok(sid)
     }
@@ -287,15 +294,18 @@ impl Engine {
         self.start(config)
     }
 
-    /// Disconnects every session; used when quitting.
+    /// Disconnects every session and ends the adapters, with their temporary directories;
+    /// used when quitting and closing a tab.
     pub async fn shutdown(&mut self) {
         let clients: Vec<Client> = self.sessions.iter().filter_map(|s| s.client.clone()).collect();
         let goodbyes =
             clients.iter().filter_map(|c| c.call::<Disconnect>(DisconnectArguments { terminate_debuggee: true }).ok());
         let _ = tokio::time::timeout(Duration::from_millis(500), futures_join(goodbyes.collect())).await;
-        for client in clients {
-            client.kill();
+        let sids: Vec<SessionId> = self.sessions.iter().map(|s| s.id).collect();
+        for sid in sids {
+            self.release(sid);
         }
+        futures_join(std::mem::take(&mut self.releasing)).await;
     }
 
     // ---- execution ------------------------------------------------------------------
@@ -654,10 +664,10 @@ impl Engine {
             Incoming::Log(line) => self.push_output(sid, OutputKind::Adapter, &format!("{line}\n")),
             Incoming::Closed => {
                 self.breakpoints.unbind_session(sid);
+                self.release(sid);
                 if let Ok(session) = self.session_mut(sid) {
                     let was_alive = session.is_alive();
                     session.mark_exited();
-                    session.client = None;
                     let name = session.name.clone();
                     if was_alive {
                         self.notice(Some(sid), Level::Warn, format!("{name}: adapter disconnected"));
@@ -708,8 +718,8 @@ impl Engine {
         };
         let parent_session = self.session_ref(parent)?;
         let spec = parent_session.adapter.clone();
-        let transport = match parent_session.client.as_ref().and_then(Client::address) {
-            Some(address) => Transport::Tcp(address.to_owned()),
+        let (transport, tmp) = match parent_session.client.as_ref().and_then(Client::address) {
+            Some(address) => (Transport::Tcp(address.to_owned()), None),
             // An adapter on stdio serves one session per process.
             None => self.transport(&spec)?,
         };
@@ -726,6 +736,7 @@ impl Engine {
         self.log_event(sid, "starting", detail);
         let mut session = Session::new(sid, name, spec, config, tag);
         session.parent = Some(parent);
+        session.tmp = tmp;
         self.sessions.push(session);
         // The code runs in the children, so breakpoints go to them from now on.
         self.breakpoints.unbind_session(parent);
@@ -1106,13 +1117,29 @@ impl Engine {
     fn fail(&mut self, sid: SessionId, text: String) {
         if let Ok(session) = self.session_mut(sid) {
             session.state = SessionState::Exited;
-            if let Some(client) = session.client.take() {
-                client.kill();
-            }
         }
+        self.release(sid);
         self.end_children(sid);
         self.log_event(sid, "failed", text.clone());
         self.notice(Some(sid), Level::Error, text);
+    }
+
+    /// Lets go of the adapter of a session that is over: the process tuitor started for it
+    /// is ended, and its temporary directory removed once it has exited, since until then
+    /// it, or a browser it started, may still write there.
+    fn release(&mut self, sid: SessionId) {
+        let Ok(session) = self.session_mut(sid) else { return };
+        let (client, tmp) = (session.client.take(), session.tmp.take());
+        if client.is_none() && tmp.is_none() {
+            return;
+        }
+        self.releasing.retain(|task| !task.is_finished());
+        self.releasing.push(tokio::spawn(async move {
+            if let Some(client) = client {
+                client.kill_and_wait().await;
+            }
+            drop(tmp);
+        }));
     }
 
     fn session_ref(&self, sid: SessionId) -> Result<&Session> {
@@ -1127,28 +1154,39 @@ impl Engine {
         self.sessions.iter().filter(move |s| s.parent == Some(parent))
     }
 
-    fn transport(&self, spec: &AdapterSpec) -> Result<Transport> {
-        let command = || -> Result<AdapterCommand> {
+    /// How to reach the adapter. One that tuitor starts comes with the temporary directory
+    /// it gets, for its session to keep until the process has exited.
+    fn transport(&self, spec: &AdapterSpec) -> Result<(Transport, Option<TempDir>)> {
+        let command = || -> Result<(AdapterCommand, Option<TempDir>)> {
             let program = spec
                 .locate(&self.workspace)
                 .map_err(|missing| anyhow!("adapter `{}`: {missing}; {INSTALL_HELP}", spec.name))?;
-            Ok(AdapterCommand {
+            // Node-based adapters print deprecation warnings that would clutter OUTPUT.
+            let mut env = vec![("NODE_NO_WARNINGS".to_owned(), "1".to_owned())];
+            // What it and the programs it starts leave in the temporary directory goes with it.
+            let tmp = TempDir::create();
+            if let Some(dir) = tmp.as_ref().and_then(|tmp| tmp.path().to_str()) {
+                env.push(("TMPDIR".to_owned(), dir.to_owned()));
+            }
+            // The adapter's own settings win.
+            env.extend(spec.env.iter().map(|(k, v)| (k.clone(), v.clone())));
+            let command = AdapterCommand {
                 program: program.display().to_string(),
                 args: spec.args.clone(),
                 cwd: Some(self.workspace.clone()),
-                // Node-based adapters print deprecation warnings that would clutter OUTPUT.
-                env: std::iter::once(("NODE_NO_WARNINGS".to_owned(), "1".to_owned()))
-                    .chain(spec.env.iter().map(|(k, v)| (k.clone(), v.clone())))
-                    .collect(),
-            })
+                env,
+            };
+            Ok((command, tmp))
         };
-        Ok(match spec.transport {
-            TransportKind::Stdio => Transport::Stdio(command()?),
-            TransportKind::Server => Transport::Server(command()?),
-            TransportKind::Tcp => Transport::Tcp(
-                spec.address.clone().ok_or_else(|| anyhow!("adapter `{}` needs an `address`", spec.name))?,
-            ),
-        })
+        match spec.transport {
+            TransportKind::Stdio => command().map(|(command, tmp)| (Transport::Stdio(command), tmp)),
+            TransportKind::Server => command().map(|(command, tmp)| (Transport::Server(command), tmp)),
+            TransportKind::Tcp => {
+                let address =
+                    spec.address.clone().ok_or_else(|| anyhow!("adapter `{}` needs an `address`", spec.name))?;
+                Ok((Transport::Tcp(address), None))
+            }
+        }
     }
 
     fn tag_for(&self, spec: &AdapterSpec) -> String {

@@ -15,7 +15,6 @@ if [[ -n ${HEADLESS:-} ]]; then
     config="orders (headless)"
 fi
 tuitor_pid=
-scratch=
 
 step() { echo "==> $*"; }
 
@@ -44,13 +43,6 @@ cleanup() {
         # shellcheck disable=SC2086 # one pid per word
         kill $pids "$tuitor_pid" 2>/dev/null || true
         wait "$tuitor_pid" 2>/dev/null || true
-    fi
-    if [[ -n $scratch ]]; then
-        # Chromium's profile is in there, so this finds any Chromium process left over.
-        pkill -f -- "$scratch" 2>/dev/null || true
-        # js-debug keeps its state and Chromium's profile in a temporary directory that it
-        # never removes.
-        rm -rf "$scratch"
     fi
     # tuitor puts the terminal back when it quits; killed, it leaves it raw and on the
     # alternate screen.
@@ -109,11 +101,9 @@ if [[ -z ${TUITOR:-} ]]; then
     tuitor="${CARGO_TARGET_DIR:-$repo/target}/debug/tuitor"
 fi
 
-# 4. Debug. js-debug's temporary directory goes into one this script removes. tuitor runs in
-# the background so that a signal to this script reaches the trap at once; <&0 keeps the
-# terminal as its input.
-scratch=$(mktemp -d)
+# 4. Debug. tuitor runs in the background so that a signal to this script reaches the trap
+# at once; <&0 keeps the terminal as its input.
 step "starting tuitor on configuration \"$config\" (Q quits and closes Chromium)"
-TMPDIR=$scratch "$tuitor" -C "$here" "$config" "$@" <&0 &
+"$tuitor" -C "$here" "$config" "$@" <&0 &
 tuitor_pid=$!
 wait "$tuitor_pid"

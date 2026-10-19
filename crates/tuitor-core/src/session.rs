@@ -10,6 +10,7 @@ use crate::breakpoints::BreakpointId;
 use crate::config::{AdapterSpec, LaunchConfig};
 use crate::log::OutputKind;
 use crate::snapshot::{Snapshot, VarPath};
+use crate::tmpdir::TempDir;
 
 pub type SessionId = u32;
 
@@ -58,6 +59,8 @@ pub struct Session {
     /// Scope names already shown once; their expansion is now up to the user.
     pub(crate) seen_scopes: BTreeSet<String>,
     pub(crate) client: Option<Client>,
+    /// `TMPDIR` of the adapter process tuitor started for this session, until it has exited.
+    pub(crate) tmp: Option<TempDir>,
     pub(crate) stopped_thread: Option<i64>,
     /// Bumped whenever execution moves; results computed for an older epoch are dropped.
     pub(crate) epoch: u64,
@@ -92,6 +95,7 @@ impl Session {
             expanded: BTreeSet::new(),
             seen_scopes: BTreeSet::new(),
             client: None,
+            tmp: None,
             stopped_thread: None,
             epoch: 0,
             launch_sent: false,
@@ -126,6 +130,12 @@ impl Session {
 
     pub fn handles(&self, path: &Path) -> bool {
         self.adapter.handles(path)
+    }
+
+    /// The temporary directory of the adapter process tuitor started for this session,
+    /// while the process runs.
+    pub fn temp_dir(&self) -> Option<&Path> {
+        self.tmp.as_ref().map(TempDir::path)
     }
 
     /// The latest snapshot while its variable references are still valid.

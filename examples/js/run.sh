@@ -10,7 +10,6 @@ install_help="see \"Installing adapters\" in $repo/README.md"
 adapter="${XDG_DATA_HOME:-$HOME/.local/share}/tuitor/adapters/js-debug"
 js_debug_version=1.140.0 # the release README.md installs
 tuitor_pid=
-scratch=
 
 step() { echo "==> $*"; }
 
@@ -39,10 +38,6 @@ cleanup() {
         # shellcheck disable=SC2086 # one pid per word
         kill $pids "$tuitor_pid" 2>/dev/null || true
         wait "$tuitor_pid" 2>/dev/null || true
-    fi
-    # js-debug keeps its state in a temporary directory that it never removes.
-    if [[ -n $scratch ]]; then
-        rm -rf "$scratch"
     fi
     # tuitor puts the terminal back when it quits; killed, it leaves it raw and on the
     # alternate screen.
@@ -93,11 +88,9 @@ if [[ -z ${TUITOR:-} ]]; then
     tuitor="${CARGO_TARGET_DIR:-$repo/target}/debug/tuitor"
 fi
 
-# 4. Debug. js-debug's temporary directory goes into one this script removes. tuitor runs in
-# the background so that a signal to this script reaches the trap at once; <&0 keeps the
-# terminal as its input.
-scratch=$(mktemp -d)
+# 4. Debug. tuitor runs in the background so that a signal to this script reaches the trap
+# at once; <&0 keeps the terminal as its input.
 step "starting tuitor on configuration \"orders\" (Q quits)"
-TMPDIR=$scratch "$tuitor" -C "$here" orders "$@" <&0 &
+"$tuitor" -C "$here" orders "$@" <&0 &
 tuitor_pid=$!
 wait "$tuitor_pid"
