@@ -8,7 +8,9 @@ mod engine;
 mod jsonc;
 pub mod log;
 pub mod persist;
+pub mod project;
 pub mod session;
 pub mod snapshot;
+pub mod store;
 
 pub use engine::{Engine, EngineMsg, EngineOptions, Level, Notice, Step};
