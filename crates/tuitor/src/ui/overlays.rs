@@ -1,10 +1,11 @@
 use ratatui::layout::Rect;
 
-use super::paint::{Painter, Panel, Seg, seg, truncate};
+use super::paint::{Painter, Panel, Seg, seg, truncate, truncate_left};
 use super::syntax::{Lang, highlight};
 use super::theme::*;
 use crate::app::App;
 use crate::overlay::{Choice, Finder, Palette};
+use crate::picker::Picker;
 
 fn highlighted(text: &str, matched: &[u32], base: ratatui::style::Style) -> Vec<Seg<'static>> {
     text.chars()
@@ -14,6 +15,19 @@ fn highlighted(text: &str, matched: &[u32], base: ratatui::style::Style) -> Vec<
             seg(c.to_string(), if hit { bold(AMBER) } else { base })
         })
         .collect()
+}
+
+/// [`highlighted`], cut from the left to `room` columns so that the end of a path shows.
+fn highlighted_tail(text: &str, matched: &[u32], base: ratatui::style::Style, room: usize) -> Vec<Seg<'static>> {
+    let mut segs = highlighted(text, matched, base);
+    if super::paint::width(&segs) as usize <= room {
+        return segs;
+    }
+    while !segs.is_empty() && super::paint::width(&segs) as usize + 1 > room {
+        segs.remove(0);
+    }
+    segs.insert(0, seg("…", base));
+    segs
 }
 
 pub fn palette(p: &mut Painter<'_>, app: &App, palette: &Palette, screen: Rect) {
@@ -191,6 +205,75 @@ pub fn finder(p: &mut Painter<'_>, app: &App, finder: &Finder, screen: Rect) {
     }
 
     let actions = [("⏎", "open in CODE"), ("^b", "toggle breakpoint at :line"), ("↑/↓", "select"), ("esc", "close")];
+    let mut x = inner.x + 1;
+    for (key, label) in actions {
+        x = p.text(x, inner.bottom() - 1, key, bold(KEY), inner.right());
+        x = p.text(x, inner.bottom() - 1, &format!(" {label}   "), fg(FAINT), inner.right());
+    }
+}
+
+pub fn picker(p: &mut Painter<'_>, app: &App, picker: &Picker, screen: Rect) {
+    p.dim(screen);
+    let width = screen.width.saturating_sub(8).min(110);
+    let rows = picker.rows.len().max(1) as u16;
+    let height = (rows + 6).clamp(10, screen.height.saturating_sub(6).min(26));
+    let rect = Rect::new((screen.width - width) / 2, 3, width, height);
+    p.fill(rect, BG);
+    let what =
+        if picker.typing_path() { "directories" } else { "opened recently · or type a path: ~/…  /…  ../…" };
+    let target = if app.tab().project.is_none() { "opens in this tab" } else { "opens in a new tab" };
+    p.panel(
+        rect,
+        &Panel {
+            title: "OPEN PROJECT",
+            sub: vec![seg(what, fg(DIM))],
+            right: vec![seg(target, fg(FAINT))],
+            keys: vec![],
+            focus: true,
+        },
+    );
+    let inner = super::paint::inner(rect);
+    let x = p.text(inner.x + 1, inner.y, "› ", bold(AMBER), inner.right());
+    // A long path shows its end, where the typing is.
+    let input = truncate_left(&picker.input, usize::from(inner.right().saturating_sub(x + 2)));
+    let x = p.text(x, inner.y, &input, bold(WHITE), inner.right());
+    p.text(x, inner.y, "█", fg(AMBER), inner.right());
+    p.text(inner.x, inner.y + 1, &"─".repeat(usize::from(inner.width)), fg(GHOST), inner.right());
+
+    let top = inner.y + 2;
+    let height = usize::from(inner.height.saturating_sub(4));
+    let offset = picker.selected.saturating_sub(height.saturating_sub(1));
+    let kinds_x = inner.right().saturating_sub(24);
+    for (i, row) in picker.rows.iter().enumerate().skip(offset).take(height) {
+        let y = top + (i - offset) as u16;
+        let selected = i == picker.selected;
+        if selected {
+            p.band(inner.x, y, inner.width, SEL2);
+            p.text(inner.x + 1, y, "›", bold(AMBER), inner.right());
+        }
+        let style = if selected { bold(WHITE) } else { fg(FG) };
+        let room = usize::from(kinds_x.saturating_sub(inner.x + 4));
+        let label = highlighted_tail(&row.candidate.label, &row.candidate.matched, style, room);
+        p.segs(inner.x + 3, y, &label, kinds_x - 1);
+        let kinds: Vec<&str> = row.kinds.iter().map(|k| k.name()).collect();
+        let mut info = vec![seg(kinds.join(" · "), fg(DIM))];
+        if row.open {
+            info.push(seg(if kinds.is_empty() { "open" } else { "  open" }, italic(FAINT)));
+        }
+        p.segs_right(inner.right() - 1, y, &info, kinds_x);
+    }
+    if picker.rows.is_empty() {
+        let hint = if picker.typing_path() {
+            "no directory matches"
+        } else if picker.input.is_empty() {
+            "no project opened yet · type a path: ~/…  /…  ../…"
+        } else {
+            "no recent project matches · a path starts with ~ / or ."
+        };
+        p.text(inner.x + 3, top, hint, italic(FAINT), inner.right());
+    }
+
+    let actions = [("⏎", "open"), ("tab", "complete the path"), ("↑/↓", "select"), ("esc", "close")];
     let mut x = inner.x + 1;
     for (key, label) in actions {
         x = p.text(x, inner.bottom() - 1, key, bold(KEY), inner.right());

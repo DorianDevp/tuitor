@@ -62,6 +62,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     match &app.ui.overlay {
         Some(Overlay::Palette(palette)) => overlays::palette(&mut p, app, palette, area),
         Some(Overlay::Finder(finder)) => overlays::finder(&mut p, app, finder, area),
+        Some(Overlay::Picker(picker)) => overlays::picker(&mut p, app, picker, area),
         None => {}
     }
 }

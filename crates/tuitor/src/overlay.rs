@@ -1,4 +1,5 @@
-//! Popups that take over the keyboard: the command palette and the fuzzy finder.
+//! Popups that take over the keyboard: the command palette, the fuzzy finder and the
+//! open-project picker.
 
 use std::path::{Path, PathBuf};
 
@@ -8,6 +9,7 @@ use tuitor_core::breakpoints::{BreakpointId, Breakpoints};
 
 use crate::command::{self, Arg, COMMANDS, Group, Spec};
 use crate::keymap::Keymap;
+use crate::picker::Picker;
 
 const MAX_FILES: usize = 100_000;
 const MAX_HITS: usize = 40;
@@ -15,10 +17,11 @@ const MAX_HITS: usize = 40;
 pub enum Overlay {
     Palette(Palette),
     Finder(Finder),
+    Picker(Picker),
 }
 
 /// Score and matched character positions, or `None` when the pattern does not match.
-fn fuzzy(matcher: &mut Matcher, pattern: &Pattern, text: &str) -> Option<(u32, Vec<u32>)> {
+pub(crate) fn fuzzy(matcher: &mut Matcher, pattern: &Pattern, text: &str) -> Option<(u32, Vec<u32>)> {
     let mut buf = Vec::new();
     let haystack = Utf32Str::new(text, &mut buf);
     let mut indices = Vec::new();

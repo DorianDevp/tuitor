@@ -5,6 +5,7 @@ mod keymap;
 mod model;
 mod overlay;
 mod paths;
+mod picker;
 mod runner;
 mod script;
 mod sources;

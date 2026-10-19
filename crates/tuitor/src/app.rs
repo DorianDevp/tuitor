@@ -20,6 +20,7 @@ use crate::command::{self, Action, Arg, BpScope, Location, View};
 use crate::keymap::{self, Key, Keymap, Lookup};
 use crate::model::{BpRow, StackRow};
 use crate::overlay::{Finder, Overlay, Palette};
+use crate::picker::Picker;
 use crate::sources::Sources;
 use crate::tab::{Tab, TabId, Tabs, forward};
 
@@ -132,7 +133,7 @@ impl From<&str> for Refusal {
 
 type Outcome = Result<String, Refusal>;
 
-const NO_PROJECT: &str = "no project in this tab; /tab open ‹dir› opens one";
+const NO_PROJECT: &str = "no project in this tab; /tab open opens one";
 
 impl App {
     /// An app with one empty tab; [`App::open`] puts projects in tabs.
@@ -192,11 +193,7 @@ impl App {
 
     /// `/tab open`: a directory as typed, `~` and relative to the current project allowed.
     fn open_dir(&mut self, typed: &str) -> Outcome {
-        let base = match &self.tab().project {
-            Some(project) => project.dir.clone(),
-            None => std::env::current_dir().unwrap_or_default(),
-        };
-        let path = crate::paths::expand(typed, dirs::home_dir().as_deref(), &base);
+        let path = crate::paths::expand(typed, dirs::home_dir().as_deref(), &self.base_dir());
         let dir = std::fs::canonicalize(&path)
             .ok()
             .filter(|dir| dir.is_dir())
@@ -212,6 +209,20 @@ impl App {
         match errors.first() {
             Some(error) => Err(error.clone().into()),
             None => Ok(format!("opened {}", home_relative(&dir))),
+        }
+    }
+
+    fn open_picker(&mut self) {
+        let open = self.tabs.iter().filter_map(|(_, tab)| Some(tab.project.as_ref()?.dir.clone())).collect();
+        let picker = Picker::new(self.recent_projects.clone(), open, dirs::home_dir(), self.base_dir());
+        self.ui.overlay = Some(Overlay::Picker(picker));
+    }
+
+    /// Where a typed relative path starts: the current project, else where tuitor started.
+    fn base_dir(&self) -> PathBuf {
+        match &self.tab().project {
+            Some(project) => project.dir.clone(),
+            None => std::env::current_dir().unwrap_or_default(),
         }
     }
 
@@ -317,6 +328,26 @@ impl App {
                         tab.engine.breakpoints(),
                         tab.engine.workspace(),
                     );
+                }
+            }
+            Overlay::Picker(picker) => {
+                if key.is("enter") {
+                    // When nothing matches, opening what was typed says why it cannot be opened.
+                    let dir = picker.choice().map_or_else(|| picker.input.clone(), |dir| dir.display().to_string());
+                    self.ui.overlay = None;
+                    self.execute(&format!("tab open {dir}"), None);
+                } else if key.is("tab") {
+                    picker.complete();
+                } else if key.is("up") || key.is("ctrl-p") {
+                    picker.select(-1);
+                } else if key.is("down") || key.is("ctrl-n") {
+                    picker.select(1);
+                } else if key.is("backspace") {
+                    picker.input.pop();
+                    picker.refresh();
+                } else if let Some(c) = key.text_char() {
+                    picker.input.push(c);
+                    picker.refresh();
                 }
             }
         }
@@ -546,11 +577,13 @@ impl App {
             Action::TabPrev => self.cycle_tab(-1),
             Action::TabNew => {
                 self.tabs.push(Tab::empty(&self.adapters));
-                Ok("new tab · /tab open ‹dir› opens a project in it".into())
+                self.open_picker();
+                Ok(String::new())
             }
-            Action::TabOpen(dir) => {
-                let Some(dir) = dir else { return self.prompt(spec) };
-                self.open_dir(&dir)
+            Action::TabOpen(Some(dir)) => self.open_dir(&dir),
+            Action::TabOpen(None) => {
+                self.open_picker();
+                Ok(String::new())
             }
             Action::TabClose => self.close_tab(),
             Action::ClearOutput => {
@@ -726,7 +759,7 @@ impl App {
 
     fn cycle_tab(&mut self, delta: isize) -> Outcome {
         if self.tabs.len() == 1 {
-            return Err("there is one tab; /tab open ‹dir› opens a project in another".into());
+            return Err("there is one tab; /tab open opens a project in another".into());
         }
         self.tabs.cycle(delta);
         Ok(self.tab().name())

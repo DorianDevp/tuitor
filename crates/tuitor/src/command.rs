@@ -465,14 +465,14 @@ pub static COMMANDS: &[Spec] = &[
     Spec {
         name: "tab new",
         arg: Arg::None,
-        help: "add an empty tab to open a project in",
+        help: "add a tab and pick a project to open in it",
         group: Group::Tab,
         parse: simple!(Action::TabNew),
     },
     Spec {
         name: "tab open",
-        arg: Arg::Required("‹dir›"),
-        help: "open a project in a new tab (in this one if it is empty)",
+        arg: Arg::Optional("‹dir›"),
+        help: "open a project in a new tab, or in this one if it is empty",
         group: Group::Tab,
         parse: |a| Ok(Action::TabOpen(text(a))),
     },
