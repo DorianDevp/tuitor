@@ -534,7 +534,9 @@ impl App {
                     },
                 };
                 tab.engine.add_watch(&expr);
-                Ok(format!("watching {expr}"))
+                // One series from stop to stop, so always where execution is.
+                let top = if tab.selected_frame_index() > 0 { ", evaluated in the top frame" } else { "" };
+                Ok(format!("watching {expr}{top}"))
             }
             Action::WatchDelete => {
                 let tab = self.tab_mut();
@@ -547,7 +549,8 @@ impl App {
                 let Some(expr) = expr else { return self.prompt(spec) };
                 let tab = self.tab_mut();
                 let sid = tab.require_session()?;
-                tab.engine.evaluate(sid, &expr).map_err(|e| e.to_string())?;
+                let frame = tab.selected_frame_index();
+                tab.engine.evaluate(sid, frame, &expr).map_err(|e| e.to_string())?;
                 Ok("evaluating…".into())
             }
             Action::Copy => {
@@ -1011,10 +1014,10 @@ impl App {
             Pane::Locals => {
                 let rows = tab.local_rows();
                 let Some(row) = rows.get(tab.ui.locals.pos) else { return Ok(String::new()) };
-                let (sid, number) = tab.viewed_ids().ok_or("nothing to expand")?;
+                let (sid, number, frame) = tab.viewed_frame().ok_or("nothing to expand")?;
                 if delta > 0 {
                     if row.expandable && !row.expanded {
-                        tab.engine.expand(sid, number, row.path.clone()).map_err(|e| e.to_string())?;
+                        tab.engine.expand(sid, number, frame, row.path.clone()).map_err(|e| e.to_string())?;
                     }
                 } else if row.expanded {
                     tab.engine.collapse(sid, &row.path);
@@ -1039,11 +1042,11 @@ impl App {
             Pane::Locals => {
                 let tab = self.tab_mut();
                 let row = tab.local_rows().into_iter().nth(tab.ui.locals.pos).ok_or("nothing selected")?;
-                let (sid, number) = tab.viewed_ids().ok_or("nothing to expand")?;
+                let (sid, number, frame) = tab.viewed_frame().ok_or("nothing to expand")?;
                 if row.expanded {
                     tab.engine.collapse(sid, &row.path);
                 } else if row.expandable {
-                    tab.engine.expand(sid, number, row.path).map_err(|e| e.to_string())?;
+                    tab.engine.expand(sid, number, frame, row.path).map_err(|e| e.to_string())?;
                 }
                 Ok(String::new())
             }
@@ -1139,14 +1142,17 @@ impl Tab {
     }
 
     /// Points SOURCE at the selected frame of the viewed stop, with the cursor on its line
-    /// and that line centred. Every automatic change of the view calls this (a new stop,
-    /// another recorded stop, frame or session, `.`), so it drops whatever the user was
-    /// browsing.
+    /// and that line centred, and has the frame's variables read for LOCALS if they were
+    /// not. Every automatic change of the view calls this (a new stop, another recorded
+    /// stop, frame or session, `.`), so it drops whatever the user was browsing.
     pub fn jump_to_execution(&mut self) {
         self.ui.source.browse = None;
         if let Some(frame) = self.selected_frame() {
             self.ui.source.cursor = frame.line.max(1);
             self.ui.source.recenter.set(true);
+        }
+        if let Some((sid, number, frame)) = self.viewed_frame() {
+            self.engine.read_frame(sid, number, frame);
         }
     }
 

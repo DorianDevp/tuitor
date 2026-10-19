@@ -118,9 +118,10 @@ async fn node_runs_in_a_child_session() {
     pump(&mut engine, &mut rx, |e| child_stops(e, parent) >= 2).await;
     let child = engine.session(cid).expect("child");
     let (prev, cur) = (&child.history[0], &child.history[1]);
-    let scope = cur.scopes.iter().find(|s| s.vars.iter().flatten().any(|v| v.name == "total")).expect("scope");
+    let scopes = cur.scopes(0).unwrap_or_default();
+    let scope = scopes.iter().find(|s| s.vars.iter().flatten().any(|v| v.name == "total")).expect("scope");
     let total = vec![scope.name.clone(), "total".to_owned()];
-    assert_eq!(diff(Some(prev), cur).get(&total), Some(&Change::Changed { was: "0".into() }));
+    assert_eq!(diff(Some(prev), cur, 0).get(&total), Some(&Change::Changed { was: "0".into() }));
     assert_eq!(cur.local_value("total"), Some("8900"));
 
     // The program runs to its end once the breakpoint is gone; then both sessions end.

@@ -95,15 +95,24 @@ async fn xdebug_connects_back_and_stops() {
     assert!(names.contains(&"$total") && names.contains(&"$item"), "locals were {names:?}");
     assert!(matches!(snap.watch("$total"), Some(Ok(_))), "watch was {:?}", snap.watch("$total"));
 
+    // The script's own variables, in the frame that called `total`, once it is picked.
+    engine.read_frame(sid, 1, 1);
+    let read = |e: &Engine| e.session(sid).and_then(|s| s.latest()).is_some_and(|s| s.scopes(1).is_some());
+    pump(&mut engine, &mut rx, read).await;
+    let caller = engine.session(sid).and_then(|s| s.latest()).and_then(|s| s.scopes(1)).unwrap_or_default();
+    let names: Vec<&str> = caller.iter().filter_map(|s| s.vars.as_deref()).flatten().map(|v| v.name.as_str()).collect();
+    assert!(names.contains(&"$items") && !names.contains(&"$total"), "the caller's variables were {names:?}");
+
     engine.resume(sid, Step::Continue).expect("continue");
     pump(&mut engine, &mut rx, |e| stops(e, sid) >= 2).await;
     let second = engine.session(sid).and_then(|s| s.latest()).expect("second");
     assert_eq!(second.local_value("$total"), Some("89.99"));
     // `$item` reads `array(4)` at both stops, but its elements were read ahead while it
     // was collapsed, so the next item is still noticed.
-    let locals = second.scopes.iter().find(|s| s.vars.iter().flatten().any(|v| v.name == "$item")).expect("scope");
+    let scopes = second.scopes(0).unwrap_or_default();
+    let locals = scopes.iter().find(|s| s.vars.iter().flatten().any(|v| v.name == "$item")).expect("scope");
     let item_path = vec![locals.name.clone(), "$item".to_owned()];
-    assert_eq!(diff(Some(&snap), second).get(&item_path), Some(&Change::Inside));
+    assert_eq!(diff(Some(&snap), second, 0).get(&item_path), Some(&Change::Inside));
 
     engine.toggle_breakpoint(&script, BREAK_LINE);
     engine.resume(sid, Step::Continue).expect("continue");

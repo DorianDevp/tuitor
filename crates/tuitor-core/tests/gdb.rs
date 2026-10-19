@@ -97,10 +97,21 @@ async fn breakpoint_step_and_delta_with_gdb() {
     assert_eq!(first.hit_breakpoints, [1]);
     assert_eq!(first.local_value("sum"), Some("0"));
     // Children of collapsed variables are read ahead, so that a change inside can be marked.
-    let prices = first.scopes.iter().filter_map(|s| s.vars.as_deref()).flatten().find(|v| v.name == "prices");
+    let prices = first.locals().iter().find(|v| v.name == "prices");
     assert!(prices.is_some_and(|v| v.children.is_some()), "`prices` was not read ahead: {prices:?}");
     assert!(matches!(first.watch("sum"), Some(Ok(v)) if v == "0"));
     assert_eq!(engine.breakpoints().get(1).map(|b| b.hits), Some(1));
+
+    // The caller's variables are read once its frame is picked, not at every stop.
+    assert!(first.scopes(1).is_none(), "the caller was read with the stop");
+    engine.read_frame(sid, 1, 1);
+    let read = |e: &Engine| e.session(sid).and_then(|s| s.latest()).is_some_and(|s| s.scopes(1).is_some());
+    pump(&mut engine, &mut rx, read).await;
+    let first = engine.session(sid).and_then(|s| s.latest()).expect("snapshot");
+    let caller = first.scopes(1).unwrap_or_default().iter().filter_map(|s| s.vars.as_deref()).flatten();
+    let names: Vec<&str> = caller.map(|v| v.name.as_str()).collect();
+    assert!(first.frames[1].name.contains("main"), "frame #1 was {}", first.frames[1].name);
+    assert!(names.contains(&"prices") && !names.contains(&"sum"), "main's variables were {names:?}");
 
     // Continue to the second hit: sum changed from 0 to 10.
     engine.resume(sid, Step::Continue).expect("continue");
@@ -108,8 +119,9 @@ async fn breakpoint_step_and_delta_with_gdb() {
     let session = engine.session(sid).expect("session");
     let (prev, cur) = (&session.history[0], &session.history[1]);
     assert!(!prev.live && cur.live);
-    let changes = diff(Some(prev), cur);
-    let locals = cur.scopes.iter().find(|s| s.vars.iter().flatten().any(|v| v.name == "sum")).expect("scope with sum");
+    let changes = diff(Some(prev), cur, 0);
+    let scopes = cur.scopes(0).unwrap_or_default();
+    let locals = scopes.iter().find(|s| s.vars.iter().flatten().any(|v| v.name == "sum")).expect("scope with sum");
     let sum_path = vec![locals.name.clone(), "sum".to_owned()];
     assert_eq!(changes.get(&sum_path), Some(&Change::Changed { was: "0".into() }));
 

@@ -98,7 +98,8 @@ async fn delve_builds_stops_steps_and_cleans_up() {
     assert_eq!(first.local_value("total"), Some("0"));
     assert!(matches!(first.watch("total"), Some(Ok(v)) if v == "0"), "watch was {:?}", first.watch("total"));
     // The order is a struct whose fields were read ahead, so a change inside would show.
-    let order = first.scopes.iter().filter_map(|s| s.vars.as_deref()).flatten().find(|v| v.name == "order");
+    let scopes = first.scopes(0).unwrap_or_default();
+    let order = scopes.iter().filter_map(|s| s.vars.as_deref()).flatten().find(|v| v.name == "order");
     let fields: Vec<&str> = order.and_then(|o| o.children.as_deref()).into_iter().flatten().map(|v| &*v.name).collect();
     assert_eq!(fields, ["ID", "Customer", "Lines"]);
     // dlv's own build, next to the sources, until the session ends.
@@ -112,9 +113,10 @@ async fn delve_builds_stops_steps_and_cleans_up() {
     pump(&mut engine, &mut rx, |e| stops(e, sid) >= 2).await;
     let session = engine.session(sid).expect("session");
     let (prev, cur) = (&session.history[0], &session.history[1]);
-    let scope = cur.scopes.iter().find(|s| s.vars.iter().flatten().any(|v| v.name == "total")).expect("scope");
+    let scopes = cur.scopes(0).unwrap_or_default();
+    let scope = scopes.iter().find(|s| s.vars.iter().flatten().any(|v| v.name == "total")).expect("scope");
     let total = vec![scope.name.clone(), "total".to_owned()];
-    assert_eq!(diff(Some(prev), cur).get(&total), Some(&Change::Changed { was: "0".into() }));
+    assert_eq!(diff(Some(prev), cur, 0).get(&total), Some(&Change::Changed { was: "0".into() }));
     assert_eq!(cur.local_value("total"), Some("8900"));
 
     engine.resume(sid, Step::In).expect("step in");

@@ -28,7 +28,7 @@ use crate::config::{AdapterSpec, Adapters, INSTALL_HELP, LaunchConfig, RequestKi
 use crate::log::{Bounded, EventLine, OutputKind, OutputLine};
 use crate::persist::{self, Persisted};
 use crate::session::{ExceptionFilter, PendingStop, Session, SessionId, SessionState};
-use crate::snapshot::{Snapshot, Var, VarPath, WatchValue};
+use crate::snapshot::{ScopeVars, Snapshot, Var, VarPath, WatchValue};
 use crate::tmpdir::TempDir;
 
 const OUTPUT_LINES: usize = 10_000;
@@ -72,9 +72,18 @@ enum Msg {
         epoch: u64,
         result: DapResult<Capture>,
     },
+    /// The scopes of a frame other than the top one.
+    FrameRead {
+        sid: SessionId,
+        epoch: u64,
+        number: u32,
+        frame: usize,
+        result: DapResult<Vec<ScopeVars>>,
+    },
     Children {
         sid: SessionId,
         number: u32,
+        frame: usize,
         path: VarPath,
         result: DapResult<Vec<Var>>,
     },
@@ -446,11 +455,11 @@ impl Engine {
         removed
     }
 
-    /// Evaluates in the top frame of the live stop (or globally while running).
-    pub fn evaluate(&mut self, sid: SessionId, expr: &str) -> Result<()> {
+    /// Evaluates in frame `frame` of the live stop (or globally while running).
+    pub fn evaluate(&mut self, sid: SessionId, frame: usize, expr: &str) -> Result<()> {
         let session = self.session_ref(sid)?;
         let client = session.client.clone().ok_or_else(|| anyhow!("{} is not connected", session.name))?;
-        let frame_id = session.live().and_then(|s| s.top()).map(|f| f.id);
+        let frame_id = session.live().and_then(|s| s.frames.get(frame)).map(|f| f.id);
         let tx = self.tx.clone();
         let expr = expr.to_owned();
         tokio::spawn(async move {
@@ -460,26 +469,51 @@ impl Engine {
         Ok(())
     }
 
-    /// Expands a scope (`[scope]`) or variable path in a snapshot; it stays expanded at later stops.
-    pub fn expand(&mut self, sid: SessionId, number: u32, path: VarPath) -> Result<()> {
+    /// Expands a scope (`[scope]`) or variable path in frame `frame` of a snapshot; it stays
+    /// expanded at later stops, and in other frames.
+    pub fn expand(&mut self, sid: SessionId, number: u32, frame: usize, path: VarPath) -> Result<()> {
         let session = self.session_mut(sid)?;
         session.expanded.insert(path.clone());
         let snapshot = session.snapshot(number).ok_or_else(|| anyhow!("no stop #{number}"))?;
+        let scopes = snapshot.scopes(frame).unwrap_or_default();
         match path.as_slice() {
             [] => return Ok(()),
-            [scope] if !snapshot.scopes.iter().any(|s| &s.name == scope) => bail!("no scope {scope}"),
-            [_, _, ..] if snapshot.var(&path).is_none() => bail!("no variable {}", path.join(".")),
+            [scope] if !scopes.iter().any(|s| &s.name == scope) => bail!("no scope {scope}"),
+            [_, _, ..] if snapshot.var(frame, &path).is_none() => bail!("no variable {}", path.join(".")),
             _ => {}
         }
         let history = !snapshot.live || !session.is_stopped();
-        let not_captured = history && !snapshot.unloaded(&path, &session.expanded).is_empty();
+        let not_captured = history && !snapshot.unloaded(frame, &path, &session.expanded).is_empty();
         // Rows below that stayed expanded while this one was collapsed are read too. Expansion is
-        // shared by all stops, so the live stop loads them even when `number` is history.
-        self.load_expanded(sid, &path);
+        // shared by all stops and frames, so the live stop loads them in every frame it read,
+        // even when `number` is history.
+        self.load_expanded(sid, None, &path);
         if not_captured {
             bail!("stop #{number} is history; its children were not captured");
         }
         Ok(())
+    }
+
+    /// Reads the scopes of frame `frame` of stop `number`, picked in STACK, as the stop read
+    /// those of the top frame. Only the live stop can still be read, and only once.
+    pub fn read_frame(&mut self, sid: SessionId, number: u32, frame: usize) {
+        let Ok(session) = self.session_ref(sid) else { return };
+        let (Some(snapshot), Some(client)) = (session.live(), session.client.clone()) else { return };
+        let Some(target) = snapshot.frames.get(frame) else { return };
+        if snapshot.number != number || target.scopes.is_some() || session.reading.contains(&frame) {
+            return;
+        }
+        let (epoch, frame_id) = (session.epoch, target.id);
+        let expanded: Vec<VarPath> = session.expanded.iter().cloned().collect();
+        let seen: Vec<String> = session.seen_scopes.iter().cloned().collect();
+        if let Ok(session) = self.session_mut(sid) {
+            session.reading.insert(frame);
+        }
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = capture::scopes(&client, frame_id, &expanded, &seen).await;
+            let _ = tx.send(EngineMsg(Msg::FrameRead { sid, epoch, number, frame, result }));
+        });
     }
 
     pub fn collapse(&mut self, sid: SessionId, path: &VarPath) {
@@ -511,7 +545,10 @@ impl Engine {
                 self.configuration_answered(sid);
             }
             Msg::Captured { sid, epoch, result } => self.on_captured(sid, epoch, result),
-            Msg::Children { sid, number, path, result } => self.on_children(sid, number, &path, result),
+            Msg::FrameRead { sid, epoch, number, frame, result } => {
+                self.on_frame_read(sid, epoch, number, frame, result)
+            }
+            Msg::Children { sid, number, frame, path, result } => self.on_children(sid, number, frame, &path, result),
             Msg::Watch { sid, number, expr, result } => {
                 if let Some(snapshot) = self.session_mut(sid).ok().and_then(|s| s.snapshot_mut(number)) {
                     let value = result.map_err(|e| short_error(&e));
@@ -822,7 +859,7 @@ impl Engine {
                 };
                 let Ok(session) = self.session_mut(sid) else { return };
                 session.state = SessionState::Stopped;
-                session.epoch += 1;
+                session.moved_on();
                 session.stopped_thread = body.thread_id.or(session.stopped_thread);
                 session.pending_stop =
                     Some(PendingStop { reason: body.reason, description: body.description.or(body.text), hits });
@@ -942,10 +979,8 @@ impl Engine {
             session.name = session.name.replace("·native", &format!("·{tag}"));
             session.tag = tag.to_owned();
         }
-        for scope in &capture.scopes {
-            if session.seen_scopes.insert(scope.name.clone()) && scope.default_open {
-                session.expanded.insert(vec![scope.name.clone()]);
-            }
+        if let Some(scopes) = capture.frames.first().and_then(|top| top.scopes.as_deref()) {
+            session.see_scopes(scopes);
         }
         for older in &mut session.history {
             older.live = false;
@@ -960,17 +995,42 @@ impl Engine {
             description: stop.description,
             hit_breakpoints: stop.hits,
             frames: capture.frames,
-            scopes: capture.scopes,
             watches: capture.watches,
             live: true,
         });
         let name = session.name.clone();
         // Paths expanded while the stop was being read, or whose reading failed, load now.
-        self.load_expanded(sid, &[]);
+        self.load_expanded(sid, Some(0), &[]);
         self.notice(Some(sid), Level::Info, format!("{name} stopped: {reason} at {location} · #{number}"));
     }
 
-    fn on_children(&mut self, sid: SessionId, number: u32, path: &VarPath, result: DapResult<Vec<Var>>) {
+    fn on_frame_read(
+        &mut self,
+        sid: SessionId,
+        epoch: u64,
+        number: u32,
+        frame: usize,
+        result: DapResult<Vec<ScopeVars>>,
+    ) {
+        let Ok(session) = self.session_mut(sid) else { return };
+        if session.epoch != epoch || session.latest().map(|s| s.number) != Some(number) {
+            return; // the program moved on while we were reading it
+        }
+        session.reading.remove(&frame);
+        let scopes = match result {
+            Ok(scopes) => scopes,
+            Err(err) => {
+                let text = format!("reading frame #{frame} failed: {}", short_error(&err));
+                return self.notice(Some(sid), Level::Warn, text);
+            }
+        };
+        session.see_scopes(&scopes);
+        let Some(target) = session.history.last_mut().and_then(|s| s.frames.get_mut(frame)) else { return };
+        target.scopes = Some(scopes);
+        self.load_expanded(sid, Some(frame), &[]);
+    }
+
+    fn on_children(&mut self, sid: SessionId, number: u32, frame: usize, path: &VarPath, result: DapResult<Vec<Var>>) {
         let vars = match result {
             Ok(vars) => vars,
             Err(err) => {
@@ -987,30 +1047,39 @@ impl Engine {
         };
         let Some(snapshot) = self.session_mut(sid).ok().and_then(|s| s.snapshot_mut(number)) else { return };
         if let [scope] = path.as_slice() {
-            if let Some(scope) = snapshot.scopes.iter_mut().find(|s| &s.name == scope) {
+            let scopes = snapshot.frames.get_mut(frame).and_then(|f| f.scopes.as_mut());
+            if let Some(scope) = scopes.and_then(|scopes| scopes.iter_mut().find(|s| &s.name == scope)) {
                 scope.vars = Some(vars);
             }
-        } else if let Some(var) = snapshot.var_mut(path) {
+        } else if let Some(var) = snapshot.var_mut(frame, path) {
             var.children = Some(vars);
         }
         // Rows below that stayed expanded can be read now that their parents are there.
-        self.load_expanded(sid, path);
+        self.load_expanded(sid, Some(frame), path);
     }
 
     /// Requests children for the rows on `root`'s branch that the live stop shows expanded
-    /// but has not read, so that none stays "loading…" with nothing on the way.
-    fn load_expanded(&self, sid: SessionId, root: &[String]) {
+    /// but has not read, so that none stays "loading…" with nothing on the way: in frame
+    /// `frame`, or with `None` in every frame whose scopes were read.
+    fn load_expanded(&self, sid: SessionId, frame: Option<usize>, root: &[String]) {
         let Ok(session) = self.session_ref(sid) else { return };
         let (Some(snapshot), Some(client)) = (session.live(), &session.client) else { return };
         let number = snapshot.number;
-        for (path, reference) in snapshot.unloaded(root, &session.expanded) {
-            let args = VariablesArguments { variables_reference: reference };
-            self.call::<Variables>(sid, client, args, move |result| Msg::Children {
-                sid,
-                number,
-                path,
-                result: result.map(|r| r.variables.into_iter().map(capture::var).collect()),
-            });
+        let frames = match frame {
+            Some(frame) => frame..frame + 1,
+            None => 0..snapshot.frames.len(),
+        };
+        for frame in frames {
+            for (path, reference) in snapshot.unloaded(frame, root, &session.expanded) {
+                let args = VariablesArguments { variables_reference: reference };
+                self.call::<Variables>(sid, client, args, move |result| Msg::Children {
+                    sid,
+                    number,
+                    frame,
+                    path,
+                    result: result.map(|r| r.variables.into_iter().map(capture::var).collect()),
+                });
+            }
         }
     }
 

@@ -1,5 +1,5 @@
 use ratatui::layout::Rect;
-use tuitor_core::snapshot::Change;
+use tuitor_core::snapshot::{Change, Frame};
 
 use super::paint::{Painter, Panel, seg, truncate};
 use super::theme::*;
@@ -13,11 +13,18 @@ pub fn draw(p: &mut Painter<'_>, tab: &Tab, area: Rect, focus: bool) {
     let vars = rows.iter().filter(|r| !r.scope && !r.note && r.depth == 1).count();
 
     let title = if tab.ui.view == View::History { "SNAPSHOT" } else { "LOCALS" };
-    let sub = match snapshot {
+    let mut sub = match snapshot {
         Some(s) if tab.in_history() => vec![seg(format!("stop #{} · recorded", s.number), fg(DIM))],
         Some(s) => vec![seg(format!("stop #{}", s.number), fg(DIM))],
         None => vec![],
     };
+    // A frame picked in STACK is named: these are not the variables of where execution is.
+    if tab.selected_frame_index() > 0
+        && let Some(frame) = tab.selected_frame()
+    {
+        sub.push(seg(" · ", fg(DIM)));
+        sub.push(seg(frame_label(tab, frame), bold(WHITE)));
+    }
     let right = if snapshot.is_some() {
         let mut r = vec![seg(format!("{vars} vars"), fg(DIM))];
         if changed > 0 {
@@ -32,12 +39,11 @@ pub fn draw(p: &mut Painter<'_>, tab: &Tab, area: Rect, focus: bool) {
 
     let inner = super::paint::inner(area);
     if rows.is_empty() {
-        let text = if tab.active().is_some_and(|s| s.is_stopped()) {
-            "reading…"
-        } else {
-            "variables appear when the program stops"
-        };
-        p.text(inner.x + 2, inner.y + 1, text, fg(FAINT), inner.right());
+        let (text, why) = no_rows(tab);
+        p.text(inner.x + 2, inner.y + 1, &text, fg(FAINT), inner.right());
+        if let Some(why) = why {
+            p.text(inner.x + 2, inner.y + 2, why, fg(GHOST), inner.right());
+        }
         return;
     }
 
@@ -118,6 +124,30 @@ pub fn draw(p: &mut Painter<'_>, tab: &Tab, area: Rect, focus: bool) {
         if delta_w > 0 {
             p.segs_right(inner.right(), y, &delta, value_end);
         }
+    }
+}
+
+fn frame_label(tab: &Tab, frame: &Frame) -> String {
+    format!("#{} {}", tab.selected_frame_index(), truncate(&frame.name, 32))
+}
+
+/// What LOCALS says when it has no rows, and why, if that needs saying.
+fn no_rows(tab: &Tab) -> (String, Option<&'static str>) {
+    let stopped = tab.active().is_some_and(|s| s.is_stopped());
+    let (Some(session), Some(snapshot), Some(frame)) = (tab.active(), tab.viewed(), tab.selected_frame()) else {
+        let text = if stopped { "reading…" } else { "variables appear when the program stops" };
+        return (text.to_owned(), None);
+    };
+    let index = tab.selected_frame_index();
+    let label = frame_label(tab, frame);
+    match snapshot.scopes(index) {
+        Some(_) => (format!("no variables in {label}"), None),
+        None if !snapshot.live || !stopped => (
+            format!("the variables of {label} were not captured at this stop"),
+            Some("a frame's are read when it is picked in STACK while the program is stopped there"),
+        ),
+        None if session.reading_frame(index) => (format!("reading the variables of {label}…"), None),
+        None => (format!("the variables of {label} could not be read"), None),
     }
 }
 
