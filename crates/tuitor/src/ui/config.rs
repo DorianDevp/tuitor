@@ -76,7 +76,7 @@ fn lines(app: &App, tab: &Tab, project: &Project, width: usize) -> Vec<Line> {
         right: vec![seg("FROM", bold(FAINT))],
     });
     if project.configurations.is_empty() {
-        let hint = "none yet · a adds one: php, rust, c, js, gdb, pwa-chrome, pwa-node";
+        let hint = "none yet · a adds one: php, rust, go, c, js, gdb, pwa-chrome, pwa-node";
         lines.push(Line::text(vec![seg(hint, italic(FAINT))]));
     }
     let name_width = project.configurations.iter().map(|c| c.name().chars().count()).max().unwrap_or(0).min(width / 2);

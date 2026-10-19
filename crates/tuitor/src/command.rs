@@ -527,7 +527,7 @@ pub static COMMANDS: &[Spec] = &[
     Spec {
         name: "config add",
         arg: Arg::Required("‹type›"),
-        help: "add a configuration: php, rust, c, js, gdb, pwa-chrome, pwa-node…",
+        help: "add a configuration: php, rust, go, c, js, gdb, pwa-chrome, pwa-node…",
         group: Group::Config,
         parse: |a| Ok(Action::ConfigAdd(text(a))),
     },

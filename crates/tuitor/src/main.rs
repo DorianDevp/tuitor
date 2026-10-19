@@ -214,7 +214,7 @@ fn print_configs(projects: &[Project], adapters: &Adapters, store: &Store) -> Re
                 // Paths can be long; the reason gets a line of its own.
                 Err(what) => {
                     missing = true;
-                    println!("\n  {:<10} not installed: {what}", "");
+                    println!("\n  {:<10} cannot run: {what}", "");
                 }
             },
         }

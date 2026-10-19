@@ -102,6 +102,7 @@ tuitor knows these kinds of project by the files in their directory:
 |---|---|---|
 | PHP | `composer.json`, `*.php` | listen for Xdebug on port 9003 |
 | Rust | `Cargo.toml` | gdb launch of `target/debug/<package>` |
+| Go | `go.mod` | Delve builds and launches the package in the directory |
 | C | `Makefile`, `CMakeLists.txt`, `*.c` | gdb launch of an executable built in the directory |
 | JS/TS | `package.json`, `angular.json`, `tsconfig.json` | `pwa-chrome` on `http://localhost:4200` with `webRoot`, in the browser found on `PATH` |
 
@@ -134,7 +135,7 @@ configurations change with these commands and are saved at once:
 /config set args ["--verbose"]
 /config unset stopOnEntry            (u on a field)
 /config map /var/www/app=./api       pathMappings; /var/www/app= removes it
-/config add rust                     a kind, or a type: php, gdb, lldb, pwa-chrome, pwa-node…
+/config add rust                     a kind, or a type: php, gdb, lldb, go, pwa-chrome, pwa-node…
 /config delete                       the selected configuration (d)
 /config start                        the selected configuration (S)
 ```
@@ -207,6 +208,7 @@ enter = "open"
 | `lldb` | `<adapters>/codelldb/extension/adapter/codelldb --port ${port}` (CodeLLDB) | C, C++, Rust, Zig |
 | `pwa-node`, `node` | `node <adapters>/js-debug/js-debug/src/dapDebugServer.js ${port} 127.0.0.1` | JavaScript, TypeScript in Node.js |
 | `pwa-chrome`, `chrome` | the same js-debug | JavaScript, TypeScript in Chrome or Chromium |
+| `go` | `dlv dap --listen 127.0.0.1:${port}` (Delve) | Go |
 
 js-debug runs each Node process and each browser page in a session of its own,
 which it asks tuitor for (`startDebugging`); the program stops there, and
@@ -218,6 +220,30 @@ live sessions take the two as one. `X` stops the whole program. `node` and
 Code sends them. `"console": "integratedTerminal"` asks for a terminal that
 tuitor cannot give the program, so tuitor ends the session and says so; with
 `"internalConsole"`, the default, the program's output shows in OUTPUT.
+
+Delve builds the program itself, without optimisations, and runs it. A `go`
+configuration, as in VS Code:
+
+```jsonc
+{
+  "name": "Launch Package",
+  "type": "go",
+  "request": "launch",
+  "mode": "debug",                    // build and run the package; "test" runs its tests
+  "program": "${workspaceFolder}"     // the package's directory
+}
+```
+
+dlv itself does not know `"mode": "auto"`, which VS Code's snippets write: tuitor
+makes it `test` for a `program` that is a `_test.go` file and `debug` for
+anything else, as VS Code does when the editor shows no test file.
+`${fileDirname}` (the file open in the editor) means nothing to tuitor; name the
+directory. dlv writes the program's output to its own standard output, which
+tuitor shows as the adapter's, so tuitor asks dlv to send it as the program's
+(`"outputMode": "remote"`) unless the configuration sets `outputMode`,
+`stdoutTo` or `stderrTo`. `"stopOnEntry": true` stops before Go has started
+the program, where dlv has no stack and no variables to show; a breakpoint on
+`func main() {` stops at the start of `main`.
 
 Programs are looked up on `PATH` only. Adapters released as VS Code extensions
 are unpacked from their official `.vsix` (js-debug: its DAP server's
@@ -309,6 +335,27 @@ out one that names none. In launch.json, or for a browser off `PATH`, set
 `runtimeExecutable` to its path (`/usr/bin/chromium`).
 
 On macOS, use `~/Library/Application Support/tuitor/adapters/…` as `dir`.
+
+**Delve** (`dlv`), the Go debugger, is built with Go. Go comes from
+[go.dev/dl](https://go.dev/dl/) or your distribution (`pacman -S go`,
+`apt-get install golang-go`, `dnf install golang`); Delve supports only recent
+Go releases (1.27.2: Go 1.25 to 1.27), so an older distribution's Go may be too
+old. Then, as [Delve's installation guide](https://github.com/go-delve/delve/tree/master/Documentation/installation)
+says:
+
+```sh
+go install github.com/go-delve/delve/cmd/dlv@latest
+```
+
+`go install` puts `dlv` in `$(go env GOPATH)/bin` (`~/go/bin`, unless `GOPATH`
+or `GOBIN` say otherwise), which must be on `PATH`, e.g. in `~/.bashrc` or
+`~/.zshrc`:
+
+```sh
+export PATH="$PATH:$(go env GOPATH)/bin"
+```
+
+tuitor names that directory when `dlv` is there but not on `PATH`.
 
 Breakpoints and watches are remembered per project in
 `~/.local/state/tuitor/`, outside the repository, and so are the projects opened
