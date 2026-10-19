@@ -34,9 +34,9 @@ neither, the current directory gets a tab only if it is a project (it has a
 launch configuration or a kind tuitor knows, see below); otherwise tuitor starts
 with an empty tab, and `O` opens a project in it.
 
-[`examples/`](examples) has a small program for PHP, Rust, C, Node.js, a web
-page in Chromium and TypeScript, each with a launch.json, a `run.sh` that sets
-it up and starts tuitor on it, and a walk through a first session.
+[`examples/`](examples) has a small program for PHP, Rust, C, Go, Node.js, a
+web page in Chromium and TypeScript, each with a launch.json, a `run.sh` that
+sets it up and starts tuitor on it, and a walk through a first session.
 
 ### PHP in a container
 
@@ -383,6 +383,7 @@ TUITOR_PHP_ADAPTER=~/.local/share/tuitor/adapters/vscode-php-debug/extension/out
 cargo test -p tuitor-core --test php -- --ignored
 TUITOR_JS_ADAPTER=~/.local/share/tuitor/adapters/js-debug/js-debug/src/dapDebugServer.js \
 cargo test -p tuitor-core --test js -- --ignored
+TUITOR_DLV="$(go env GOPATH)/bin/dlv" cargo test -p tuitor-core --test go -- --ignored
 ```
 
 `tuitor --script file` runs commands headless and saves screens as ANSI
