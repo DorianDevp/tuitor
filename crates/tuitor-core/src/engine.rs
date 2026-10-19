@@ -425,36 +425,20 @@ impl Engine {
         let session = self.session_mut(sid)?;
         session.expanded.insert(path.clone());
         let snapshot = session.snapshot(number).ok_or_else(|| anyhow!("no stop #{number}"))?;
-        let reference = match path.as_slice() {
+        match path.as_slice() {
             [] => return Ok(()),
-            [scope] => {
-                let scope =
-                    snapshot.scopes.iter().find(|s| &s.name == scope).ok_or_else(|| anyhow!("no scope {scope}"))?;
-                if scope.vars.is_some() {
-                    return Ok(());
-                }
-                scope.reference
-            }
-            _ => {
-                let var = snapshot.var(&path).ok_or_else(|| anyhow!("no variable {}", path.join(".")))?;
-                if var.children.is_some() || var.reference <= 0 {
-                    return Ok(());
-                }
-                var.reference
-            }
-        };
-        if !snapshot.live || !session.is_stopped() {
+            [scope] if !snapshot.scopes.iter().any(|s| &s.name == scope) => bail!("no scope {scope}"),
+            [_, _, ..] if snapshot.var(&path).is_none() => bail!("no variable {}", path.join(".")),
+            _ => {}
+        }
+        let history = !snapshot.live || !session.is_stopped();
+        let not_captured = history && !snapshot.unloaded(&path, &session.expanded).is_empty();
+        // Rows below that stayed expanded while this one was collapsed are read too. Expansion is
+        // shared by all stops, so the live stop loads them even when `number` is history.
+        self.load_expanded(sid, &path);
+        if not_captured {
             bail!("stop #{number} is history; its children were not captured");
         }
-        let client = session.client.clone().ok_or_else(|| anyhow!("{} is not connected", session.name))?;
-        self.call::<Variables>(sid, &client, VariablesArguments { variables_reference: reference }, move |result| {
-            Msg::Children {
-                sid,
-                number,
-                path,
-                result: result.map(|r| r.variables.into_iter().map(capture::var).collect()),
-            }
-        });
         Ok(())
     }
 
@@ -838,6 +822,8 @@ impl Engine {
             live: true,
         });
         let name = session.name.clone();
+        // Paths expanded while the stop was being read, or whose reading failed, load now.
+        self.load_expanded(sid, &[]);
         self.notice(Some(sid), Level::Info, format!("{name} stopped: {reason} at {location} · #{number}"));
     }
 
@@ -845,6 +831,10 @@ impl Engine {
         let vars = match result {
             Ok(vars) => vars,
             Err(err) => {
+                // At the live stop the row folds back rather than wait for children that will not come.
+                if self.session_ref(sid).ok().and_then(Session::live).is_some_and(|s| s.number == number) {
+                    self.collapse(sid, path);
+                }
                 return self.notice(
                     Some(sid),
                     Level::Warn,
@@ -859,6 +849,25 @@ impl Engine {
             }
         } else if let Some(var) = snapshot.var_mut(path) {
             var.children = Some(vars);
+        }
+        // Rows below that stayed expanded can be read now that their parents are there.
+        self.load_expanded(sid, path);
+    }
+
+    /// Requests children for the rows on `root`'s branch that the live stop shows expanded
+    /// but has not read, so that none stays "loading…" with nothing on the way.
+    fn load_expanded(&self, sid: SessionId, root: &[String]) {
+        let Ok(session) = self.session_ref(sid) else { return };
+        let (Some(snapshot), Some(client)) = (session.live(), &session.client) else { return };
+        let number = snapshot.number;
+        for (path, reference) in snapshot.unloaded(root, &session.expanded) {
+            let args = VariablesArguments { variables_reference: reference };
+            self.call::<Variables>(sid, client, args, move |result| Msg::Children {
+                sid,
+                number,
+                path,
+                result: result.map(|r| r.variables.into_iter().map(capture::var).collect()),
+            });
         }
     }
 

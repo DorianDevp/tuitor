@@ -1,7 +1,7 @@
 //! Everything captured at one stop. Snapshots are immutable history: the UI can
 //! show any of them after the program moved on, and compare neighbours.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 
 use chrono::{DateTime, Local};
@@ -135,6 +135,24 @@ impl Snapshot {
         vars.iter_mut().find(|v| &v.name == last)
     }
 
+    /// Rows shown expanded whose children were not read, with the reference to read them by.
+    /// A row is shown expanded when its path and every path above it are in `expanded`. Only
+    /// `root` and the rows above and below it count; `[]` means every row.
+    pub fn unloaded(&self, root: &[String], expanded: &BTreeSet<VarPath>) -> Vec<(VarPath, i64)> {
+        let mut out = Vec::new();
+        for scope in &self.scopes {
+            let mut path = vec![scope.name.clone()];
+            if !on_branch(&path, root) || !expanded.contains(&path) {
+                continue;
+            }
+            match &scope.vars {
+                Some(vars) => unloaded_vars(&mut path, vars, root, expanded, &mut out),
+                None => out.push((path, scope.reference)),
+            }
+        }
+        out
+    }
+
     /// Value of a top-level variable by name in any fetched scope.
     pub fn local_value(&self, name: &str) -> Option<&str> {
         self.scopes
@@ -144,6 +162,32 @@ impl Snapshot {
             .find(|v| v.name == name)
             .map(|v| v.value.as_str())
     }
+}
+
+/// [`Snapshot::unloaded`] among `vars`, the children of `path`.
+fn unloaded_vars(
+    path: &mut VarPath,
+    vars: &[Var],
+    root: &[String],
+    expanded: &BTreeSet<VarPath>,
+    out: &mut Vec<(VarPath, i64)>,
+) {
+    for var in vars {
+        path.push(var.name.clone());
+        if on_branch(path, root) && expanded.contains(path) {
+            match &var.children {
+                Some(children) => unloaded_vars(path, children, root, expanded, out),
+                None if var.reference > 0 => out.push((path.clone(), var.reference)),
+                None => {}
+            }
+        }
+        path.pop();
+    }
+}
+
+/// Whether one path starts with the other.
+fn on_branch(path: &[String], root: &[String]) -> bool {
+    path.iter().zip(root).all(|(a, b)| a == b)
 }
 
 /// What changed since `prev`. Only meaningful within the same function: after
@@ -332,6 +376,29 @@ mod tests {
         let prev = snap("controller", vec![var("$id", "812")]);
         let cur = snap("assign", vec![var("$id", "1")]);
         assert!(diff(Some(&prev), &cur).is_empty());
+    }
+
+    #[test]
+    fn unloaded_rows_are_expanded_ones_shown_without_children() {
+        // `customer` stayed expanded while `$order` was collapsed; `$order` was then read ahead.
+        let customer = Var { reference: 7, ..var("customer", "Customer") };
+        let s = snap("f", vec![object("$order", "Order", vec![var("id", "1001"), customer])]);
+        let mut expanded = BTreeSet::from([path(&["Locals"]), path(&["Locals", "$order", "customer"])]);
+        assert!(s.unloaded(&[], &expanded).is_empty(), "hidden under a collapsed parent");
+
+        expanded.insert(path(&["Locals", "$order"]));
+        let customer = vec![(path(&["Locals", "$order", "customer"]), 7)];
+        assert_eq!(s.unloaded(&path(&["Locals", "$order"]), &expanded), customer);
+        assert_eq!(s.unloaded(&[], &expanded), customer);
+        assert!(s.unloaded(&path(&["Locals", "$other"]), &expanded).is_empty());
+    }
+
+    #[test]
+    fn expanded_scope_without_variables_is_unloaded() {
+        let mut s = snap("f", vec![]);
+        s.scopes[0].vars = None;
+        let expanded = BTreeSet::from([path(&["Locals"]), path(&["Locals", "$order"])]);
+        assert_eq!(s.unloaded(&[], &expanded), [(path(&["Locals"]), 1)]);
     }
 
     #[test]

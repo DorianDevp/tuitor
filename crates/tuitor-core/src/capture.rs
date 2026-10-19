@@ -63,6 +63,9 @@ pub(crate) async fn capture(
                 expand_paths(&client, &scope.name, &mut vars, &expanded).await;
                 if default_open {
                     prefetch_children(&client, &mut vars, &mut prefetch_budget).await;
+                    // Paths kept expanded under a collapsed variable are reachable now that its
+                    // children were read ahead, and are part of this stop when it is reopened.
+                    expand_paths(&client, &scope.name, &mut vars, &expanded).await;
                 }
                 Some(vars)
             } else {
