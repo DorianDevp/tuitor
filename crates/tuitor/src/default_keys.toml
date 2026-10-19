@@ -1,0 +1,77 @@
+# tuitor key bindings. A key runs a command exactly as if you typed it after `/`.
+#
+# Copy this file to ~/.config/tuitor/keys.toml and change what you like; your
+# file is merged over these defaults and `""` unbinds a key.
+#
+# Keys: a character, or enter esc tab backtab space backspace up down left right
+# pageup pagedown home end, optionally with ctrl- / alt-. Keys separated by a
+# space form a sequence ("g c"). [pane.<name>] tables only apply while that pane
+# has focus and win over [global].
+
+[global]
+c = "continue"
+n = "next"
+s = "step in"
+o = "step out"
+p = "pause"
+X = "stop"
+R = "restart"
+"[" = "history prev"
+"]" = "history next"
+"}" = "history live"
+b = "bp toggle"
+f = "find"
+w = "watch add"
+x = "eval"
+"." = "follow"
+y = "copy"
+tab = "pane next"
+backtab = "pane prev"
+z = "zoom"
+q = "close"
+esc = "close"
+Q = "quit"
+ctrl-c = "quit"
+"/" = "palette"
+"?" = "help"
+"<" = "session prev"
+">" = "session next"
+S = "palette /session start "
+"g o" = "view overview"
+"g c" = "view code"
+"g h" = "view history"
+"g b" = "view breakpoints"
+B = "view breakpoints"
+j = "down"
+k = "up"
+down = "down"
+up = "up"
+h = "left"
+l = "right"
+left = "left"
+right = "right"
+ctrl-d = "page down"
+ctrl-u = "page up"
+pagedown = "page down"
+pageup = "page up"
+"g g" = "top"
+G = "bottom"
+home = "top"
+end = "bottom"
+enter = "open"
+
+[pane.breakpoints]
+a = "bp scope"
+e = "bp condition"
+l = "bp log"
+d = "bp delete"
+space = "bp enable"
+
+[pane.watch]
+d = "watch delete"
+
+[pane.stack]
+v = "vendor"
+
+[pane.output]
+C = "clear output"
