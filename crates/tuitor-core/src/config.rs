@@ -1,6 +1,7 @@
 //! Debug adapters known to tuitor and launch configurations to start them with.
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -48,6 +49,10 @@ pub struct AdapterSpec {
     /// `type` sent in the launch/attach arguments instead of the configuration's own.
     #[serde(default)]
     pub launch_type: Option<String>,
+    /// Where the official installation puts `command` when that is not on PATH. Only
+    /// named when the program is missing, never run from: what runs is what PATH finds.
+    #[serde(skip)]
+    pub install_dir: Option<PathBuf>,
 }
 
 fn default_transport() -> TransportKind {
@@ -70,6 +75,7 @@ impl AdapterSpec {
             tag: tag.to_owned(),
             adapter_id: None,
             launch_type: None,
+            install_dir: None,
         }
     }
 
@@ -84,6 +90,16 @@ impl AdapterSpec {
         spec
     }
 
+    /// Delve's DAP server, for the `"type": "go"` of VS Code's Go extension. It builds the
+    /// program itself (`"mode": "debug"`). `go install` puts dlv in Go's own bin directory,
+    /// which is often not on PATH, so a dlv found there is named when PATH has none.
+    fn delve() -> Self {
+        let args = ["dap", "--listen", "127.0.0.1:${port}"];
+        let mut spec = Self::builtin("go", TransportKind::Server, "dlv", &args, &["go"], "go");
+        spec.install_dir = go_bin_dir(|name| std::env::var_os(name), dirs::home_dir());
+        spec
+    }
+
     pub fn handles(&self, path: &Path) -> bool {
         path.extension()
             .and_then(|e| e.to_str())
@@ -94,15 +110,37 @@ impl AdapterSpec {
         self.adapter_id.as_deref().unwrap_or(&self.name)
     }
 
+    /// The `launch` or `attach` arguments for `config`: its fields, changed where VS Code's
+    /// extensions change them before their adapters see them.
+    pub fn launch_arguments(&self, config: &LaunchConfig) -> Map<String, Value> {
+        let mut arguments = config.arguments.clone();
+        if let Some(launch_type) = &self.launch_type {
+            arguments.insert("type".into(), Value::String(launch_type.clone()));
+        }
+        if config.adapter == "go" {
+            resolve_go(&mut arguments);
+        }
+        arguments
+    }
+
     /// The program to run, once everything the adapter needs is known to be installed.
     /// Checking the script up front matters: `node` with a missing script exits with a
     /// stack trace that hides the cause. Relative scripts resolve against `cwd`, where
     /// the adapter runs.
     pub fn locate(&self, cwd: &Path) -> Result<PathBuf, Missing> {
-        let program = resolve_program(&self.command).ok_or_else(|| Missing::Program(self.command.clone()))?;
+        let program = resolve_program(&self.command).ok_or_else(|| self.missing_program())?;
         match self.script(cwd) {
             Some(script) if !script.is_file() => Err(Missing::Script(script)),
             _ => Ok(program),
+        }
+    }
+
+    fn missing_program(&self) -> Missing {
+        match &self.install_dir {
+            Some(dir) if dir.join(&self.command).is_file() => {
+                Missing::OffPath { program: self.command.clone(), dir: dir.clone() }
+            }
+            _ => Missing::Program(self.command.clone()),
         }
     }
 
@@ -115,11 +153,38 @@ impl AdapterSpec {
     }
 }
 
+/// What VS Code's Go extension does to a `go` configuration before dlv gets it, done as
+/// far as tuitor can:
+///
+/// - dlv knows no `"mode": "auto"`, which the extension's snippets write. The extension
+///   makes it `test` for a `_test.go` file and `debug` for anything else, and runs a test
+///   file's package. It looks at the file open in the editor too; tuitor has none.
+/// - dlv's program writes to dlv's own stdout, which the extension shows as the program's
+///   output. tuitor keeps an adapter's own lines apart, so it asks dlv to send the
+///   program's output as output events (`"outputMode": "remote"`), unless the
+///   configuration sends it elsewhere.
+fn resolve_go(arguments: &mut Map<String, Value>) {
+    let program = arguments.get("program").and_then(Value::as_str).unwrap_or_default().to_owned();
+    let test_file = program.ends_with("_test.go");
+    if let Some(mode) = arguments.get_mut("mode").filter(|mode| **mode == "auto") {
+        *mode = if test_file { "test" } else { "debug" }.into();
+    }
+    if test_file && arguments.get("mode").is_some_and(|mode| mode == "test") {
+        let package = Path::new(&program).parent().map(|dir| dir.display().to_string()).unwrap_or_default();
+        arguments.insert("program".into(), package.into());
+    }
+    if !["outputMode", "stdoutTo", "stderrTo"].iter().any(|key| arguments.contains_key(*key)) {
+        arguments.insert("outputMode".into(), "remote".into());
+    }
+}
+
 /// Something an adapter needs that is not installed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Missing {
     /// The command is neither an existing file nor a program on PATH.
     Program(String),
+    /// The program is installed in `dir`, which is not on PATH.
+    OffPath { program: String, dir: PathBuf },
     /// The interpreter is there; the script it should run is not.
     Script(PathBuf),
 }
@@ -131,6 +196,9 @@ impl fmt::Display for Missing {
                 write!(f, "{} does not exist", home_relative(Path::new(program)))
             }
             Missing::Program(program) => write!(f, "`{program}` is not on PATH"),
+            Missing::OffPath { program, dir } => {
+                write!(f, "`{program}` is in {}, which is not on PATH", home_relative(dir))
+            }
             Missing::Script(script) => write!(f, "{} does not exist", home_relative(script)),
         }
     }
@@ -146,6 +214,18 @@ pub fn home_relative(path: &Path) -> String {
         Some(rest) => format!("~/{}", rest.display()),
         None => path.display().to_string(),
     }
+}
+
+/// Where `go install` puts programs, from the environment (`var`): `$GOBIN`, else `bin`
+/// in the first directory of `$GOPATH`, which is `~/go` when unset. Settings made with
+/// `go env -w` are not read.
+fn go_bin_dir(var: impl Fn(&str) -> Option<OsString>, home: Option<PathBuf>) -> Option<PathBuf> {
+    let set = |name| var(name).filter(|value| !value.is_empty());
+    if let Some(bin) = set("GOBIN") {
+        return Some(PathBuf::from(bin));
+    }
+    let gopath = set("GOPATH").and_then(|paths| std::env::split_paths(&paths).next());
+    Some(gopath.or_else(|| home.map(|home| home.join("go")))?.join("bin"))
 }
 
 /// Adapters that are published as VS Code extensions are unpacked from the official
@@ -187,6 +267,7 @@ impl Default for Adapters {
             AdapterSpec::js_debug("node", &js_debug, "pwa-node"),
             AdapterSpec::js_debug("pwa-chrome", &js_debug, "pwa-chrome"),
             AdapterSpec::js_debug("chrome", &js_debug, "pwa-chrome"),
+            AdapterSpec::delve(),
         ];
         Self { specs: specs.into_iter().map(|s| (s.name.clone(), s)).collect() }
     }
@@ -354,6 +435,8 @@ pub fn resolve_program(program: &str) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     fn vars() -> Variables {
@@ -444,6 +527,74 @@ mod tests {
                 assert!(spec.handles(Path::new(file)), "{name} should handle {file}");
             }
         }
+    }
+
+    #[test]
+    fn delve_serves_go() {
+        let adapters = Adapters::default();
+        let go = adapters.get("go").expect("go");
+        assert_eq!((go.transport, go.command.as_str()), (TransportKind::Server, "dlv"));
+        assert_eq!(go.args, ["dap", "--listen", "127.0.0.1:${port}"]);
+        assert_eq!((go.tag.as_str(), go.launch_type.as_deref()), ("go", None));
+        assert!(go.handles(Path::new("/src/orders/main.go")));
+        assert!(!go.handles(Path::new("/src/orders/go.mod")));
+    }
+
+    #[test]
+    fn go_configurations_are_resolved_for_dlv() {
+        let adapters = Adapters::default();
+        let go = adapters.get("go").expect("go");
+        let resolved = |fields: Value| {
+            let Value::Object(fields) = fields else { unreachable!() };
+            let config = LaunchConfig::adhoc("pkg", "go", RequestKind::Launch, fields);
+            Value::Object(go.launch_arguments(&config))
+        };
+        let package = resolved(json!({ "mode": "auto", "program": "/src/orders" }));
+        assert_eq!((package["mode"].as_str(), package["program"].as_str()), (Some("debug"), Some("/src/orders")));
+        assert_eq!(package["type"], "go");
+        let test = resolved(json!({ "mode": "auto", "program": "/src/orders/orders_test.go" }));
+        assert_eq!((test["mode"].as_str(), test["program"].as_str()), (Some("test"), Some("/src/orders")));
+        let exec = resolved(json!({ "mode": "exec", "program": "/src/orders/orders" }));
+        assert_eq!((exec["mode"].as_str(), exec["program"].as_str()), (Some("exec"), Some("/src/orders/orders")));
+        // The program's output comes as output events, unless it is sent elsewhere.
+        assert_eq!(package["outputMode"], "remote");
+        assert_eq!(resolved(json!({ "outputMode": "local" }))["outputMode"], "local");
+        assert!(resolved(json!({ "stdoutTo": "/tmp/out" })).get("outputMode").is_none());
+        let chrome = adapters.get("chrome").expect("chrome");
+        let config = LaunchConfig::adhoc("ng", "chrome", RequestKind::Launch, Map::new());
+        assert_eq!(chrome.launch_arguments(&config)["type"], "pwa-chrome");
+    }
+
+    #[test]
+    fn a_program_off_path_is_named_where_it_is() {
+        let dir = std::env::temp_dir().join(format!("tuitor-off-path-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("tmp dir");
+        let mut spec = AdapterSpec::builtin("go", TransportKind::Server, "tuitor-no-such-dlv", &[], &[], "go");
+        spec.install_dir = Some(dir.clone());
+        assert_eq!(spec.locate(&dir), Err(Missing::Program("tuitor-no-such-dlv".into())));
+        std::fs::write(dir.join("tuitor-no-such-dlv"), "").expect("stand-in for dlv");
+        let missing = spec.locate(&dir).expect_err("still not on PATH");
+        assert_eq!(missing, Missing::OffPath { program: "tuitor-no-such-dlv".into(), dir: dir.clone() });
+        assert_eq!(
+            missing.to_string(),
+            format!("`tuitor-no-such-dlv` is in {}, which is not on PATH", home_relative(&dir))
+        );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn go_installs_into_gobin_or_the_first_gopath() {
+        let home = Some(PathBuf::from("/home/me"));
+        let env = |vars: &'static [(&'static str, &'static str)]| {
+            move |name: &str| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| OsString::from(v))
+        };
+        assert_eq!(go_bin_dir(env(&[]), home.clone()), Some(PathBuf::from("/home/me/go/bin")));
+        assert_eq!(go_bin_dir(env(&[("GOBIN", "")]), home.clone()), Some(PathBuf::from("/home/me/go/bin")));
+        let gopath = env(&[("GOPATH", "/opt/go:/home/me/go")]);
+        assert_eq!(go_bin_dir(gopath, home.clone()), Some(PathBuf::from("/opt/go/bin")));
+        let gobin = env(&[("GOPATH", "/opt/go"), ("GOBIN", "/usr/local/bin")]);
+        assert_eq!(go_bin_dir(gobin, home), Some(PathBuf::from("/usr/local/bin")));
+        assert_eq!(go_bin_dir(env(&[]), None), None);
     }
 
     #[test]

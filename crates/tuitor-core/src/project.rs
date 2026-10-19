@@ -15,6 +15,7 @@ use crate::store::Store;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Kind {
     Rust,
+    Go,
     Php,
     Js,
     C,
@@ -23,11 +24,12 @@ pub enum Kind {
 impl Kind {
     /// In order of precedence: a project gets a default configuration for the first kind
     /// it is. A Makefile is common in projects of every language, so C comes last.
-    pub const ALL: [Kind; 4] = [Kind::Rust, Kind::Php, Kind::Js, Kind::C];
+    pub const ALL: [Kind; 5] = [Kind::Rust, Kind::Go, Kind::Php, Kind::Js, Kind::C];
 
     pub fn name(self) -> &'static str {
         match self {
             Kind::Rust => "rust",
+            Kind::Go => "go",
             Kind::Php => "php",
             Kind::Js => "js",
             Kind::C => "c",
@@ -37,6 +39,7 @@ impl Kind {
     pub fn parse(name: &str) -> Option<Kind> {
         Some(match name {
             "rust" | "rs" => Kind::Rust,
+            "go" => Kind::Go,
             "php" => Kind::Php,
             "js" | "ts" => Kind::Js,
             "c" => Kind::C,
@@ -48,6 +51,7 @@ impl Kind {
     pub fn adapter(self) -> &'static str {
         match self {
             Kind::Rust | Kind::C => "gdb",
+            Kind::Go => "go",
             Kind::Php => "php",
             Kind::Js => "pwa-chrome",
         }
@@ -56,6 +60,9 @@ impl Kind {
     fn files(self) -> &'static [&'static str] {
         match self {
             Kind::Rust => &["Cargo.toml"],
+            // Without one, the directory does not build as a package, which is what the
+            // configuration this kind gets launches.
+            Kind::Go => &["go.mod"],
             Kind::Php => &["composer.json"],
             Kind::Js => &["package.json", "angular.json", "tsconfig.json"],
             Kind::C => &["Makefile", "makefile", "GNUmakefile", "CMakeLists.txt"],
@@ -66,7 +73,7 @@ impl Kind {
         match self {
             Kind::Php => &["php"],
             Kind::C => &["c"],
-            Kind::Rust | Kind::Js => &[],
+            Kind::Rust | Kind::Go | Kind::Js => &[],
         }
     }
 
@@ -93,6 +100,9 @@ pub fn template(adapter: &str, dir: &Path) -> Map<String, Value> {
     let workspace = "${workspaceFolder}";
     let fields = match adapter {
         "php" => json!({ "name": "Listen for Xdebug", "port": 9003 }),
+        // As VS Code's Go extension writes it, with the mode it resolves its own `auto` to:
+        // dlv builds the package in the project directory and runs it.
+        "go" => json!({ "name": "Launch Package", "mode": "debug", "program": workspace }),
         "gdb" | "lldb-dap" | "lldb" => {
             let program = native_program(dir);
             let name =
@@ -484,7 +494,12 @@ mod tests {
         let c = temp("detect-c");
         touch(&c, &["orders.c"]);
         assert_eq!(detect(&c), [Kind::C]);
-        for dir in [dir, rust, c] {
+        let go = temp("detect-go");
+        touch(&go, &["main.go", "Makefile"]);
+        assert_eq!(detect(&go), [Kind::C], "no go.mod, no Go project");
+        touch(&go, &["go.mod", "package.json"]);
+        assert_eq!(detect(&go), [Kind::Go, Kind::Js, Kind::C]);
+        for dir in [dir, rust, c, go] {
             std::fs::remove_dir_all(dir).ok();
         }
     }
@@ -500,6 +515,9 @@ mod tests {
 
         let php = template("php", &dir);
         assert_eq!((php["type"].as_str(), php["port"].as_u64()), (Some("php"), Some(9003)));
+        let go = template(Kind::Go.adapter(), &dir);
+        assert_eq!((go["type"].as_str(), go["request"].as_str()), (Some("go"), Some("launch")));
+        assert_eq!((go["mode"].as_str(), go["program"].as_str()), (Some("debug"), Some("${workspaceFolder}")));
         let chrome = template(Kind::Js.adapter(), &dir);
         assert_eq!(chrome["url"], "http://localhost:4200");
         assert_eq!(chrome["webRoot"], "${workspaceFolder}");

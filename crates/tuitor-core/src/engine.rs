@@ -585,10 +585,7 @@ impl Engine {
             .map(|f| ExceptionFilter { filter: f.filter.clone(), label: f.label.clone(), enabled: f.default })
             .collect();
         session.capabilities = capabilities;
-        let mut arguments = session.config.arguments.clone();
-        if let Some(launch_type) = &session.adapter.launch_type {
-            arguments.insert("type".into(), Value::String(launch_type.clone()));
-        }
+        let arguments = session.adapter.launch_arguments(&session.config);
         let (Some(client), request, args) = (session.client.clone(), session.config.request, Value::Object(arguments))
         else {
             return;
