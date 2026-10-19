@@ -136,6 +136,8 @@ Each from where its authors publish it.
 - Xdebug 3, loaded by PHP (`php -v` mentions it): your distribution's package
   (`apt-get install php-xdebug`, `dnf install php-xdebug`, `pacman -S xdebug`)
   or `pie install xdebug/xdebug`; see [xdebug.org/docs/install](https://xdebug.org/docs/install).
+  Arch's package installs `/etc/php/conf.d/xdebug.ini` with the extension commented
+  out; uncomment `zend_extension=xdebug.so` there.
 - Node.js 20.18 or newer: [nodejs.org/en/download](https://nodejs.org/en/download)
   or your distribution's `nodejs`.
 - vscode-php-debug, from its [GitHub releases](https://github.com/xdebug/vscode-php-debug/releases):

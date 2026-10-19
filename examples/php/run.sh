@@ -53,11 +53,22 @@ php=$(command -v "${PHP:-php}") || die "${PHP:-php} not found." \
     "Install PHP with Xdebug 3 ($install_help)," \
     "or point PHP at one: PHP=/path/to/php ./run.sh"
 # XDEBUG_MODE=off, so that this check does not try to reach a debugger.
-XDEBUG_MODE=off "$php" -r 'exit(version_compare(phpversion("xdebug") ?: "0", "3", ">=") ? 0 : 1);' ||
+if ! XDEBUG_MODE=off "$php" -r 'exit(version_compare(phpversion("xdebug") ?: "0", "3", ">=") ? 0 : 1);'; then
+    # Installed but not enabled: some packages (Arch's xdebug) ship the ini line commented out.
+    ext_dir=$("$php" -r 'echo rtrim(ini_get("extension_dir"), "/");')
+    if [[ -f $ext_dir/xdebug.so ]]; then
+        read -ra scanned <<<"$("$php" -r 'echo str_replace(",", " ", (string) php_ini_scanned_files());')"
+        ini=$(grep -lE '^[[:space:]]*;[[:space:]]*zend_extension[[:space:]]*=.*xdebug' "${scanned[@]}" /dev/null | head -n 1 || true)
+        [[ -z $ini ]] || die "Xdebug is installed ($ext_dir/xdebug.so) but $ini has it commented out." \
+            "Enable it: sudo sed -i 's/^;[[:space:]]*zend_extension/zend_extension/' $ini"
+        die "Xdebug is installed ($ext_dir/xdebug.so) but PHP does not load it." \
+            "Add zend_extension=xdebug.so to an ini file that \`$php --ini\` lists."
+    fi
     die "$php has no Xdebug 3 loaded (\`$php -v\` would mention it)." \
         "Install it: apt-get install php-xdebug, dnf install php-xdebug, pacman -S xdebug" \
         "or pie install xdebug/xdebug ($install_help)," \
         "or use a php that has it: PHP=/path/to/php ./run.sh"
+fi
 command -v node >/dev/null || die "Node.js is not installed; vscode-php-debug runs on it." \
     "Install Node.js 20.18 or newer: https://nodejs.org/en/download or your distribution's nodejs;" \
     "$install_help."
