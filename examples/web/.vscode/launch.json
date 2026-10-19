@@ -1,0 +1,26 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "orders",
+      "type": "pwa-chrome",
+      "request": "launch",
+      // Straight from disk, so no web server is needed.
+      "url": "file://${workspaceFolder}/index.html",
+      "webRoot": "${workspaceFolder}",
+      // js-debug looks for Google Chrome unless told otherwise; this is Chromium's path on
+      // Arch and Debian. It gets a fresh profile, and closes when the session ends.
+      "runtimeExecutable": "/usr/bin/chromium"
+    },
+    {
+      // The same without a window: over ssh, or in scripts (HEADLESS=1 ./run.sh).
+      "name": "orders (headless)",
+      "type": "pwa-chrome",
+      "request": "launch",
+      "url": "file://${workspaceFolder}/index.html",
+      "webRoot": "${workspaceFolder}",
+      "runtimeExecutable": "/usr/bin/chromium",
+      "runtimeArgs": ["--headless=new"]
+    }
+  ]
+}

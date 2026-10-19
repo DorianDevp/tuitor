@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>tuitor web example</title>
+    <style>
+      body { font: 16px/1.5 system-ui, sans-serif; margin: 2rem; }
+      td, th { padding: 0.2rem 1rem 0.2rem 0; text-align: left; }
+      td:last-child { text-align: right; }
+    </style>
+  </head>
+  <body>
+    <h1>Orders</h1>
+    <table>
+      <thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Total</th></tr></thead>
+      <tbody id="orders"></tbody>
+    </table>
+    <p id="revenue"></p>
+    <button id="again">Total again</button>
+    <script src="orders.js"></script>
+  </body>
+</html>
