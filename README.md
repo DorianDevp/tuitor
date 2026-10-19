@@ -216,8 +216,8 @@ it: the context line names the configuration and the target
 live sessions take the two as one. `X` stops the whole program. `node` and
 `chrome` configurations go to js-debug as `pwa-node` and `pwa-chrome`, as VS
 Code sends them. `"console": "integratedTerminal"` asks for a terminal that
-tuitor cannot give the program; with `"internalConsole"`, the default, its
-output shows in OUTPUT.
+tuitor cannot give the program, so tuitor ends the session and says so; with
+`"internalConsole"`, the default, the program's output shows in OUTPUT.
 
 Programs are looked up on `PATH` only. Adapters released as VS Code extensions
 are unpacked from their official `.vsix` (js-debug: its DAP server's

@@ -33,8 +33,8 @@ const OUTPUT_LINES: usize = 10_000;
 const EVENT_LINES: usize = 1_000;
 const KILL_GRACE: Duration = Duration::from_secs(2);
 /// Why tuitor turns down `runInTerminal`: its terminal is its own screen.
-const NO_TERMINAL: &str = "the configuration asks to run the program in a terminal, which tuitor cannot give it; \
-                           set \"console\": \"internalConsole\" (its output then shows in OUTPUT)";
+const NO_TERMINAL: &str = "the program is to run in a terminal, which tuitor cannot give it; \
+                           set \"console\": \"internalConsole\" and its output shows in OUTPUT";
 
 pub struct EngineOptions {
     pub adapters: Adapters,
@@ -519,6 +519,8 @@ impl Engine {
             }
             Msg::Done { sid, command, result } => {
                 match result {
+                    // Cut off by the end of the session, which said why it ended.
+                    Err(tuitor_dap::Error::Closed) if !self.session_ref(sid).is_ok_and(Session::is_alive) => {}
                     Err(err) => self.notice(Some(sid), Level::Error, format!("{command}: {}", short_error(&err))),
                     // The session is over; js-debug then closes the connection without `terminated`.
                     Ok(()) if command == Disconnect::COMMAND => {
@@ -679,12 +681,16 @@ impl Engine {
                 }
                 Err(err) => (Level::Error, format!("startDebugging: {err:#}")),
             },
-            // js-debug still answers `launch` with success, so this is all the user hears of it.
             "runInTerminal" => (Level::Error, NO_TERMINAL.to_owned()),
             other => (Level::Warn, format!("tuitor does not support `{other}`")),
         };
         let _ = client.respond_error(request, &refusal);
         self.log_event(sid, "refused", request.command.clone());
+        if request.command == "runInTerminal" {
+            // The adapter cannot start the program without one, yet js-debug answers `launch`
+            // with success and waits for good; the session ends here instead.
+            return self.fail(self.root(sid), refusal);
+        }
         self.notice(Some(sid), level, refusal);
     }
 
@@ -1096,6 +1102,7 @@ impl Engine {
         self.notices.push(Notice { session, level, text });
     }
 
+    /// Ends a session that cannot go on, and the children it has, saying why.
     fn fail(&mut self, sid: SessionId, text: String) {
         if let Ok(session) = self.session_mut(sid) {
             session.state = SessionState::Exited;
@@ -1103,6 +1110,7 @@ impl Engine {
                 client.kill();
             }
         }
+        self.end_children(sid);
         self.log_event(sid, "failed", text.clone());
         self.notice(Some(sid), Level::Error, text);
     }
