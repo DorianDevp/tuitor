@@ -98,8 +98,7 @@ where they come from:
 
 A project with no configuration in either gets one for its kind (table above)
 when it is opened, and opens on CONFIG to adjust what a default cannot know:
-the program, its arguments, a port, path mappings. JS/TS configurations are
-data for now: the js-debug adapter that runs them is not there yet.
+the program, its arguments, a port, path mappings.
 
 CONFIG sits next to BREAKPOINTS in the PROJECT view (`g p`; `g b` and `B` show
 the same view with BREAKPOINTS focused). It shows the project's path and kind,
@@ -184,9 +183,21 @@ enter = "open"
 | `gdb` | `gdb --interpreter=dap` | C, C++, Rust, Zig |
 | `lldb-dap` | `lldb-dap` | C, C++, Rust, Zig |
 | `lldb` | `<adapters>/codelldb/extension/adapter/codelldb --port ${port}` (CodeLLDB) | C, C++, Rust, Zig |
+| `pwa-node`, `node` | `node <adapters>/js-debug/js-debug/src/dapDebugServer.js ${port} 127.0.0.1` | JavaScript, TypeScript in Node.js |
+| `pwa-chrome`, `chrome` | the same js-debug | JavaScript, TypeScript in Chrome or Chromium |
+
+js-debug runs each Node process and each browser page in a session of its own,
+which it asks tuitor for (`startDebugging`). It shows next to the launch in
+the top bar, named after it and the target (`shop·js › server.js [4242]`);
+the program stops there, and breakpoints go there. `X` in either stops the
+whole program. `node` and `chrome` configurations go to js-debug as
+`pwa-node` and `pwa-chrome`, as VS Code sends them. `"console":
+"integratedTerminal"` asks for a terminal that tuitor cannot give the
+program; with `"internalConsole"`, the default, its output shows in OUTPUT.
 
 Programs are looked up on `PATH` only. Adapters released as VS Code extensions
-are unpacked from their official `.vsix` into `<adapters>`:
+are unpacked from their official `.vsix` (js-debug: its DAP server's
+`.tar.gz`) into `<adapters>`:
 `${XDG_DATA_HOME:-~/.local/share}/tuitor/adapters` (macOS:
 `~/Library/Application Support/tuitor/adapters`). `tuitor configs` shows what
 is installed and what is missing.
@@ -246,6 +257,22 @@ curl -fL -o "$dir/codelldb.vsix" https://github.com/vadimcn/codelldb/releases/la
 unzip -q "$dir/codelldb.vsix" -d "$dir" && rm "$dir/codelldb.vsix"
 ```
 
+**js-debug** (JavaScript and TypeScript) is Microsoft's debugger from VS Code;
+it runs on Node.js. Take its standalone DAP server,
+`js-debug-dap-v<version>.tar.gz`, from its
+[GitHub releases](https://github.com/microsoft/vscode-js-debug/releases):
+
+```sh
+v=1.140.0    # or a newer release
+dir="${XDG_DATA_HOME:-$HOME/.local/share}/tuitor/adapters/js-debug"
+rm -rf "$dir" && mkdir -p "$dir"
+curl -fL -o "$dir/js-debug-dap.tar.gz" "https://github.com/microsoft/vscode-js-debug/releases/download/v$v/js-debug-dap-v$v.tar.gz"
+tar -xzf "$dir/js-debug-dap.tar.gz" -C "$dir" && rm "$dir/js-debug-dap.tar.gz"
+```
+
+Browser configurations also need Chrome or Chromium. js-debug looks for Google
+Chrome; for Chromium, set `runtimeExecutable` to its path (`/usr/bin/chromium`).
+
 On macOS, use `~/Library/Application Support/tuitor/adapters/…` as `dir`.
 
 Breakpoints and watches are remembered per project in
@@ -280,6 +307,6 @@ cargo test -p tuitor-core --test php -- --ignored
 ## Not there yet
 
 - FLOW (file waterfall from the first breakpoint) from the mockups
-- JavaScript/TypeScript through js-debug (needs child sessions, `startDebugging`)
+- `runInTerminal`: programs that need a terminal of their own (`"console": "integratedTerminal"`)
 - Locals of a frame other than the top one; sources without a path
 - Opening the current location in Neovim

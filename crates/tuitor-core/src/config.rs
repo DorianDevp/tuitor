@@ -45,6 +45,9 @@ pub struct AdapterSpec {
     /// `adapterID` sent in `initialize`; defaults to the adapter name.
     #[serde(default)]
     pub adapter_id: Option<String>,
+    /// `type` sent in the launch/attach arguments instead of the configuration's own.
+    #[serde(default)]
+    pub launch_type: Option<String>,
 }
 
 fn default_transport() -> TransportKind {
@@ -52,6 +55,7 @@ fn default_transport() -> TransportKind {
 }
 
 const NATIVE: &[&str] = &["rs", "c", "h", "cc", "cpp", "cxx", "hpp", "zig"];
+const JS: &[&str] = &["js", "mjs", "cjs", "ts", "mts", "cts", "jsx", "tsx"];
 
 impl AdapterSpec {
     fn builtin(name: &str, transport: TransportKind, command: &str, args: &[&str], exts: &[&str], tag: &str) -> Self {
@@ -65,7 +69,19 @@ impl AdapterSpec {
             extensions: exts.iter().map(|s| (*s).to_owned()).collect(),
             tag: tag.to_owned(),
             adapter_id: None,
+            launch_type: None,
         }
+    }
+
+    /// js-debug's standalone server, for one of the debug types its VS Code extension
+    /// registers. It knows only the `pwa-` types: VS Code's own resolver turns `node` and
+    /// `chrome` configurations into those before they reach it, so tuitor does the same.
+    fn js_debug(name: &str, server: &str, launch_type: &str) -> Self {
+        // An explicit host: on its default, `localhost`, Node may listen on ::1 only.
+        let args = [server, "${port}", "127.0.0.1"];
+        let mut spec = Self::builtin(name, TransportKind::Server, "node", &args, JS, "js");
+        spec.launch_type = (name != launch_type).then(|| launch_type.to_owned());
+        spec
     }
 
     pub fn handles(&self, path: &Path) -> bool {
@@ -133,9 +149,10 @@ pub fn home_relative(path: &Path) -> String {
 }
 
 /// Adapters that are published as VS Code extensions are unpacked from the official
-/// `.vsix` of their GitHub release into `<data dir>/tuitor/adapters/<name>` (on Linux
-/// `$XDG_DATA_HOME`, by default `~/.local/share`). No package manager is involved, so
-/// what runs is exactly what the adapter's authors released.
+/// `.vsix` (js-debug: the standalone DAP server's `.tar.gz`) of their GitHub release into
+/// `<data dir>/tuitor/adapters/<name>` (on Linux `$XDG_DATA_HOME`, by default
+/// `~/.local/share`). No package manager is involved, so what runs is exactly what the
+/// adapter's authors released.
 pub fn adapters_dir() -> PathBuf {
     dirs::data_dir().unwrap_or_default().join("tuitor").join("adapters")
 }
@@ -158,12 +175,18 @@ impl Default for Adapters {
         let vsix = adapters_dir();
         let php_debug = vsix.join("vscode-php-debug/extension/out/phpDebug.js").display().to_string();
         let codelldb = vsix.join("codelldb/extension/adapter/codelldb").display().to_string();
+        // The release archive holds a `js-debug` directory; it is unpacked as it is.
+        let js_debug = vsix.join("js-debug/js-debug/src/dapDebugServer.js").display().to_string();
         let specs = [
             AdapterSpec::builtin("php", Stdio, "node", &[&php_debug], &["php", "phtml"], "php"),
             AdapterSpec::builtin("gdb", Stdio, "gdb", &["--interpreter=dap", "--quiet"], NATIVE, "native"),
             AdapterSpec::builtin("lldb-dap", Stdio, "lldb-dap", &[], NATIVE, "native"),
             // CodeLLDB's VS Code configs use `"type": "lldb"`.
             AdapterSpec::builtin("lldb", Server, &codelldb, &["--port", "${port}"], NATIVE, "native"),
+            AdapterSpec::js_debug("pwa-node", &js_debug, "pwa-node"),
+            AdapterSpec::js_debug("node", &js_debug, "pwa-node"),
+            AdapterSpec::js_debug("pwa-chrome", &js_debug, "pwa-chrome"),
+            AdapterSpec::js_debug("chrome", &js_debug, "pwa-chrome"),
         ];
         Self { specs: specs.into_iter().map(|s| (s.name.clone(), s)).collect() }
     }
@@ -402,6 +425,25 @@ mod tests {
         assert_eq!(Path::new(&php.args[0]), adapters_dir().join("vscode-php-debug/extension/out/phpDebug.js"));
         let codelldb = adapters.get("lldb").expect("lldb");
         assert_eq!(Path::new(&codelldb.command), adapters_dir().join("codelldb/extension/adapter/codelldb"));
+    }
+
+    #[test]
+    fn js_debug_serves_every_javascript_type() {
+        let adapters = Adapters::default();
+        let server = adapters_dir().join("js-debug/js-debug/src/dapDebugServer.js");
+        for (name, launch_type) in
+            [("pwa-node", None), ("node", Some("pwa-node")), ("pwa-chrome", None), ("chrome", Some("pwa-chrome"))]
+        {
+            let spec = adapters.get(name).expect(name);
+            assert_eq!(spec.transport, TransportKind::Server);
+            assert_eq!((spec.command.as_str(), Path::new(&spec.args[0])), ("node", server.as_path()));
+            assert_eq!(spec.args[1..], ["${port}", "127.0.0.1"]);
+            assert_eq!(spec.launch_type.as_deref(), launch_type, "{name}");
+            assert_eq!(spec.tag, "js");
+            for file in ["app.js", "a.mjs", "a.cjs", "app.ts", "a.mts", "a.cts", "App.jsx", "App.tsx"] {
+                assert!(spec.handles(Path::new(file)), "{name} should handle {file}");
+            }
+        }
     }
 
     #[test]
