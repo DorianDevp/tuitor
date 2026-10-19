@@ -3,9 +3,9 @@
 //! over the lower one's. The pixels are assets/logo_white.svg sampled on the
 //! 9.954-unit grid its wordmark is drawn on.
 //!
-//! The logo appears in full only where no data is shown. The top bar gets a one-row
-//! version: the logo turned on its side, each stripe a bar as tall as the stripe
-//! reaches left.
+//! The logo appears in full only where no data is shown. The header gets a mark
+//! three rows tall: the same logo at a third of the height, one pixel row per
+//! stripe, its stripes coming out of the "t" of a pixel wordmark.
 
 use std::f32::consts::TAU;
 use std::ops::Range;
@@ -77,19 +77,49 @@ const LAG: f32 = 0.7;
 /// differs. Nothing animated is redrawn more often.
 pub const FRAME: Duration = Duration::from_millis(80);
 
-/// Lower blocks by height in eighths of a cell.
-const EIGHTHS: [&str; 9] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
-/// A top bar wave's height, in eighths, for a stripe whose left edge is at 0 …
-const WAVE_TOP: f32 = 7.5;
-/// … and what each pixel further right takes off. The sway then moves a wave by
-/// under one eighth each way, so the bar stays calm.
-const WAVE_SLOPE: f32 = 0.55;
-/// How finely the top bar looks ahead for the waves' next step.
-const WAVE_STEP: Duration = Duration::from_millis(10);
-/// Columns of the top bar's waves, one per stripe.
-pub const WAVES: u16 = STRIPES.len() as u16;
-/// Columns of the top bar's logo: the waves, a space and the name.
-pub const BAR_WIDTH: u16 = WAVES + 1 + NAME.len() as u16;
+/// The header's wordmark, a third of the big one's height: one pixel row per
+/// stripe, the same letters with stems two pixels wide, the heart a dot. The
+/// stripes run in the columns before the "t".
+const MARK: [&str; 6] = [
+    ".......#........##...#............",
+    "......##............##............",
+    ".....####.##.##.##.####..###..##.#",
+    "......##..##.##.##..##..##.##.####",
+    "......##..##.##.##..##..##.##.##..",
+    ".......##..####.##...##..###..##..",
+];
+/// The mark's 6 pixel rows for the big logo's 19 from the top of the "t" to the base.
+const MARK_SCALE: f32 = 6.0 / 19.0;
+/// The mark's stripes end under its "t", which hides their right edges.
+const MARK_STRIPE_END: i32 = 7;
+/// Columns of the mark's "t" and the stripes left of it.
+const MARK_T: u16 = 9;
+/// The mark sways half as far as the big logo, rounded to whole pixels: each
+/// stripe steps one pixel out and back, so it stays crisp and calm.
+const MARK_SWAY: f32 = 0.5;
+/// How finely the header looks ahead for the mark's next step.
+const STEP: Duration = Duration::from_millis(10);
+/// Rows of the header's mark.
+pub const MARK_ROWS: u16 = 3;
+
+/// The header's logo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mark {
+    /// The stripes coming out of the wordmark "tuitor".
+    Word,
+    /// Only the stripes and the "t" they come out of, for a narrow header.
+    T,
+}
+
+impl Mark {
+    /// Columns of the mark, without the column left of it that a stripe sways into.
+    pub fn width(self) -> u16 {
+        match self {
+            Mark::Word => MARK[0].len() as u16,
+            Mark::T => MARK_T,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Size {
@@ -173,42 +203,46 @@ pub fn draw(p: &mut Painter<'_>, x: u16, y: u16, size: Size, t: Option<Duration>
     }
 }
 
-/// Heights in eighths of the top bar's waves at time `t`. They follow the big
-/// logo's sway, so the two move in step; `None` is the resting frame, the logo's
-/// own steps.
-fn waves(t: Option<Duration>) -> [usize; STRIPES.len()] {
-    std::array::from_fn(|stripe| {
-        let left = STRIPES[stripe].left + sway(stripe, t);
-        (WAVE_TOP - WAVE_SLOPE * left).round().clamp(1.0, 8.0) as usize
-    })
+/// Draws the header's mark with its first column at `x`; a stripe may sway one column left of it.
+pub fn mark(p: &mut Painter<'_>, x: u16, y: u16, mark: Mark, t: Option<Duration>) {
+    let shifts = shifts(t);
+    for row in 0..MARK_ROWS {
+        let upper = 2 * i32::from(row);
+        for col in -1..i32::from(mark.width()) {
+            let (Some(cx), Some(cy)) = (x.checked_add_signed(col as i16), y.checked_add(row)) else { continue };
+            put(p, cx, cy, mark_pixel(mark, col, upper, &shifts), mark_pixel(mark, col, upper + 1, &shifts));
+        }
+    }
 }
 
-/// How long after `t` the waves next change, but at least a frame. They move in
+/// How far each of the mark's stripes is from rest at time `t`, in whole pixels:
+/// the big logo's sway, scaled down and rounded. `None` is the still mark.
+fn shifts(t: Option<Duration>) -> [i32; STRIPES.len()] {
+    std::array::from_fn(|stripe| (sway(stripe, t) * MARK_SWAY).round() as i32)
+}
+
+/// How long after `t` the mark next changes, but at least a frame. It moves in
 /// steps, so the loop redraws only for one.
-pub fn next_wave(t: Duration) -> Duration {
-    let now = waves(Some(t));
+pub fn next_step(t: Duration) -> Duration {
+    let now = shifts(Some(t));
     let period = Duration::from_millis(PERIOD_MS as u64);
     let mut after = FRAME;
-    while after < period && waves(Some(t + after)) == now {
-        after += WAVE_STEP;
+    while after < period && shifts(Some(t + after)) == now {
+        after += STEP;
     }
     after
 }
 
-/// The top bar's logo: the waves, then the name if `room` holds all of it.
-/// Returns the end x.
-pub fn bar(p: &mut Painter<'_>, x: u16, y: u16, room: u16, t: Option<Duration>) -> u16 {
-    let mut end = x;
-    for (height, stripe) in waves(t).into_iter().zip(&STRIPES) {
-        if let Some(cell) = p.buf.cell_mut((end, y)) {
-            cell.set_symbol(EIGHTHS[height]).set_fg(stripe.color);
-        }
-        end += 1;
+/// Colour of the mark's pixel (x, y) with its stripes shifted by `shifts`.
+fn mark_pixel(mark: Mark, x: i32, y: i32, shifts: &[i32; STRIPES.len()]) -> Option<Color> {
+    let row = usize::try_from(y).ok()?;
+    let pixels = MARK.get(row)?.as_bytes();
+    if usize::try_from(x).is_ok_and(|col| x < i32::from(mark.width()) && pixels[col] == b'#') {
+        return Some(WHITE);
     }
-    if room >= BAR_WIDTH {
-        end = p.text(end + 1, y, NAME, bold(WHITE), u16::MAX);
-    }
-    end
+    let stripe = &STRIPES[row];
+    let left = (stripe.left * MARK_SCALE).round() as i32 + shifts[row];
+    (left..MARK_STRIPE_END).contains(&x).then_some(stripe.color)
 }
 
 /// Colour of pixel (x, y), or `None` where the background shows.
@@ -331,56 +365,125 @@ mod tests {
         assert_eq!(render(Size::Full, None), render(Size::Full, None));
     }
 
-    #[test]
-    fn top_bar_waves_rest_on_the_logo_steps_and_ripple_calmly() {
-        // At rest the stripes stand on end: the yellow one, reaching furthest left, is the tallest.
-        let rest = waves(None);
-        assert_eq!(rest, [4, 6, 7, 6, 4, 3]);
-        let period = PERIOD_MS as u64;
-        let mut moving = 0;
-        for ms in (0..period).step_by(40) {
-            let frame = waves(at(ms));
-            assert_eq!(frame, waves(at(ms + 1000 * period)));
-            for (now, still) in frame.into_iter().zip(rest) {
-                assert!((1..=8).contains(&now) && now.abs_diff(still) <= 1, "{frame:?} at {ms} ms");
-            }
-            moving += usize::from(frame != rest);
-        }
-        assert!(moving > 10, "the waves barely move: {moving} frames");
+    fn render_mark(mark: Mark, t: Option<Duration>) -> Buffer {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 1 + MARK[0].len() as u16 + 1, MARK_ROWS));
+        super::mark(&mut Painter { buf: &mut buf }, 1, 0, mark, t);
+        buf
+    }
+
+    /// The mark's stripe pixels, left to right, in row `y`.
+    fn stripe_run(mark: Mark, y: i32, shifts: &[i32; STRIPES.len()]) -> Vec<i32> {
+        (-2..i32::from(mark.width()) + 2)
+            .filter(|&x| mark_pixel(mark, x, y, shifts).is_some_and(|c| c != WHITE))
+            .collect()
     }
 
     #[test]
-    fn waves_are_redrawn_only_when_they_change() {
+    fn mark_is_the_logo_at_a_third_of_its_height() {
+        assert!(MARK.iter().all(|row| row.len() == MARK[0].len() && row.bytes().all(|b| b"#.".contains(&b))));
+        assert_eq!(MARK.len(), STRIPES.len());
+        assert_eq!((Mark::Word.width(), Mark::T.width(), MARK_ROWS), (34, 9, 3));
+        // The stripes keep the big logo's stepped left edge, scaled down.
+        let lefts: Vec<i32> = (0..6).map(|y| stripe_run(Mark::Word, y, &[0; 6])[0]).collect();
+        assert_eq!(lefts, [2, 1, 0, 1, 2, 3]);
+        // The "t" starts where the big one's crossbar does, scaled down, and stands
+        // the full height; the narrow mark ends with it.
+        let first_white = |y: usize| MARK[y].find('#');
+        assert_eq!(first_white(2), Some((15.0 * MARK_SCALE).round() as usize));
+        assert!((0..6).all(|y| first_white(y).is_some_and(|x| x < usize::from(MARK_T))));
+        assert!(MARK.iter().all(|row| row[usize::from(MARK_T)..].starts_with('.')));
+    }
+
+    #[test]
+    fn mark_stripes_come_out_of_the_t_however_they_sway() {
+        for shift in -1..=1 {
+            for mark in [Mark::Word, Mark::T] {
+                for y in 0..6 {
+                    let run = stripe_run(mark, y, &[shift; 6]);
+                    // One unbroken stripe that runs up to the "t", which covers its end.
+                    let t = MARK[y as usize].find('#').map_or(-1, |x| x as i32);
+                    assert!(!run.is_empty() && run.windows(2).all(|w| w[1] == w[0] + 1), "row {y}");
+                    assert_eq!(run.last(), Some(&(t - 1)), "row {y}, shift {shift}");
+                    assert!((t..MARK_STRIPE_END).all(|x| mark_pixel(mark, x, y, &[shift; 6]) == Some(WHITE)));
+                    assert!(run[0] >= -1, "the sway stays inside the column left of the mark");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mark_sways_with_the_logo_one_pixel_each_way() {
+        assert_eq!(shifts(None), [0; 6]);
+        let period = PERIOD_MS as u64;
+        let mut seen = [[false; 3]; 6];
+        for ms in (0..period).step_by(10) {
+            let now = shifts(at(ms));
+            assert_eq!(now, shifts(at(ms + 1000 * period)));
+            for (s, shift) in now.into_iter().enumerate() {
+                assert!((-1..=1).contains(&shift), "{now:?} at {ms} ms");
+                // In step with the big logo: out when its edge is out, in when it is in.
+                assert!(shift == 0 || shift.signum() as f32 == sway(s, at(ms)).signum());
+                seen[s][(shift + 1) as usize] = true;
+            }
+        }
+        assert_eq!(seen, [[true; 3]; 6]);
+        // The steps run down the stack.
+        let first_out = |s: usize| (1..period).find(|&ms| shifts(at(ms))[s] == 1 && shifts(at(ms - 1))[s] == 0);
+        assert!((0..5).all(|s| first_out(s) < first_out(s + 1)), "{:?}", (0..6).map(first_out).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn mark_is_redrawn_only_when_it_steps() {
         let period = Duration::from_millis(PERIOD_MS as u64);
         for ms in (0..PERIOD_MS as u64).step_by(30) {
             let t = Duration::from_millis(ms);
-            let after = next_wave(t);
+            let after = next_step(t);
             assert!((FRAME..period).contains(&after), "{after:?} at {ms} ms");
-            assert_ne!(waves(Some(t + after)), waves(Some(t)), "at {ms} ms");
+            assert_ne!(shifts(Some(t + after)), shifts(Some(t)), "at {ms} ms");
             if after > FRAME {
-                assert_eq!(waves(Some(t + after - WAVE_STEP)), waves(Some(t)), "late at {ms} ms");
+                assert_eq!(shifts(Some(t + after - STEP)), shifts(Some(t)), "late at {ms} ms");
             }
+            assert_ne!(render_mark(Mark::Word, Some(t + after)), render_mark(Mark::Word, Some(t)));
         }
-        // Over a period that is under two thirds of the frames the swaying logo needs.
+        // Six stripes, each out and back both ways: under the frames the big logo draws.
         let (mut t, mut redraws) = (Duration::ZERO, 0);
         while t < period {
-            t += next_wave(t);
+            t += next_step(t);
             redraws += 1;
         }
-        assert!(redraws * 3 < period.as_millis() / FRAME.as_millis() * 2, "{redraws} redraws");
+        assert!(redraws <= 24 && redraws < period.as_millis() / FRAME.as_millis(), "{redraws} redraws");
     }
 
     #[test]
-    fn top_bar_logo_keeps_the_stripe_colours_and_drops_its_name_when_crowded() {
-        let draw_bar = |room| {
-            let mut buf = Buffer::empty(Rect::new(0, 0, 20, 1));
-            let end = bar(&mut Painter { buf: &mut buf }, 1, 0, room, None);
-            let row: String = (0..20).map(|x| buf[(x, 0)].symbol()).collect();
-            let colors: Vec<Color> = (1..7).map(|x| buf[(x, 0)].fg).collect();
-            (end, row.trim_end().to_owned(), colors)
-        };
-        let stripes: Vec<Color> = STRIPES.iter().map(|s| s.color).collect();
-        assert_eq!(draw_bar(BAR_WIDTH), (1 + BAR_WIDTH, " ▄▆▇▆▄▃ tuitor".to_owned(), stripes.clone()));
-        assert_eq!(draw_bar(BAR_WIDTH - 1), (7, " ▄▆▇▆▄▃".to_owned(), stripes));
+    fn mark_draws_three_rows_of_half_blocks_and_rests_in_the_logo_shape() {
+        let still = render_mark(Mark::Word, None);
+        let yellow = STRIPES[2].color;
+        // Yellow reaches furthest left, over nothing: its row's upper half.
+        assert_eq!((still[(1, 1)].symbol(), still[(1, 1)].fg), ("▀", yellow));
+        // Pink over red at the top, where the stripes meet the point of the "t".
+        let top = &still[(1 + 7, 0)];
+        assert_eq!((top.symbol(), top.fg, top.bg), ("▀", WHITE, WHITE));
+        let edge = &still[(1 + 6, 0)];
+        assert_eq!((edge.symbol(), edge.fg, edge.bg), ("▀", STRIPES[0].color, WHITE));
+        // Nothing sways at rest, and the narrow mark is the wide one cut after its "t".
+        assert_eq!(still[(0, 1)].symbol(), " ");
+        let narrow = render_mark(Mark::T, None);
+        for y in 0..MARK_ROWS {
+            for x in 0..still.area.width {
+                if x <= MARK_T {
+                    assert_eq!(narrow[(x, y)], still[(x, y)], "({x}, {y})");
+                } else {
+                    assert_eq!(narrow[(x, y)].symbol(), " ", "({x}, {y})");
+                }
+            }
+        }
+        // Swaying moves only the stripes' left edges.
+        let moved = render_mark(Mark::Word, at(700));
+        for y in 0..MARK_ROWS {
+            for x in 1 + MARK_STRIPE_END as u16..still.area.width {
+                assert_eq!(moved[(x, y)], still[(x, y)]);
+            }
+        }
+        assert_ne!(moved, still);
     }
 }

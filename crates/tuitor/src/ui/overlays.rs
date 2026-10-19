@@ -35,7 +35,7 @@ pub fn palette(p: &mut Painter<'_>, app: &App, palette: &Palette, screen: Rect) 
     p.dim(body);
     let width = screen.width.min(132);
     let list_rows = palette.items.len().clamp(1, 20) as u16;
-    let height = (list_rows + 3).min(screen.height - 4);
+    let height = (list_rows + 3).min(screen.height - 2 - super::HEADER);
     let rect = Rect::new(0, screen.height - 2 - height, width, height);
     p.fill(rect, BG);
     let sub = vec![seg("every key runs one of these", fg(DIM))];
@@ -102,8 +102,8 @@ pub fn palette(p: &mut Painter<'_>, app: &App, palette: &Palette, screen: Rect) 
 pub fn finder(p: &mut Painter<'_>, app: &App, finder: &Finder, screen: Rect) {
     p.dim(screen);
     let width = screen.width.saturating_sub(8).min(150);
-    let height = screen.height.saturating_sub(6).min(30);
-    let rect = Rect::new((screen.width - width) / 2, 3, width, height);
+    let height = screen.height.saturating_sub(super::HEADER + 4).min(30);
+    let rect = Rect::new((screen.width - width) / 2, super::HEADER + 1, width, height);
     p.fill(rect, BG);
     p.panel(
         rect,
@@ -216,8 +216,8 @@ pub fn picker(p: &mut Painter<'_>, app: &App, picker: &Picker, screen: Rect) {
     p.dim(screen);
     let width = screen.width.saturating_sub(8).min(110);
     let rows = picker.rows.len().max(1) as u16;
-    let height = (rows + 6).clamp(10, screen.height.saturating_sub(6).min(26));
-    let rect = Rect::new((screen.width - width) / 2, 3, width, height);
+    let height = (rows + 6).clamp(10, screen.height.saturating_sub(super::HEADER + 4).min(26));
+    let rect = Rect::new((screen.width - width) / 2, super::HEADER + 1, width, height);
     p.fill(rect, BG);
     let what =
         if picker.typing_path() { "directories" } else { "opened recently · or type a path: ~/…  /…  ../…" };

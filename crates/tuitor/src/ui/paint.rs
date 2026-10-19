@@ -166,7 +166,11 @@ impl Painter<'_> {
             for x in area.left()..area.right() {
                 if let Some(cell) = self.buf.cell_mut((x, y)) {
                     let fg = scale(cell.fg, 0.32);
-                    let bg = scale(cell.bg, 0.6);
+                    // Under a `▀` that draws two logo pixels the background is the lower
+                    // pixel: it dims like the upper one, or the logo turns striped. The
+                    // theme's backgrounds are all dark.
+                    let pixel = cell.symbol() == "▀" && bright(cell.bg);
+                    let bg = scale(cell.bg, if pixel { 0.32 } else { 0.6 });
                     cell.set_style(Style::reset().fg(fg).bg(bg));
                 }
             }
@@ -231,6 +235,10 @@ pub fn inner(area: Rect) -> Rect {
     Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), area.height.saturating_sub(2))
 }
 
+fn bright(color: Color) -> bool {
+    matches!(color, Color::Rgb(r, g, b) if r.max(g).max(b) >= 0x80)
+}
+
 fn scale(color: Color, factor: f32) -> Color {
     match color {
         Color::Rgb(r, g, b) => {
@@ -265,6 +273,19 @@ mod tests {
         assert_eq!(wrap("js-debug starts Google Chrome", 16), ["js-debug starts", "Google Chrome"]);
         assert_eq!(wrap("  runtimeExecutable  ", 8), ["runtimeExecutable"]);
         assert!(wrap("", 8).is_empty());
+    }
+
+    #[test]
+    fn dimming_keeps_the_two_pixels_of_a_half_block_alike() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 3, 1));
+        let white = Color::Rgb(250, 250, 250);
+        buf[(0, 0)].set_symbol("▀").set_fg(white).set_bg(white);
+        buf[(1, 0)].set_symbol("▀").set_fg(white).set_bg(theme::BAR);
+        buf[(2, 0)].set_symbol("x").set_fg(white).set_bg(white);
+        Painter { buf: &mut buf }.dim(Rect::new(0, 0, 3, 1));
+        assert_eq!(buf[(0, 0)].fg, buf[(0, 0)].bg);
+        assert_eq!(buf[(1, 0)].bg, scale(theme::BAR, 0.6));
+        assert_eq!(buf[(2, 0)].bg, scale(white, 0.6));
     }
 
     #[test]

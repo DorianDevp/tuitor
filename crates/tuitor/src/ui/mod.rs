@@ -30,11 +30,14 @@ use crate::app::{App, Pane};
 use crate::command::View;
 use crate::overlay::Overlay;
 use crate::tab::Tab;
+use logo::Mark;
 use paint::{Painter, Seg, seg};
 use theme::*;
 
 pub const MIN_WIDTH: u16 = 100;
 pub const MIN_HEIGHT: u16 = 28;
+/// Rows above the panes: the logo beside the views, the session and the context.
+pub const HEADER: u16 = logo::MARK_ROWS;
 
 pub fn draw(frame: &mut Frame, app: &App) {
     app.ui.animating.set(None);
@@ -47,9 +50,8 @@ pub fn draw(frame: &mut Frame, app: &App) {
         return;
     }
 
-    topbar(&mut p, app, Rect::new(0, 0, area.width, 1));
-    context(&mut p, app, Rect::new(0, 1, area.width, 1));
-    let body = Rect::new(0, 2, area.width, area.height - 4);
+    header(&mut p, app, Rect::new(0, 0, area.width, HEADER));
+    let body = Rect::new(0, HEADER, area.width, area.height - HEADER - 2);
     for (pane, rect) in layout(app, body) {
         draw_pane(&mut p, app, pane, rect);
     }
@@ -143,27 +145,55 @@ fn history_value_area(body: Rect) -> Rect {
     Rect::new(body.x, body.y + table_h, body.width / 2, body.height - table_h)
 }
 
-/// The clock and the bar before it: "│ 10:42:07 ".
-const CLOCK: u16 = 11;
+/// Where the logo starts; a swaying stripe reaches the column left of it.
+const LOGO_X: u16 = 1;
+/// Columns between the logo and the rows beside it.
+const LOGO_GAP: u16 = 2;
+/// Columns the session keeps beside the tabs before they take the rest of the row.
+const SESSION_ROOM: u16 = 24;
 /// Shortest a project name gets before tabs are left out.
 const MIN_NAME: usize = 3;
 
-/// Logo and views on the left; on the right the project tabs, each with the state of
-/// its active session, and the clock.
-fn topbar(p: &mut Painter<'_>, app: &App, area: Rect) {
+/// The logo on the left, three rows tall. Beside it the views and the clock; the
+/// active session and the project tabs, each with the state of its own active
+/// session; and the context line.
+fn header(p: &mut Painter<'_>, app: &App, area: Rect) {
     p.fill(area, BAR);
-    let y = area.y;
-    let views: u16 = View::ALL.iter().map(|view| view.name().len() as u16 + 2).sum();
-    // The margin, the waves, " │ " before the views and the gap after them.
-    let room = area.width.saturating_sub(1 + logo::WAVES + 3 + views + 2);
     let tabs = tab_labels(app);
     let sizes: Vec<(usize, bool)> = tabs.iter().map(|t| (t.name.width(), t.glyph.is_some())).collect();
-    let fit = fit_tabs(&sizes, app.tabs.active_index(), room);
-    // The logo gives way first: it drops its name before a tab name is shortened.
-    let logo_room = logo::WAVES + room.saturating_sub(tabs_width(&sizes, usize::MAX) + CLOCK);
+    let session = session(app);
+    let reserve = paint::width(&session).min(SESSION_ROOM);
+    let mark = header_mark(area.width, tabs_width(&sizes, usize::MAX), reserve);
+    logo::mark(p, LOGO_X, area.y, mark, logo_clock(app));
 
-    let mut x = logo::bar(p, 1, y, logo_room, bar_clock(app));
-    x = p.text(x + 1, y, "│", fg(GHOST), area.right()) + 1;
+    let left = rows_x(mark);
+    let row = |y| Rect::new(left, area.y + y, area.right().saturating_sub(left), 1);
+    views(p, app, row(0));
+    let fit = fit_tabs(&sizes, app.tabs.active_index(), tabs_room(area.width, mark, reserve));
+    let tabs_x = project_tabs(p, app, &tabs, &sizes, &fit, row(1));
+    p.segs(left + 1, area.y + 1, &session, tabs_x.saturating_sub(2));
+    context(p, app, row(2));
+}
+
+/// Where the rows beside the logo start: a padding column before their text.
+fn rows_x(mark: Mark) -> u16 {
+    LOGO_X + mark.width() + LOGO_GAP
+}
+
+/// Columns for the tabs beside `mark` on a row `width` wide, after the padding,
+/// `session` columns of the session, a gap and the margin.
+fn tabs_room(width: u16, mark: Mark, session: u16) -> u16 {
+    width.saturating_sub(rows_x(mark) + 1 + session + 2 + 1)
+}
+
+/// The logo gives way first: it keeps only its "t" before a tab name is shortened.
+fn header_mark(width: u16, tabs: u16, session: u16) -> Mark {
+    if tabs <= tabs_room(width, Mark::Word, session) { Mark::Word } else { Mark::T }
+}
+
+/// The views on the left of the row, the clock on its right.
+fn views(p: &mut Painter<'_>, app: &App, area: Rect) {
+    let (mut x, y) = (area.x, area.y);
     for view in View::ALL {
         let label = format!(" {} ", view.name().to_uppercase());
         if view == app.tab().ui.view {
@@ -174,14 +204,27 @@ fn topbar(p: &mut Painter<'_>, app: &App, area: Rect) {
             x = p.text(x, y, &label, fg(FAINT), area.right());
         }
     }
+    let clock = Local::now().format("%H:%M:%S ").to_string();
+    p.segs_right(area.right().saturating_sub(1), y, &[seg(clock, fg(DIM))], x + 2);
+}
 
+/// The project tabs, right-aligned in `area` with a column to spare. Returns where they start.
+fn project_tabs(
+    p: &mut Painter<'_>,
+    app: &App,
+    tabs: &[TabLabel],
+    sizes: &[(usize, bool)],
+    fit: &TabFit,
+    area: Rect,
+) -> u16 {
+    let y = area.y;
     let hidden = tabs.len() - fit.shown.len();
     let more = if hidden > 0 { format!(" +{hidden} ") } else { String::new() };
-    let width =
-        tabs_width(&sizes[fit.shown.clone()], fit.name) + more.width() as u16 + if fit.clock { CLOCK } else { 1 };
-    let mut x = area.right().saturating_sub(width).max(x + 2);
+    let width = tabs_width(&sizes[fit.shown.clone()], fit.name) + more.width() as u16;
+    let start = area.right().saturating_sub(1 + width).max(area.x);
+    let mut x = start;
     for (index, tab) in tabs.iter().enumerate().take(fit.shown.end).skip(fit.shown.start) {
-        let start = x;
+        let first = x;
         let active = index == app.tabs.active_index();
         let name = format!(" {}", paint::truncate_middle(&tab.name, fit.name));
         x = p.text(x, y, &name, if active { bold(WHITE) } else { fg(FAINT) }, area.right());
@@ -190,14 +233,45 @@ fn topbar(p: &mut Painter<'_>, app: &App, area: Rect) {
         }
         x = p.text(x, y, " ", fg(FAINT), area.right());
         if active {
-            p.band(start, y, x - start, SEL2);
+            p.band(first, y, x - first, SEL2);
         }
     }
-    x = p.text(x, y, &more, fg(FAINT), area.right());
-    if fit.clock {
-        x = p.text(x, y, "│ ", fg(GHOST), area.right());
-        p.text(x, y, &Local::now().format("%H:%M:%S ").to_string(), fg(DIM), area.right());
+    p.text(x, y, &more, fg(FAINT), area.right());
+    start
+}
+
+/// The tab's active session and its state, and how many more are alive.
+fn session(app: &App) -> Vec<Seg<'static>> {
+    let tab = app.tab();
+    let Some(session) = tab.active() else {
+        return vec![seg(if tab.project.is_some() { "no session" } else { "no project" }, fg(DIM))];
+    };
+    let (glyph, color) = state_glyph(session.state, true);
+    let state = match session.state {
+        SessionState::Stopped => "stopped",
+        SessionState::Running => "running",
+        SessionState::Starting => "starting",
+        SessionState::Exited => "exited",
+    };
+    // A child session is named after what it runs (`orders.js [4242]`, a page's title), its
+    // parent after the configuration.
+    let launch = tab.engine.session(tab.engine.root(session.id)).unwrap_or(session);
+    let mut segs =
+        vec![seg(session.tag.clone(), fg(tag(&session.tag))), seg(format!(" {}", launch.config.name), fg(DIM))];
+    if launch.id != session.id {
+        segs.push(seg(format!(" › {}", session.config.name), fg(FAINT)));
     }
+    segs.push(seg(format!("  {glyph}"), bold(color)));
+    segs.push(seg(format!(" {state}"), fg(DIM)));
+    let live = tab.live_sessions();
+    if live > 1 {
+        segs.push(seg("  ·  ", fg(GHOST)));
+        segs.push(seg(format!("{live} live sessions"), fg(FAINT)));
+        if let Some(key) = app.keymap.key_for(tab.focus().name(), "session next") {
+            segs.push(seg(format!("  {key} next"), fg(GHOST)));
+        }
+    }
+    segs
 }
 
 struct TabLabel {
@@ -206,8 +280,7 @@ struct TabLabel {
 }
 
 /// Each tab's project name, with its parent where two projects share a name, and the
-/// state of its active session. Amber marks where a program is stopped: bright in the
-/// tab on screen, dim in one that waits behind it.
+/// state of its active session.
 fn tab_labels(app: &App) -> Vec<TabLabel> {
     let names: Vec<String> = app.tabs.iter().map(|(_, tab)| tab.name()).collect();
     app.tabs
@@ -219,16 +292,21 @@ fn tab_labels(app: &App) -> Vec<TabLabel> {
                 (Some(project), true) => parent_and_name(&project.dir),
                 _ => name.clone(),
             };
-            let active = id == app.tabs.active_id();
-            let glyph = tab.active().map(|session| match session.state {
-                SessionState::Stopped => ("■", if active { AMBER } else { AMBER_DIM }),
-                SessionState::Running => ("▶", FAINT),
-                SessionState::Starting => ("⧗", FAINT),
-                SessionState::Exited => ("✕", GHOST),
-            });
+            let glyph = tab.active().map(|session| state_glyph(session.state, id == app.tabs.active_id()));
             TabLabel { name, glyph }
         })
         .collect()
+}
+
+/// A session's state as a glyph. Amber marks where a program is stopped: bright in
+/// the tab on screen, dim in one that waits behind it.
+fn state_glyph(state: SessionState, shown: bool) -> (&'static str, Color) {
+    match state {
+        SessionState::Stopped => ("■", if shown { AMBER } else { AMBER_DIM }),
+        SessionState::Running => ("▶", FAINT),
+        SessionState::Starting => ("⧗", FAINT),
+        SessionState::Exited => ("✕", GHOST),
+    }
 }
 
 fn parent_and_name(dir: &std::path::Path) -> String {
@@ -237,29 +315,25 @@ fn parent_and_name(dir: &std::path::Path) -> String {
     parts.join("/")
 }
 
-/// How the tabs fit in `room` columns: names shrink first, then the clock goes, then
-/// tabs far from the active one are left out (and counted).
+/// How the tabs fit in `room` columns: names shrink first, then tabs far from the
+/// active one are left out (and counted).
 #[derive(Debug, PartialEq, Eq)]
 struct TabFit {
     /// Longest a name may be.
     name: usize,
-    clock: bool,
     shown: Range<usize>,
 }
 
 /// `(name width, has a glyph)` per tab.
 fn fit_tabs(tabs: &[(usize, bool)], active: usize, room: u16) -> TabFit {
     let longest = tabs.iter().map(|(name, _)| *name).max().unwrap_or(0);
-    for clock in [true, false] {
-        let room = room.saturating_sub(if clock { CLOCK } else { 1 });
-        for name in (MIN_NAME.min(longest)..=longest).rev() {
-            if tabs_width(tabs, name) <= room {
-                return TabFit { name, clock, shown: 0..tabs.len() };
-            }
+    for name in (MIN_NAME.min(longest)..=longest).rev() {
+        if tabs_width(tabs, name) <= room {
+            return TabFit { name, shown: 0..tabs.len() };
         }
     }
-    // Room for " +N " after the tabs and the margin.
-    let room = room.saturating_sub(1 + 3 + tabs.len().to_string().len() as u16);
+    // Room for " +N " after the tabs.
+    let room = room.saturating_sub(3 + tabs.len().to_string().len() as u16);
     let (mut start, mut end) = (active, active + 1);
     loop {
         let grow_right = end < tabs.len() && (start == 0 || end - active <= active - start);
@@ -275,7 +349,7 @@ fn fit_tabs(tabs: &[(usize, bool)], active: usize, room: u16) -> TabFit {
         }
         (start, end) = (s, e);
     }
-    TabFit { name: MIN_NAME, clock: false, shown: start..end }
+    TabFit { name: MIN_NAME, shown: start..end }
 }
 
 /// " name ■ " per tab, names cut to `name` columns.
@@ -283,62 +357,65 @@ fn tabs_width(tabs: &[(usize, bool)], name: usize) -> u16 {
     tabs.iter().map(|(width, glyph)| (width.min(&name) + 2 + if *glyph { 2 } else { 0 }) as u16).sum()
 }
 
-/// Time for the top bar's waves, or `None` to rest them. They move while nothing
-/// waits to be read: with no session, or while the active one starts, runs or has
-/// ended, so they also quietly show a running program. They rest while it is
-/// stopped or something is open over them.
-fn bar_clock(app: &App) -> Option<Duration> {
+/// Time for the header's logo, or `None` to rest it. It sways while nothing waits
+/// to be read: with no session, or while the active one starts, runs or has ended,
+/// so it also quietly shows a running program. It rests while that is stopped or
+/// something is open over it.
+fn logo_clock(app: &App) -> Option<Duration> {
     let stopped = app.tab().active().is_some_and(|s| s.state == SessionState::Stopped);
     let clock = app.ui.clock.filter(|_| !stopped && app.ui.overlay.is_none());
     if let Some(t) = clock {
-        app.ui.animate(logo::next_wave(t));
+        app.ui.animate(logo::next_step(t));
     }
     clock
 }
 
+/// What the session is at: where it stopped, the stop on view in history, the
+/// file being browsed. `area` starts with a padding column.
 fn context(p: &mut Painter<'_>, app: &App, area: Rect) {
     let tab = app.tab();
-    let y = area.y;
+    let (x, y) = (area.x + 1, area.y);
     let sep = || seg("  ·  ", fg(GHOST));
     if tab.in_history()
         && let (Some(session), Some(snapshot)) = (tab.active(), tab.viewed())
     {
         p.fill(area, AMBER);
         let ago = (Local::now() - snapshot.time).num_milliseconds() as f64 / 1000.0;
-        let segs = [
+        let mut segs = vec![
             seg(" ◂ HISTORY ", bold(theme::BG)),
             seg(format!("  stop #{} of {}", snapshot.number, session.history.len()), fg(theme::BG)),
             seg(format!("   ·   {}  (−{ago:.1}s)", snapshot.time.format("%H:%M:%S%.3f")), fg(theme::BG)),
             seg("   ·   recorded values, nothing is re-read", fg(theme::BG)),
             seg("   ·   ] newer   } live ▸", bold(theme::BG)),
         ];
-        p.segs(1, y, &segs, area.right());
+        // Where it is narrow the note goes first, then the time; the keys stay.
+        for part in [3, 2] {
+            if paint::width(&segs) > area.width {
+                segs.remove(part);
+            }
+        }
+        p.segs(area.x, y, &segs, area.right());
         return;
     }
 
+    let right = area.right().saturating_sub(1);
     let Some(session) = tab.active() else {
-        p.segs(1, y, &idle(tab), area.right());
+        p.segs(x, y, &idle(tab), right);
         return;
     };
 
-    // A child session is named after what it runs (`orders.js [4242]`, a page's title), its
-    // parent after the configuration.
-    let launch = tab.engine.session(tab.engine.root(session.id)).unwrap_or(session);
-    let mut segs =
-        vec![seg(session.tag.clone(), fg(tag(&session.tag))), seg(format!(" {}", launch.config.name), fg(DIM))];
-    if launch.id != session.id {
-        segs.push(seg(format!(" › {}", session.config.name), fg(FAINT)));
-    }
-    segs.push(sep());
+    let mut segs = Vec::new();
     match session.state {
-        SessionState::Starting => segs.push(seg("starting adapter…", fg(DIM))),
-        SessionState::Running if session.threads.is_empty() => {
-            segs.push(seg("running · waiting for the debuggee", fg(DIM)))
+        SessionState::Starting => segs.push(seg("starting the adapter…", fg(DIM))),
+        SessionState::Running if session.threads.is_empty() => segs.push(seg("waiting for the debuggee", fg(DIM))),
+        SessionState::Running => {
+            let threads = session.threads.len();
+            segs.push(seg(format!("{threads} thread{}", if threads == 1 { "" } else { "s" }), fg(DIM)));
         }
-        SessionState::Running => segs.push(seg(format!("running · {} threads", session.threads.len()), fg(DIM))),
         SessionState::Exited => {
-            let code = session.exit_code.map(|c| format!(" with code {c}")).unwrap_or_default();
-            segs.push(seg(format!("exited{code}"), fg(DIM)));
+            if let Some(code) = session.exit_code {
+                segs.push(seg(format!("exit code {code}"), fg(DIM)));
+            }
         }
         SessionState::Stopped => {
             if let Some(snapshot) = tab.viewed() {
@@ -346,10 +423,10 @@ fn context(p: &mut Painter<'_>, app: &App, area: Rect) {
                     Some(id) => format!("breakpoint #{id}"),
                     None => snapshot.reason.clone(),
                 };
-                segs.push(seg("stopped ", fg(DIM)));
                 segs.push(seg(reason, bold(AMBER)));
                 if let Some(top) = snapshot.top() {
-                    segs.push(seg(format!(" {}", top.location()), fg(FG)));
+                    segs.push(seg(" at ", fg(DIM)));
+                    segs.push(seg(top.location(), fg(FG)));
                 }
                 segs.push(seg(format!(" · stop #{}", snapshot.number), fg(FAINT)));
                 if let Some(description) = snapshot.description.as_deref().filter(|d| *d != snapshot.reason) {
@@ -357,35 +434,27 @@ fn context(p: &mut Painter<'_>, app: &App, area: Rect) {
                     segs.push(seg(description.to_owned(), fg(DIM)));
                 }
             } else {
-                segs.push(seg("stopped · reading state…", fg(DIM)));
+                segs.push(seg("reading state…", fg(DIM)));
             }
-        }
-    }
-    let live = tab.live_sessions();
-    if live > 1 {
-        segs.push(sep());
-        segs.push(seg(format!("{live} live sessions"), fg(FAINT)));
-        if let Some(key) = app.keymap.key_for(tab.focus().name(), "session next") {
-            segs.push(seg(format!("  {key} next"), fg(GHOST)));
         }
     }
     if let Some(path) = &tab.ui.source.browse {
         let rel = path.strip_prefix(tab.engine.workspace()).unwrap_or(path);
-        segs.push(sep());
+        if !segs.is_empty() {
+            segs.push(sep());
+        }
         segs.push(seg("browsing ", fg(FAINT)));
         segs.push(seg(rel.display().to_string(), fg(FG)));
         segs.push(seg("  . follows execution", fg(GHOST)));
     }
-    p.segs(1, y, &segs, area.right());
+    p.segs(x, y, &segs, right);
 }
 
-/// The context line of a tab with no session.
+/// The context line of a tab with no session: how to get one.
 fn idle(tab: &Tab) -> Vec<Seg<'static>> {
     let sep = || seg("  ·  ", fg(GHOST));
     let Some(project) = &tab.project else {
         return vec![
-            seg("no project", fg(DIM)),
-            sep(),
             seg("O", bold(KEY)),
             seg(" opens one   ", fg(FAINT)),
             seg("/", bold(KEY)),
@@ -397,12 +466,8 @@ fn idle(tab: &Tab) -> Vec<Seg<'static>> {
         Some(config) => vec![seg("S", bold(KEY)), seg(format!(" starts {}   ", config.name()), fg(FAINT))],
         None => vec![seg("g p", bold(KEY)), seg(" adds one   ", fg(FAINT))],
     };
-    let mut segs = vec![
-        seg("no session", fg(DIM)),
-        sep(),
-        seg(format!("{configs} launch configuration{}", if configs == 1 { "" } else { "s" }), fg(FAINT)),
-        sep(),
-    ];
+    let mut segs =
+        vec![seg(format!("{configs} launch configuration{}", if configs == 1 { "" } else { "s" }), fg(FAINT)), sep()];
     segs.extend(start);
     segs.extend([
         seg("f", bold(KEY)),
@@ -511,31 +576,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tabs_keep_full_names_and_the_clock_while_they_fit() {
+    fn tabs_keep_full_names_while_they_fit() {
         let tabs = [(3, true), (3, false)];
-        // " api ■ " and " web " plus the clock.
+        // " api ■ " and " web ".
         assert_eq!(tabs_width(&tabs, usize::MAX), 12);
-        assert_eq!(fit_tabs(&tabs, 0, 12 + CLOCK), TabFit { name: 3, clock: true, shown: 0..2 });
+        assert_eq!(fit_tabs(&tabs, 0, 12), TabFit { name: 3, shown: 0..2 });
     }
 
     #[test]
-    fn names_shrink_before_the_clock_goes_and_the_clock_before_tabs() {
+    fn names_shrink_before_tabs_are_left_out() {
         let tabs = [(12, true), (9, true), (4, false)];
         let full = tabs_width(&tabs, usize::MAX);
-        let fit = fit_tabs(&tabs, 1, full + CLOCK - 5);
-        assert_eq!((fit.clock, fit.shown.clone()), (true, 0..3));
-        assert!(fit.name < 12 && tabs_width(&tabs, fit.name) + CLOCK <= full + CLOCK - 5);
+        let fit = fit_tabs(&tabs, 1, full - 5);
+        assert_eq!(fit.shown, 0..3);
+        assert!(fit.name < 12 && tabs_width(&tabs, fit.name) <= full - 5);
 
         let shortest = tabs_width(&tabs, MIN_NAME);
-        assert_eq!(fit_tabs(&tabs, 1, shortest + 1), TabFit { name: MIN_NAME, clock: false, shown: 0..3 });
+        assert_eq!(fit_tabs(&tabs, 1, shortest), TabFit { name: MIN_NAME, shown: 0..3 });
+        assert!(fit_tabs(&tabs, 1, shortest - 1).shown.len() < 3);
     }
 
     #[test]
     fn tabs_far_from_the_active_one_give_way_last() {
         let tabs = [(8, true); 9];
         let fit = fit_tabs(&tabs, 6, 40);
-        assert_eq!((fit.name, fit.clock), (MIN_NAME, false));
+        assert_eq!(fit.name, MIN_NAME);
         assert!(fit.shown.contains(&6) && fit.shown.len() < 9);
-        assert!(tabs_width(&tabs[fit.shown.clone()], MIN_NAME) + 5 <= 40);
+        // With " +N " after them.
+        assert!(tabs_width(&tabs[fit.shown.clone()], MIN_NAME) + 4 <= 40);
+    }
+
+    #[test]
+    fn header_logo_keeps_its_t_before_the_tabs_shrink() {
+        // Two tabs and a session at the narrowest screen: the whole wordmark fits.
+        assert_eq!(header_mark(MIN_WIDTH, 20, SESSION_ROOM), Mark::Word);
+        // More tabs than fit beside it: the logo shrinks to its "t", and they fit beside that.
+        let tabs = tabs_room(MIN_WIDTH, Mark::Word, SESSION_ROOM) + 1;
+        assert_eq!(header_mark(MIN_WIDTH, tabs, SESSION_ROOM), Mark::T);
+        assert!(tabs <= tabs_room(MIN_WIDTH, Mark::T, SESSION_ROOM));
+        assert_eq!(header_mark(160, tabs, SESSION_ROOM), Mark::Word);
+        // The views and the clock always fit beside the whole wordmark, with a margin.
+        let views: u16 = View::ALL.iter().map(|view| view.name().len() as u16 + 2).sum();
+        let clock = "10:42:07 ".len() as u16;
+        assert!(rows_x(Mark::Word) + views + 2 + clock < MIN_WIDTH);
     }
 }
