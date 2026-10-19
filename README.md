@@ -20,14 +20,19 @@ cargo install --path crates/tuitor
 ## Start
 
 ```sh
-tuitor                         # uses .vscode/launch.json (starts it if there is one config)
+tuitor                         # this directory's project (starts its configuration if it has just one)
 tuitor "Listen for Xdebug"     # a named configuration
-tuitor listen --port 9003 --map /var/www/app=./api   # PHP, no launch.json needed
+tuitor -C ~/shop/api --open ~/shop/web               # two projects, each in a tab
+tuitor listen --port 9003 --map /var/www/app=./api   # PHP, no configuration needed
 tuitor exec ./target/debug/app -- --flag              # native program through gdb
-tuitor configs                 # what tuitor sees: configurations and adapters
+tuitor configs                 # what tuitor sees: projects, configurations and adapters
 ```
 
-`-C <dir>` sets the workspace (default: current directory).
+`-C <dir>` sets the project directory (default: the current directory) and
+`--open <dir>`, repeatable, opens more projects, each in a tab of its own. With
+neither, the current directory gets a tab only if it is a project (it has a
+launch configuration or a kind tuitor knows, see below); otherwise tuitor starts
+with an empty tab, and `O` opens a project in it.
 
 [`examples/`](examples) has a small program for PHP, Rust and C, each with a
 launch.json, a `run.sh` that sets it up and starts tuitor on it, and a walk
@@ -49,12 +54,80 @@ services:
 
 Then `tuitor listen --map /var/www/app=./api` (container path = local path) and
 trigger a request with the Xdebug cookie, or `XDEBUG_TRIGGER=1` for CLI scripts.
+To keep the mapping, add it to the project's configuration in CONFIG:
+`/config map /var/www/app=./api`.
+
+## Projects and tabs
+
+A tab is one project: its directory, launch configurations, debug sessions,
+views and history. The debuggers of different tabs never mix, so an adapter that
+fails or exits takes only its own tab's sessions with it. The top bar lists the
+tabs on the right, each with the state of its active session: `■` stopped (dim
+when it waits in another tab), `▶` running, `⧗` starting, `✕` ended. Names
+shorten to fit; the active tab is the highlighted one.
+
+`O` opens a project: pick one of those opened recently, matched as you type, or
+type a directory (`~/…`, `/…`, or `../…` from the current project), which `tab`
+completes. It opens in a new tab, or in the current one if that is empty; `T`
+adds an empty tab and asks the same. `/tab open <dir>` does it from the command
+line. `<` and `>` (or `g T` and `g t`) switch tabs, `ctrl-w` closes one and stops
+its debuggers, asking first while a session is live. Sessions of one tab stay a
+`g s` / `g S` away.
+
+tuitor knows these kinds of project by the files in their directory:
+
+| kind | marker files | configuration it gets |
+|---|---|---|
+| PHP | `composer.json`, `*.php` | listen for Xdebug on port 9003 |
+| Rust | `Cargo.toml` | gdb launch of `target/debug/<package>` |
+| C | `Makefile`, `CMakeLists.txt`, `*.c` | gdb launch of an executable built in the directory |
+| JS/TS | `package.json`, `angular.json`, `tsconfig.json` | `pwa-chrome` on `http://localhost:4200` with `webRoot` |
+
+### Launch configurations
+
+A project's configurations come from two places, both listed in CONFIG with
+where they come from:
+
+- `.vscode/launch.json`, when there is one, read as VS Code reads it. tuitor
+  never changes it.
+- tuitor's own, kept outside the repository in `~/.config/tuitor/projects.toml`,
+  a table per project keyed by its absolute path, with the fields of
+  launch.json. One file for all projects is one place to read, back up or carry
+  to another machine; tuitor reads it again before every change, so what another
+  tuitor wrote for other projects stays.
+
+A project with no configuration in either gets one for its kind (table above)
+when it is opened, and opens on CONFIG to adjust what a default cannot know:
+the program, its arguments, a port, path mappings. JS/TS configurations are
+data for now: the js-debug adapter that runs them is not there yet.
+
+CONFIG sits next to BREAKPOINTS in the PROJECT view (`g p`; `g b` and `B` show
+the same view with BREAKPOINTS focused). It shows the project's path and kind,
+its configurations with an `S` by the one `S` starts, and that one's fields.
+Moving onto a configuration selects it, `enter` starts it; `enter` on a field
+opens the command line with `/config set <field> <value>` to edit. tuitor's own
+configurations change with these commands and are saved at once:
+
+```
+/config set port 9010                JSON when it reads as JSON, text otherwise
+/config set args ["--verbose"]
+/config unset stopOnEntry            (u on a field)
+/config map /var/www/app=./api       pathMappings; /var/www/app= removes it
+/config add rust                     a kind, or a type: php, gdb, lldb, pwa-chrome, pwa-node…
+/config delete                       the selected configuration (d)
+/config start                        the selected configuration (S)
+```
+
+Variables such as `${workspaceFolder}` are expanded when a configuration starts;
+its fields then go to the adapter as they are.
 
 ## Screen
 
 Views: **overview** (everything), **code** (source + full stack + breakpoints),
-**history** (every variable at every stop), **breakpoints** (full list).
-Any pane can be maximised with `z`.
+**history** (every variable at every stop), **project** (every breakpoint, and
+CONFIG). Any pane can be maximised with `z`. BREAKPOINTS lists those of the
+active session or, after `a`, all of them: of every session and every tab,
+grouped by tab.
 
 Bright colour means something: amber is where execution is, green is what
 changed in this step (`▲`, with the previous value), red is a hit breakpoint or
@@ -77,12 +150,15 @@ Every key runs a command; `/` opens the command line with the same commands and
 | `s` | step in | | `w` | watch an expression (selected variable in LOCALS) |
 | `o` | step out | | `x` | evaluate |
 | `p` / `X` / `R` | pause / stop / restart | | `y` | copy the selection (OSC 52) |
-| `[` `]` `}` | older stop / newer / live | | `.` | SOURCE follows execution again |
-| `g o` `g c` `g h` `g b` | views | | `tab` | next pane |
-| `j` `k` `h` `l`, arrows | move, collapse, expand | | `z` | zoom pane |
-| `<` `>` | previous / next session | | `q` / `esc` | back out (zoom → history → browsing) |
+| `S` | start the configuration selected in CONFIG | | `.` | SOURCE follows execution again |
+| `[` `]` `}` | older stop / newer / live | | `tab` | next pane |
+| `g o` `g c` `g h` `g p` | views (`g b`: PROJECT at BREAKPOINTS) | | `z` | zoom pane |
+| `j` `k` `h` `l`, arrows | move, collapse, expand | | `q` / `esc` | back out (zoom → history → browsing) |
+| `<` `>` | previous / next tab (`g T` `g t`) | | `O` / `T` | open a project / in a new tab |
+| `g s` `g S` | next / previous session of the tab | | `ctrl-w` | close the tab |
 
 In BREAKPOINTS: `a` session/all, `e` condition, `l` logpoint, `space` on/off, `d` delete.
+In CONFIG: `enter` start or edit, `a` add, `m` map a path, `u` unset a field, `d` delete.
 In STACK: `v` library frames. In OUTPUT: `C` clear.
 
 ### Changing keys
@@ -172,22 +248,24 @@ unzip -q "$dir/codelldb.vsix" -d "$dir" && rm "$dir/codelldb.vsix"
 
 On macOS, use `~/Library/Application Support/tuitor/adapters/…` as `dir`.
 
-Breakpoints and watches are remembered per workspace in
-`~/.local/state/tuitor/`, outside the repository. Logs:
-`~/.local/state/tuitor/tuitor.log` (`TUITOR_LOG=dap=trace` records the protocol).
+Breakpoints and watches are remembered per project in
+`~/.local/state/tuitor/`, outside the repository, and so are the projects opened
+recently. Logs: `~/.local/state/tuitor/tuitor.log` (`TUITOR_LOG=dap=trace`
+records the protocol).
 
 ## Code
 
 ```
 crates/tuitor-dap    DAP framing, message types, async client. Knows nothing about tuitor.
 crates/tuitor-core   Engine: sessions, breakpoints, snapshots, deltas. No terminal.
-crates/tuitor        The TUI: commands, keymap, views.
+crates/tuitor        The TUI: tabs, commands, keymap, views.
 ```
 
-The engine owns all state and is driven from one loop; DAP responses come back
-as messages, so there are no locks. The UI renders every frame from that state.
-Keys map to command lines, command lines parse into actions, and actions are
-applied in one place (`App::apply`).
+Each tab owns an engine, which owns all of its project's debugger state. The
+engines are driven from one loop; DAP responses come back as messages, labelled
+with their tab on the way into the loop, so there are no locks. The UI renders
+every frame from that state. Keys map to command lines, command lines parse into
+actions, and actions are applied in one place (`App::apply`).
 
 ```sh
 cargo test --workspace                       # includes a real gdb session
@@ -201,7 +279,7 @@ cargo test -p tuitor-core --test php -- --ignored
 
 ## Not there yet
 
-- FLOW (file waterfall from the first breakpoint) and LINKED (front end and back end of one request) from the mockups
+- FLOW (file waterfall from the first breakpoint) from the mockups
 - JavaScript/TypeScript through js-debug (needs child sessions, `startDebugging`)
 - Locals of a frame other than the top one; sources without a path
 - Opening the current location in Neovim
