@@ -1,7 +1,7 @@
 use ratatui::layout::Rect;
 use tuitor_core::log::OutputKind;
 
-use super::paint::{Painter, Panel, seg};
+use super::paint::{Painter, Panel, seg, truncate};
 use super::theme::*;
 use crate::tab::Tab;
 
@@ -38,6 +38,10 @@ pub fn output(p: &mut Painter<'_>, tab: &Tab, area: Rect, focus: bool) {
     }
 }
 
+/// Columns for an event's name: `initialized`, `capabilities` and shorter fit, a longer one
+/// (`progressUpdate`) is cut, and a space always keeps it apart from the detail.
+const EVENT_NAME: usize = 12;
+
 pub fn events(p: &mut Painter<'_>, tab: &Tab, area: Rect, focus: bool) {
     p.panel(
         area,
@@ -68,7 +72,8 @@ pub fn events(p: &mut Painter<'_>, tab: &Tab, area: Rect, focus: bool) {
             (_, true) => bold(FG),
             _ => fg(DIM),
         };
-        x = p.text(x, y, &format!("{:<11}", event.name), name_style, inner.right());
+        let name = truncate(&event.name, EVENT_NAME);
+        x = p.text(x, y, &format!("{name:<EVENT_NAME$} "), name_style, inner.right());
         p.text(x, y, &event.detail, fg(if newest { FG } else { DIM }), inner.right());
     }
 }
