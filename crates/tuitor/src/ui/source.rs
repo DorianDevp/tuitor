@@ -257,8 +257,9 @@ fn empty(p: &mut Painter<'_>, app: &App, inner: Rect) {
         Some(project) => project.configurations.iter().map(|c| format!("{}  ({})", c.name(), c.adapter())).collect(),
         None => app.recent_projects.iter().map(|dir| home_relative(dir)).collect(),
     };
-    let listed = configs.len().min(6);
-    // The message, a gap, the list with a line above and a gap below, then two hints.
+    // The message, a gap, the list with a line above and a gap below, then two hints,
+    // under a gap; a short pane lists fewer.
+    let listed = configs.len().min(6).min(usize::from(inner.height.saturating_sub(7)));
     let hints_height = if listed == 0 { 4 } else { 6 + listed as u16 };
     let logo = [Size::Full, Size::Small].into_iter().find(|size| {
         let (w, h) = size.cells();
