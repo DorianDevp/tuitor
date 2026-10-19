@@ -286,6 +286,15 @@ impl Client {
         }
     }
 
+    /// Kills the adapter process, if this client started one, and waits until it has exited.
+    pub async fn kill_and_wait(&self) {
+        let child = self.inner.child.lock().unwrap_or_else(PoisonError::into_inner).take();
+        if let Some(mut child) = child {
+            // An error means it had exited already.
+            let _ = child.kill().await;
+        }
+    }
+
     fn send(&self, msg: &ProtocolMessage) -> Result<(), Error> {
         let bytes = serde_json::to_vec(msg)?;
         tracing::trace!(target: "dap", "→ {}", String::from_utf8_lossy(&bytes));

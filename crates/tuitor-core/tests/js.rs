@@ -54,17 +54,15 @@ fn workspace(name: &str, adapter: &str) -> (PathBuf, PathBuf, Adapters) {
     std::fs::copy(&example, dir.join("orders.js")).expect("copy");
     let script = std::fs::canonicalize(dir.join("orders.js")).expect("script path");
 
-    // The built-in entry with the server from the environment. js-debug keeps state in a
-    // temporary directory that it never removes, so it gets this one.
+    // The built-in entry with the server from the environment.
     let builtin = Adapters::default();
     let spec = builtin.get(adapter).expect("built-in adapter");
     let launch_type = spec.launch_type.as_deref().map(|t| format!("launch_type = {t:?}\n")).unwrap_or_default();
     let file = dir.join("adapters.toml");
     let toml = format!(
         "[{adapter}]\ntransport = \"server\"\ncommand = \"node\"\nargs = [{server:?}, \"${{port}}\", \"127.0.0.1\"]\n\
-         extensions = {:?}\n{launch_type}env = {{ TMPDIR = {:?} }}\n",
+         extensions = {:?}\n{launch_type}",
         spec.extensions,
-        dir.display().to_string(),
     );
     std::fs::write(&file, toml).expect("adapters.toml");
     (dir, script, Adapters::load(Some(&file)).expect("adapters"))
@@ -86,6 +84,7 @@ async fn node_runs_in_a_child_session() {
         unreachable!()
     };
     let parent = engine.start(LaunchConfig::adhoc("orders", "pwa-node", RequestKind::Launch, args)).expect("start");
+    let tmp = engine.session(parent).and_then(|s| s.temp_dir()).map(Path::to_path_buf).expect("a TMPDIR of its own");
 
     // js-debug starts Node, then asks for a child session in which the program runs.
     pump(&mut engine, &mut rx, |e| child_stops(e, parent) >= 1).await;
@@ -94,6 +93,10 @@ async fn node_runs_in_a_child_session() {
     assert!(child.name.starts_with(&engine.session(parent).expect("parent").name), "child named {}", child.name);
     assert!(child.config.arguments.contains_key("__pendingTargetId"));
     assert!(engine.session(parent).expect("parent").history.is_empty(), "the parent itself never stops");
+    // js-debug makes its directory, which it never removes, in the one tuitor gave it.
+    let made = |name: String| name.starts_with("vscode-js-debug-");
+    let entries = std::fs::read_dir(&tmp).expect("TMPDIR").filter_map(Result::ok);
+    assert!(entries.map(|e| e.file_name().to_string_lossy().into_owned()).any(made), "{} unused", tmp.display());
 
     let first = child.latest().expect("snapshot");
     let top = first.top().expect("frame");
@@ -122,6 +125,9 @@ async fn node_runs_in_a_child_session() {
     pump(&mut engine, &mut rx, |e| e.sessions().iter().all(|s| !s.is_alive())).await;
     let printed = |text: &str| engine.output().iter().any(|l| l.kind == OutputKind::Stdout && l.text.contains(text));
     assert!(printed("revenue 564.03"), "program output missing");
+    // With the adapter gone, so is its temporary directory.
+    engine.shutdown().await;
+    assert!(!tmp.exists(), "{} is left over", tmp.display());
 
     std::fs::remove_dir_all(dir).ok();
 }

@@ -238,6 +238,13 @@ extensions = ["php"]        # breakpoints in these files go to this adapter
 `transport` is `stdio` (default), `server` (adapter listens on `${port}`) or
 `tcp` (connect to `address`).
 
+An adapter tuitor starts gets a temporary directory of its own as `TMPDIR`,
+`tuitor-<pid>-<n>` in `$XDG_RUNTIME_DIR` or else the system's temporary
+directory, and the programs it starts inherit it. tuitor removes it once the
+adapter has exited, when its session ends or tuitor quits; js-debug would
+otherwise leave a directory there at every start, with the profile of the
+browser it started. `env` in `adapters.toml` can set another `TMPDIR`.
+
 ### Installing adapters
 
 Each from where its authors publish it.
