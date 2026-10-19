@@ -103,7 +103,7 @@ tuitor knows these kinds of project by the files in their directory:
 | PHP | `composer.json`, `*.php` | listen for Xdebug on port 9003 |
 | Rust | `Cargo.toml` | gdb launch of `target/debug/<package>` |
 | C | `Makefile`, `CMakeLists.txt`, `*.c` | gdb launch of an executable built in the directory |
-| JS/TS | `package.json`, `angular.json`, `tsconfig.json` | `pwa-chrome` on `http://localhost:4200` with `webRoot` |
+| JS/TS | `package.json`, `angular.json`, `tsconfig.json` | `pwa-chrome` on `http://localhost:4200` with `webRoot`, in the browser found on `PATH` |
 
 ### Launch configurations
 
@@ -301,8 +301,12 @@ curl -fL -o "$dir/js-debug-dap.tar.gz" "https://github.com/microsoft/vscode-js-d
 tar -xzf "$dir/js-debug-dap.tar.gz" -C "$dir" && rm "$dir/js-debug-dap.tar.gz"
 ```
 
-Browser configurations also need Chrome or Chromium. js-debug looks for Google
-Chrome; for Chromium, set `runtimeExecutable` to its path (`/usr/bin/chromium`).
+Browser configurations also need Chrome or Chromium. Without
+`runtimeExecutable` js-debug looks for Google Chrome only; a configuration
+tuitor makes names the first of `google-chrome`, `chromium`,
+`chromium-browser` and `microsoft-edge` it finds on `PATH`, and CONFIG points
+out one that names none. In launch.json, or for a browser off `PATH`, set
+`runtimeExecutable` to its path (`/usr/bin/chromium`).
 
 On macOS, use `~/Library/Application Support/tuitor/adapters/…` as `dir`.
 

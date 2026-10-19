@@ -5,9 +5,9 @@
 use ratatui::layout::Rect;
 use serde_json::Value;
 use tuitor_core::config::home_relative;
-use tuitor_core::project::{Configuration, Project, Source, value_text};
+use tuitor_core::project::{Configuration, Project, Source, starts_browser, value_text};
 
-use super::paint::{Painter, Panel, Seg, seg, truncate, truncate_left};
+use super::paint::{Painter, Panel, Seg, seg, truncate, truncate_left, wrap};
 use super::theme::*;
 use crate::app::App;
 use crate::model::ConfigRow;
@@ -123,6 +123,9 @@ fn lines(app: &App, tab: &Tab, project: &Project, width: usize) -> Vec<Line> {
         left.extend(value);
         lines.push(Line { row: Some(row), left, right: Vec::new() });
     }
+    if starts_browser(config.adapter()) && !config.fields.contains_key("runtimeExecutable") {
+        lines.extend(browser_hint(config, width.saturating_sub(4)));
+    }
     lines.push(Line::text(Vec::new()));
     let kept = "tuitor's own are kept in ";
     let store = path(app.store.path(), width.saturating_sub(2 + kept.len()));
@@ -145,6 +148,22 @@ fn field_value(app: &App, config: &Configuration, key: &str) -> Vec<Seg<'static>
         segs.push(seg("  no such adapter yet", italic(FAINT)));
     }
     segs
+}
+
+/// What a browser configuration without `runtimeExecutable` starts: Google Chrome, which
+/// js-debug looks for and fails without. tuitor names the browser it finds on PATH in one it
+/// makes, so this one is from launch.json, or was made where there was none.
+fn browser_hint(config: &Configuration, width: usize) -> Vec<Line> {
+    let how = match config.source {
+        Source::Tuitor => "/config set runtimeExecutable ‹path›",
+        Source::LaunchJson(_) => "set runtimeExecutable in launch.json",
+    };
+    let what = "No runtimeExecutable, so js-debug starts Google Chrome, and fails where there is none.";
+    let fix = format!("For Chromium or another browser: {how}");
+    let lines = |text: &str, style| {
+        wrap(text, width).into_iter().map(move |line| Line::text(vec![seg(format!("  {line}"), style)]))
+    };
+    lines(what, italic(YELLOW_DIM)).chain(lines(&fix, italic(FAINT))).collect()
 }
 
 /// `remote → local`, the local path cut from the left to `room` columns.

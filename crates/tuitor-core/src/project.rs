@@ -2,6 +2,7 @@
 //! marker files, and its launch configurations. Those come from `.vscode/launch.json`,
 //! which tuitor only reads, and from tuitor's own [`Store`], which it edits.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow, bail};
@@ -98,7 +99,10 @@ pub fn template(adapter: &str, dir: &Path) -> Map<String, Value> {
                 Path::new(&program).file_name().map_or_else(|| program.clone(), |n| n.to_string_lossy().into_owned());
             json!({ "name": name, "program": format!("{workspace}/{program}"), "cwd": workspace })
         }
-        "pwa-chrome" => json!({ "name": "Launch Chrome", "url": "http://localhost:4200", "webRoot": workspace }),
+        "pwa-chrome" | "chrome" => {
+            let browser = std::env::var_os("PATH").and_then(|path| browser_in(&path));
+            browser_launch(workspace, browser)
+        }
         "pwa-node" => {
             json!({ "name": "Launch Node", "program": format!("{workspace}/{}", node_main(dir)), "cwd": workspace })
         }
@@ -107,6 +111,40 @@ pub fn template(adapter: &str, dir: &Path) -> Map<String, Value> {
     let Value::Object(mut fields) = fields else { return Map::new() };
     fields.insert("type".into(), adapter.into());
     fields.insert("request".into(), "launch".into());
+    fields
+}
+
+/// Launch types that start a browser, through js-debug.
+pub fn starts_browser(adapter: &str) -> bool {
+    matches!(adapter, "pwa-chrome" | "chrome")
+}
+
+/// Browsers js-debug can debug, by the names their packages put on PATH, in the order a
+/// new configuration takes them: Google Chrome, then Chromium as distributions name it,
+/// then Edge.
+const BROWSERS: [&str; 6] = [
+    "google-chrome",
+    "google-chrome-stable",
+    "chromium",
+    "chromium-browser",
+    "microsoft-edge",
+    "microsoft-edge-stable",
+];
+
+/// The first of [`BROWSERS`] in a directory of `path`, a value of PATH.
+fn browser_in(path: &OsStr) -> Option<PathBuf> {
+    let dirs: Vec<PathBuf> = std::env::split_paths(path).collect();
+    BROWSERS.iter().find_map(|name| dirs.iter().map(|dir| dir.join(name)).find(|file| file.is_file()))
+}
+
+/// The page `ng serve` serves, in `browser`, with sources under `workspace`. Without
+/// `runtimeExecutable` js-debug looks for Google Chrome only, so a machine with just
+/// Chromium needs it named.
+fn browser_launch(workspace: &str, browser: Option<PathBuf>) -> Value {
+    let mut fields = json!({ "name": "Launch Chrome", "url": "http://localhost:4200", "webRoot": workspace });
+    if let Some(browser) = browser {
+        fields["runtimeExecutable"] = browser.display().to_string().into();
+    }
     fields
 }
 
@@ -465,6 +503,26 @@ mod tests {
         let chrome = template(Kind::Js.adapter(), &dir);
         assert_eq!(chrome["url"], "http://localhost:4200");
         assert_eq!(chrome["webRoot"], "${workspaceFolder}");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_browser_configuration_names_the_browser_found_on_path() {
+        let dir = temp("browsers");
+        let (first, second) = (dir.join("first"), dir.join("second"));
+        std::fs::create_dir_all(&first).expect("first");
+        std::fs::create_dir_all(&second).expect("second");
+        let path = std::env::join_paths([&first, &second]).expect("PATH");
+        assert_eq!(browser_in(&path), None);
+        // Chrome before Chromium, wherever on PATH each is.
+        touch(&first, &["chromium"]);
+        assert_eq!(browser_in(&path), Some(first.join("chromium")));
+        touch(&second, &["google-chrome"]);
+        assert_eq!(browser_in(&path), Some(second.join("google-chrome")));
+
+        let chromium = browser_launch("/w", Some(PathBuf::from("/usr/bin/chromium")));
+        assert_eq!(chromium["runtimeExecutable"], "/usr/bin/chromium");
+        assert!(browser_launch("/w", None).get("runtimeExecutable").is_none(), "js-debug looks for Chrome itself");
         std::fs::remove_dir_all(dir).ok();
     }
 

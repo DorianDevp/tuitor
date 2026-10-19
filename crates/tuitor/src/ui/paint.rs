@@ -82,6 +82,22 @@ pub fn truncate_middle(text: &str, max: usize) -> std::borrow::Cow<'_, str> {
     format!("{head}{tail}").into()
 }
 
+/// `text` in lines of at most `max` columns, broken between words; a word longer than
+/// that gets a line of its own.
+pub fn wrap(text: &str, max: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for word in text.split_whitespace() {
+        match lines.last_mut() {
+            Some(line) if line.width() + 1 + word.width() <= max => {
+                line.push(' ');
+                line.push_str(word);
+            }
+            _ => lines.push(word.to_owned()),
+        }
+    }
+    lines
+}
+
 pub struct Painter<'b> {
     pub buf: &'b mut Buffer,
 }
@@ -242,6 +258,13 @@ mod tests {
         assert_eq!(truncate_middle("ventia-wsparcie-frontend", 9), "vent…tend");
         assert_eq!(truncate_middle("orders", 9), "orders");
         assert_eq!(truncate_middle("ledger-reconciliation", 5), "ledg…");
+    }
+
+    #[test]
+    fn wraps_between_words() {
+        assert_eq!(wrap("js-debug starts Google Chrome", 16), ["js-debug starts", "Google Chrome"]);
+        assert_eq!(wrap("  runtimeExecutable  ", 8), ["runtimeExecutable"]);
+        assert!(wrap("", 8).is_empty());
     }
 
     #[test]
