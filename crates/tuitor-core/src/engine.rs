@@ -193,6 +193,14 @@ impl Engine {
         self.sessions.iter().find(|s| s.id == sid)
     }
 
+    /// The session that was started from a configuration, at the top of `sid`'s parents.
+    pub fn root(&self, mut sid: SessionId) -> SessionId {
+        while let Some(parent) = self.session(sid).and_then(|s| s.parent) {
+            sid = parent;
+        }
+        sid
+    }
+
     pub fn breakpoints(&self) -> &Breakpoints {
         &self.breakpoints
     }
@@ -1109,14 +1117,6 @@ impl Engine {
 
     fn children(&self, parent: SessionId) -> impl Iterator<Item = &Session> {
         self.sessions.iter().filter(move |s| s.parent == Some(parent))
-    }
-
-    /// The session that was started from a configuration, at the top of `sid`'s parents.
-    fn root(&self, mut sid: SessionId) -> SessionId {
-        while let Some(parent) = self.session(sid).and_then(|s| s.parent) {
-            sid = parent;
-        }
-        sid
     }
 
     fn transport(&self, spec: &AdapterSpec) -> Result<Transport> {

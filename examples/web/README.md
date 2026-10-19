@@ -24,9 +24,10 @@ building tuitor from this repository, and arguments go to tuitor
 
 By hand: `tuitor orders` in this directory.
 
-js-debug runs the page in a session of its own: the top bar shows `web·js`,
-the browser, and `web·js › index.html`, the page. Stops happen in the second
-one, and breakpoints go there.
+js-debug runs the page in a session of its own, apart from the browser's:
+stops happen there, and breakpoints go there. tuitor shows the two as one
+session, `orders › index.html` on the context line: the configuration and the
+page.
 
 Put a breakpoint on line 51, `total += lineTotal(line);`: press `f`, type
 `orders.js:51`, press `ctrl-b`, then `esc` to close the finder. Click

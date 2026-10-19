@@ -89,6 +89,35 @@ impl Tab {
         self.engine.session(self.ui.session?)
     }
 
+    /// The sessions as the screen counts them: one per configuration started. The child
+    /// sessions an adapter asks for (js-debug runs each Node process or page in one) are
+    /// part of their parent's.
+    pub fn sessions(&self) -> impl Iterator<Item = &Session> {
+        self.engine.sessions().iter().filter(|s| s.parent.is_none())
+    }
+
+    /// The part of `sid`'s session to show and act on: where its program runs. Once the
+    /// adapter has started children, that is one of them, `sid` itself while it lives;
+    /// before that, the session itself.
+    pub fn shown(&self, sid: SessionId) -> SessionId {
+        let root = self.engine.root(sid);
+        let children: Vec<(SessionId, bool)> = self
+            .engine
+            .sessions()
+            .iter()
+            .filter(|s| s.id != root && self.engine.root(s.id) == root)
+            .map(|s| (s.id, s.is_alive()))
+            .collect();
+        shown_part(sid, root, &children)
+    }
+
+    /// Sessions with anything still running, a parent and its children counted once.
+    pub fn live_sessions(&self) -> usize {
+        let live: Vec<SessionId> =
+            self.engine.sessions().iter().filter(|s| s.is_alive()).map(|s| self.engine.root(s.id)).collect();
+        self.sessions().filter(|s| live.contains(&s.id)).count()
+    }
+
     /// The stop being looked at: the latest one, or one picked from history.
     pub fn viewed(&self) -> Option<&Snapshot> {
         let session = self.active()?;
@@ -245,6 +274,18 @@ impl Tab {
     }
 }
 
+/// Which part of a session to show: `root`, or one of its `children` (`(id, alive)`, oldest
+/// first) once there are any. `sid` is the part shown so far, and stays while it lives.
+fn shown_part(sid: SessionId, root: SessionId, children: &[(SessionId, bool)]) -> SessionId {
+    match children.iter().rev().find(|(_, alive)| *alive) {
+        Some(_) if children.contains(&(sid, true)) => sid,
+        Some((live, _)) => *live,
+        // Once the program is over, its stops are read where they happened.
+        None if children.iter().any(|(id, _)| *id == sid) => sid,
+        None => children.last().map_or(root, |(id, _)| *id),
+    }
+}
+
 /// Fields as launch.json orders them: what the configuration is first, then the rest.
 pub fn field_order(config: &Configuration) -> Vec<&str> {
     const FIRST: [&str; 3] = ["name", "type", "request"];
@@ -354,7 +395,9 @@ fn tab_bp_rows(id: TabId, tab: &Tab, session_only: bool) -> Vec<BpRow> {
     let sessions: Vec<&Session> = if session_only {
         session.into_iter().collect()
     } else {
-        tab.engine.sessions().iter().filter(|s| s.is_alive()).collect()
+        // The part that runs the program: a parent whose children run it has filters of its
+        // own, but no code they could stop.
+        tab.sessions().filter_map(|s| tab.engine.session(tab.shown(s.id))).filter(|s| s.is_alive()).collect()
     };
     for s in sessions {
         for f in &s.exception_filters {
@@ -435,8 +478,21 @@ pub fn package_of(path: &std::path::Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::package_of;
+    use super::{package_of, shown_part};
     use std::path::Path;
+
+    #[test]
+    fn a_session_shows_the_child_its_program_runs_in() {
+        // Before the adapter starts a child, the session itself.
+        assert_eq!(shown_part(1, 1, &[]), 1);
+        assert_eq!(shown_part(1, 1, &[(2, true)]), 2);
+        // A live child that is looked at stays; one that ended gives way to one that lives.
+        assert_eq!(shown_part(2, 1, &[(2, true), (3, true)]), 2);
+        assert_eq!(shown_part(2, 1, &[(2, false), (3, true)]), 3);
+        // Once everything ended, the child stays, with the stops recorded in it.
+        assert_eq!(shown_part(2, 1, &[(2, false), (3, false)]), 2);
+        assert_eq!(shown_part(1, 1, &[(2, false), (3, false)]), 3);
+    }
 
     #[test]
     fn package_names() {

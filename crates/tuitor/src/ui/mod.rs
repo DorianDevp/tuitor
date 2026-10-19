@@ -321,8 +321,15 @@ fn context(p: &mut Painter<'_>, app: &App, area: Rect) {
         return;
     };
 
+    // A child session is named after what it runs (`orders.js [4242]`, a page's title), its
+    // parent after the configuration.
+    let launch = tab.engine.session(tab.engine.root(session.id)).unwrap_or(session);
     let mut segs =
-        vec![seg(session.tag.clone(), fg(tag(&session.tag))), seg(format!(" {}", session.config.name), fg(DIM)), sep()];
+        vec![seg(session.tag.clone(), fg(tag(&session.tag))), seg(format!(" {}", launch.config.name), fg(DIM))];
+    if launch.id != session.id {
+        segs.push(seg(format!(" › {}", session.config.name), fg(FAINT)));
+    }
+    segs.push(sep());
     match session.state {
         SessionState::Starting => segs.push(seg("starting adapter…", fg(DIM))),
         SessionState::Running if session.threads.is_empty() => {
@@ -354,7 +361,7 @@ fn context(p: &mut Painter<'_>, app: &App, area: Rect) {
             }
         }
     }
-    let live = tab.engine.sessions().iter().filter(|s| s.is_alive()).count();
+    let live = tab.live_sessions();
     if live > 1 {
         segs.push(sep());
         segs.push(seg(format!("{live} live sessions"), fg(FAINT)));
