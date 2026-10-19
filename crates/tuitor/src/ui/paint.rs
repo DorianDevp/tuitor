@@ -69,6 +69,19 @@ pub fn truncate_left(text: &str, max: usize) -> std::borrow::Cow<'_, str> {
     out.into()
 }
 
+/// Shortens `text` to `max` columns by cutting out its middle (`vent…-api`), so names that
+/// share a beginning or an end stay apart. Below six columns only the beginning is kept.
+pub fn truncate_middle(text: &str, max: usize) -> std::borrow::Cow<'_, str> {
+    if text.width() <= max || max < 6 {
+        return truncate(text, max);
+    }
+    let tail_width = (max - 1) / 2;
+    let head = truncate(text, max - tail_width);
+    let head = head.trim_end_matches('…');
+    let tail = truncate_left(text, tail_width + 1);
+    format!("{head}{tail}").into()
+}
+
 pub struct Painter<'b> {
     pub buf: &'b mut Buffer,
 }
@@ -221,6 +234,14 @@ mod tests {
         assert_eq!(truncate("OrderService.php", 8), "OrderSe…");
         assert_eq!(truncate("short", 8), "short");
         assert_eq!(truncate_left("src/Service/OrderService.php", 12), "…Service.php");
+    }
+
+    #[test]
+    fn middle_truncation_keeps_both_ends() {
+        assert_eq!(truncate_middle("ventia-wsparcie-api", 9), "vent…-api");
+        assert_eq!(truncate_middle("ventia-wsparcie-frontend", 9), "vent…tend");
+        assert_eq!(truncate_middle("orders", 9), "orders");
+        assert_eq!(truncate_middle("ledger-reconciliation", 5), "ledg…");
     }
 
     #[test]

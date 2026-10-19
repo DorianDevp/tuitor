@@ -292,8 +292,8 @@ fn empty(p: &mut Painter<'_>, app: &App, inner: Rect) {
     p.text(x, y, message, bold(FG), inner.right());
     y += 2;
     if listed > 0 {
-        match tab.project {
-            Some(_) => line(p, y, "S", "start a launch configuration:"),
+        match tab.selected_configuration() {
+            Some(config) => line(p, y, "S", &format!("starts {}; g p picks another:", config.name())),
             None => {
                 p.text(x, y, "Opened recently:", fg(DIM), inner.right());
             }

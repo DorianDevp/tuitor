@@ -5,7 +5,9 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use serde_json::Value;
 use tuitor_core::breakpoints::BreakpointId;
+use tuitor_core::project::{Configuration, value_text};
 use tuitor_core::session::{Session, SessionId};
 use tuitor_core::snapshot::{Change, Frame, Snapshot, Var, VarPath, diff};
 
@@ -54,6 +56,17 @@ pub enum BpRow {
         filter: String,
         label: String,
     },
+}
+
+/// A row of CONFIG the cursor can be on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigRow {
+    /// One of the project's configurations, by index.
+    Configuration(usize),
+    /// A field of the selected configuration.
+    Field(String),
+    /// A path in `pathMappings` of the selected configuration, by its remote side.
+    Mapping(String),
 }
 
 /// Breakpoints the BREAKPOINTS scope leaves out.
@@ -189,6 +202,54 @@ impl Tab {
     pub fn source_path(&self) -> Option<PathBuf> {
         self.ui.source.browse.clone().or_else(|| self.selected_frame()?.path.clone())
     }
+
+    /// The configuration CONFIG shows and `S` starts.
+    pub fn selected_configuration(&self) -> Option<&Configuration> {
+        self.project.as_ref()?.configurations.get(self.ui.config_sel)
+    }
+
+    /// The configurations, then the fields of the selected one, each mapping on a row.
+    pub fn config_rows(&self) -> Vec<ConfigRow> {
+        let Some(project) = &self.project else { return Vec::new() };
+        let mut rows: Vec<ConfigRow> = (0..project.configurations.len()).map(ConfigRow::Configuration).collect();
+        if let Some(config) = self.selected_configuration() {
+            for field in field_order(config) {
+                match config.fields.get(field) {
+                    Some(Value::Object(mappings)) if field == "pathMappings" && !mappings.is_empty() => {
+                        rows.extend(mappings.keys().map(|remote| ConfigRow::Mapping(remote.clone())));
+                    }
+                    _ => rows.push(ConfigRow::Field(field.to_owned())),
+                }
+            }
+        }
+        rows
+    }
+
+    pub fn config_row(&self) -> Option<ConfigRow> {
+        self.config_rows().into_iter().nth(self.ui.config.pos)
+    }
+
+    /// What `copy` and editing take from a row: a field's value, a mapping as `remote=local`.
+    pub fn config_text(&self, row: &ConfigRow) -> Option<String> {
+        let config = self.selected_configuration()?;
+        match row {
+            ConfigRow::Configuration(index) => {
+                Some(self.project.as_ref()?.configurations.get(*index)?.name().to_owned())
+            }
+            ConfigRow::Field(field) => config.fields.get(field).map(value_text),
+            ConfigRow::Mapping(remote) => {
+                let local = config.fields.get("pathMappings")?.get(remote)?;
+                Some(format!("{remote}={}", value_text(local)))
+            }
+        }
+    }
+}
+
+/// Fields as launch.json orders them: what the configuration is first, then the rest.
+pub fn field_order(config: &Configuration) -> Vec<&str> {
+    const FIRST: [&str; 3] = ["name", "type", "request"];
+    let rest = config.fields.keys().map(String::as_str).filter(|field| !FIRST.contains(field));
+    FIRST.into_iter().filter(|field| config.fields.contains_key(*field)).chain(rest).collect()
 }
 
 impl App {
@@ -273,6 +334,7 @@ impl App {
                 let index = len.checked_sub(1 + tab.ui.output_back)?;
                 tab.engine.output().iter().nth(index).map(|l| l.text.clone())
             }
+            Pane::Config => tab.config_text(&tab.config_row()?),
             Pane::Events | Pane::History => None,
         }
     }

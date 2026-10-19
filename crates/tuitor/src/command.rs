@@ -3,34 +3,40 @@
 
 use std::fmt;
 
+use crate::app::Pane;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum View {
     Overview,
     Code,
     History,
-    Breakpoints,
+    /// The project's breakpoints and launch configurations.
+    Project,
 }
 
 impl View {
-    pub const ALL: [View; 4] = [View::Overview, View::Code, View::History, View::Breakpoints];
+    pub const ALL: [View; 4] = [View::Overview, View::Code, View::History, View::Project];
 
     pub fn name(self) -> &'static str {
         match self {
             View::Overview => "overview",
             View::Code => "code",
             View::History => "history",
-            View::Breakpoints => "breakpoints",
+            View::Project => "project",
         }
     }
 
-    fn parse(arg: &str) -> Result<View, String> {
-        match arg {
-            "overview" | "o" => Ok(View::Overview),
-            "code" | "c" => Ok(View::Code),
-            "history" | "h" => Ok(View::History),
-            "breakpoints" | "bp" | "b" => Ok(View::Breakpoints),
-            other => Err(format!("unknown view `{other}` (overview, code, history, breakpoints)")),
-        }
+    /// A view, or a pane to show in its view.
+    fn parse(arg: &str) -> Result<(View, Option<Pane>), String> {
+        Ok(match arg {
+            "overview" | "o" => (View::Overview, None),
+            "code" | "c" => (View::Code, None),
+            "history" | "h" => (View::History, None),
+            "project" | "p" => (View::Project, None),
+            "breakpoints" | "bp" | "b" => (View::Project, Some(Pane::Breakpoints)),
+            "config" => (View::Project, Some(Pane::Config)),
+            other => return Err(format!("unknown view `{other}` (overview, code, history, project)")),
+        })
     }
 }
 
@@ -81,7 +87,7 @@ pub enum Action {
     WatchDelete,
     Eval(Option<String>),
     Copy,
-    View(View),
+    View(View, Option<Pane>),
     PaneNext,
     PanePrev,
     Zoom,
@@ -106,6 +112,12 @@ pub enum Action {
     TabNew,
     TabOpen(Option<String>),
     TabClose,
+    ConfigStart,
+    ConfigSet(Option<String>),
+    ConfigUnset(Option<String>),
+    ConfigMap(Option<String>),
+    ConfigAdd(Option<String>),
+    ConfigDelete,
     ClearOutput,
     Palette(Option<String>),
     Help,
@@ -122,6 +134,7 @@ pub enum Group {
     Navigate,
     Session,
     Tab,
+    Config,
     App,
 }
 
@@ -322,10 +335,10 @@ pub static COMMANDS: &[Spec] = &[
     },
     Spec {
         name: "view",
-        arg: Arg::Required("‹overview|code|history|breakpoints›"),
-        help: "switch view",
+        arg: Arg::Required("‹overview|code|history|project›"),
+        help: "switch view (breakpoints and config show PROJECT)",
         group: Group::View,
-        parse: |a| View::parse(a.unwrap_or_default()).map(Action::View),
+        parse: |a| View::parse(a.unwrap_or_default()).map(|(view, pane)| Action::View(view, pane)),
     },
     Spec {
         name: "pane next",
@@ -484,6 +497,48 @@ pub static COMMANDS: &[Spec] = &[
         parse: simple!(Action::TabClose),
     },
     Spec {
+        name: "config start",
+        arg: Arg::None,
+        help: "start the configuration selected in CONFIG",
+        group: Group::Config,
+        parse: simple!(Action::ConfigStart),
+    },
+    Spec {
+        name: "config set",
+        arg: Arg::Optional("‹field value›"),
+        help: "set a field of the selected configuration (JSON or text)",
+        group: Group::Config,
+        parse: |a| Ok(Action::ConfigSet(text(a))),
+    },
+    Spec {
+        name: "config unset",
+        arg: Arg::Optional("‹field›"),
+        help: "remove a field of the selected configuration",
+        group: Group::Config,
+        parse: |a| Ok(Action::ConfigUnset(text(a))),
+    },
+    Spec {
+        name: "config map",
+        arg: Arg::Required("‹remote=local›"),
+        help: "map a path the adapter sees to one here (remote= removes it)",
+        group: Group::Config,
+        parse: |a| Ok(Action::ConfigMap(text(a))),
+    },
+    Spec {
+        name: "config add",
+        arg: Arg::Required("‹type›"),
+        help: "add a configuration: php, rust, c, js, gdb, pwa-chrome, pwa-node…",
+        group: Group::Config,
+        parse: |a| Ok(Action::ConfigAdd(text(a))),
+    },
+    Spec {
+        name: "config delete",
+        arg: Arg::None,
+        help: "delete the selected configuration",
+        group: Group::Config,
+        parse: simple!(Action::ConfigDelete),
+    },
+    Spec {
         name: "clear output",
         arg: Arg::None,
         help: "clear the OUTPUT pane",
@@ -572,7 +627,8 @@ mod tests {
     fn rejects_unknown_and_prefix_without_space() {
         assert!(parse("/frobnicate").is_err());
         assert!(parse("continuex").is_err());
-        assert_eq!(parse("view h").expect("view").action, Action::View(View::History));
+        assert_eq!(parse("view h").expect("view").action, Action::View(View::History, None));
+        assert_eq!(parse("view bp").expect("view").action, Action::View(View::Project, Some(Pane::Breakpoints)));
     }
 
     #[test]

@@ -10,7 +10,7 @@ use crossterm::event::KeyEvent;
 use tokio::sync::mpsc::UnboundedSender;
 use tuitor_core::breakpoints::Toggle;
 use tuitor_core::config::{Adapters, LaunchConfig, home_relative};
-use tuitor_core::project::Project;
+use tuitor_core::project::{Project, parse_value};
 use tuitor_core::session::SessionId;
 use tuitor_core::store::Store;
 use tuitor_core::{Engine, EngineMsg, Level, Step, persist};
@@ -18,11 +18,11 @@ use tuitor_core::{Engine, EngineMsg, Level, Step, persist};
 use crate::clipboard;
 use crate::command::{self, Action, Arg, BpScope, Location, View};
 use crate::keymap::{self, Key, Keymap, Lookup};
-use crate::model::{BpRow, StackRow};
+use crate::model::{BpRow, ConfigRow, StackRow};
 use crate::overlay::{Finder, Overlay, Palette};
 use crate::picker::Picker;
 use crate::sources::Sources;
-use crate::tab::{Tab, TabId, Tabs, forward};
+use crate::tab::{Tab, TabId, TabUi, Tabs, forward};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Pane {
@@ -34,6 +34,7 @@ pub enum Pane {
     Output,
     Events,
     History,
+    Config,
 }
 
 impl Pane {
@@ -47,6 +48,7 @@ impl Pane {
             Pane::Output => "output",
             Pane::Events => "events",
             Pane::History => "history",
+            Pane::Config => "config",
         }
     }
 }
@@ -57,7 +59,7 @@ pub fn panes(view: View) -> &'static [Pane] {
         View::Overview => &[Source, Locals, Stack, Watch, Breakpoints, Output, Events],
         View::Code => &[Source, Stack, Breakpoints],
         View::History => &[History, Locals],
-        View::Breakpoints => &[Breakpoints],
+        View::Project => &[Breakpoints, Config],
     }
 }
 
@@ -108,7 +110,7 @@ pub struct App {
 }
 
 /// Why a command did not happen: an error, or a warning that asks for something first.
-struct Refusal {
+pub(crate) struct Refusal {
     level: Level,
     message: String,
 }
@@ -131,7 +133,7 @@ impl From<&str> for Refusal {
     }
 }
 
-type Outcome = Result<String, Refusal>;
+pub(crate) type Outcome = Result<String, Refusal>;
 
 const NO_PROJECT: &str = "no project in this tab; /tab open opens one";
 
@@ -176,10 +178,31 @@ impl App {
 
     // ---- projects ---------------------------------------------------------------------
 
-    /// Shows `project` in a new tab, or in this one if it is empty, and makes it active.
-    pub fn open(&mut self, project: Project) -> TabId {
+    /// Shows `project` in a new tab, or in this one if it is empty, and makes it active. A
+    /// project with no configuration at all gets one for its kind, and opens on CONFIG to
+    /// adjust it, or to add one when its kind is not known. Returns the tab and what is worth
+    /// telling: what could not be read, or the configuration made.
+    pub fn open(&mut self, mut project: Project) -> (TabId, Outcome) {
         let dir = project.dir.clone();
-        let (tab, rx) = Tab::open(project, &self.adapters);
+        let created = project.create_default(&self.store).map_err(|err| format!("{err:#}"));
+        let outcome = match (project.errors.first(), &created) {
+            (Some(error), _) | (None, Err(error)) => Err(error.clone().into()),
+            (None, Ok(Some(index))) => {
+                let config = &project.configurations[*index];
+                Ok(format!("made “{}” ({}) for it: adjust it in CONFIG, S starts it", config.name(), config.adapter()))
+            }
+            (None, Ok(None)) => Ok(String::new()),
+        };
+        let unconfigured = project.configurations.is_empty();
+        let (mut tab, rx) = Tab::open(project, &self.adapters);
+        if let Ok(Some(index)) = created {
+            tab.ui.config_sel = index;
+            tab.ui.config.pos = index;
+        }
+        if unconfigured || matches!(created, Ok(Some(_))) {
+            tab.ui.view = View::Project;
+            tab.set_focus(Pane::Config);
+        }
         let id = if self.tab().project.is_none() { self.tabs.replace_active(tab).0 } else { self.tabs.push(tab) };
         forward(id, rx, self.inbox.clone());
         match persist::recent_file().map(|file| persist::remember_recent(&file, &dir)) {
@@ -188,7 +211,20 @@ impl App {
             Some(Err(err)) => tracing::warn!("remembering {}: {err:#}", dir.display()),
             None => {}
         }
-        id
+        (id, outcome)
+    }
+
+    /// Shows what opening a project said, outside a command line; an error stays over
+    /// later news.
+    pub fn report(&mut self, outcome: Outcome) {
+        let (message, level) = match outcome {
+            Ok(message) => (message, Level::Info),
+            Err(Refusal { level, message }) => (message, level),
+        };
+        let error_shown = self.ui.status.as_ref().is_some_and(|s| s.level == Level::Error);
+        if !message.is_empty() && (level == Level::Error || !error_shown) {
+            self.ui.status = Some(Status { key: None, command: None, message, level });
+        }
     }
 
     /// `/tab open`: a directory as typed, `~` and relative to the current project allowed.
@@ -203,12 +239,9 @@ impl App {
             self.tabs.activate(id);
             return Ok(format!("{} is open already", home_relative(&dir)));
         }
-        let project = Project::open(&dir, &self.store, None);
-        let errors = project.errors.clone();
-        self.open(project);
-        match errors.first() {
-            Some(error) => Err(error.clone().into()),
-            None => Ok(format!("opened {}", home_relative(&dir))),
+        match self.open(Project::open(&dir, &self.store, None)).1 {
+            Ok(note) if note.is_empty() => Ok(format!("opened {}", home_relative(&dir))),
+            outcome => outcome,
         }
     }
 
@@ -333,7 +366,7 @@ impl App {
             Overlay::Picker(picker) => {
                 if key.is("enter") {
                     // When nothing matches, opening what was typed says why it cannot be opened.
-                    let dir = picker.choice().map_or_else(|| picker.input.clone(), |dir| dir.display().to_string());
+                    let dir = picker.choice().map_or_else(|| picker.input.clone(), home_relative);
                     self.ui.overlay = None;
                     self.execute(&format!("tab open {dir}"), None);
                 } else if key.is("tab") {
@@ -524,10 +557,13 @@ impl App {
                 }
                 Ok(format!("copied {}", crate::ui::paint::truncate(&text, 60)))
             }
-            Action::View(view) => {
-                let ui = &mut self.tab_mut().ui;
-                ui.view = view;
-                ui.zoom = false;
+            Action::View(view, pane) => {
+                let tab = self.tab_mut();
+                tab.ui.view = view;
+                tab.ui.zoom = false;
+                if let Some(pane) = pane {
+                    tab.set_focus(pane);
+                }
                 Ok(String::new())
             }
             Action::PaneNext => self.cycle_focus(1),
@@ -571,7 +607,12 @@ impl App {
             Action::SessionPrev => self.cycle_session(-1),
             Action::SessionStart(name) => {
                 let Some(name) = name else { return self.prompt(spec) };
-                self.start_configuration(&name)
+                let project = self.tab().project.as_ref().ok_or(NO_PROJECT)?;
+                let index = project.find(&name).ok_or_else(|| {
+                    let names: Vec<&str> = project.configurations.iter().map(|c| c.name()).collect();
+                    format!("no configuration `{name}` (have: {})", names.join(", "))
+                })?;
+                self.start_configuration(index)
             }
             Action::TabNext => self.cycle_tab(1),
             Action::TabPrev => self.cycle_tab(-1),
@@ -586,6 +627,16 @@ impl App {
                 Ok(String::new())
             }
             Action::TabClose => self.close_tab(),
+            Action::ConfigStart => {
+                let index = self.tab().ui.config_sel;
+                self.start_configuration(index)
+            }
+            Action::ConfigSet(arg) => self.config_set(arg.unwrap_or_default().trim()),
+            Action::ConfigUnset(field) => self.config_unset(field),
+            Action::ConfigMap(Some(mapping)) => self.config_map(&mapping),
+            Action::ConfigAdd(Some(adapter)) => self.config_add(&adapter),
+            Action::ConfigMap(None) | Action::ConfigAdd(None) => self.prompt(spec),
+            Action::ConfigDelete => self.config_delete(),
             Action::ClearOutput => {
                 let tab = self.tab_mut();
                 tab.engine.clear_output();
@@ -637,18 +688,94 @@ impl App {
         Ok(String::new())
     }
 
-    /// Starts the configuration of this tab's project named, or partly named, `name`.
-    fn start_configuration(&mut self, name: &str) -> Outcome {
+    /// Starts configuration `index` of this tab's project.
+    fn start_configuration(&mut self, index: usize) -> Outcome {
         let Tab { project, engine, ui, .. } = self.tab_mut();
         let project = project.as_ref().ok_or(NO_PROJECT)?;
-        let index = project.find(name).ok_or_else(|| {
-            let names: Vec<&str> = project.configurations.iter().map(|c| c.name()).collect();
-            format!("no configuration `{name}` (have: {})", names.join(", "))
-        })?;
-        let config = project.configurations[index].launch(&project.variables()).map_err(|e| format!("{e:#}"))?;
+        let config = project.configurations.get(index).ok_or("no configuration; /config add ‹type› adds one")?;
+        let config = config.launch(&project.variables()).map_err(|e| format!("{e:#}"))?;
         let started = format!("starting {}", config.name);
         ui.session = Some(engine.start(config).map_err(|e| format!("{e:#}"))?);
         Ok(started)
+    }
+
+    // ---- configurations: tuitor's own are edited here and saved at once ------------------
+
+    /// What changing a configuration of this tab's project takes: the project, the view
+    /// state that says which configuration is selected, and the store to save it in.
+    fn selected_project(&mut self) -> Result<(&mut Project, &mut TabUi, &Store), Refusal> {
+        let App { tabs, store, .. } = self;
+        let Tab { project, ui, .. } = tabs.active_mut();
+        Ok((project.as_mut().ok_or(NO_PROJECT)?, ui, store))
+    }
+
+    /// `/config set field value`; without a value the palette offers the current one to edit,
+    /// without a field the one under the CONFIG cursor.
+    fn config_set(&mut self, arg: &str) -> Outcome {
+        let (field, value) = arg.split_once(char::is_whitespace).unwrap_or((arg, ""));
+        let field = match (field, self.tab().config_row()) {
+            ("", Some(ConfigRow::Field(field))) => field,
+            ("", _) => {
+                self.open_palette("/config set ".into());
+                return Ok(String::new());
+            }
+            (field, _) => field.to_owned(),
+        };
+        let value = value.trim();
+        if value.is_empty() {
+            let current = self.tab().config_text(&ConfigRow::Field(field.clone())).unwrap_or_default();
+            self.open_palette(format!("/config set {field} {current}"));
+            return Ok(String::new());
+        }
+        let (project, ui, store) = self.selected_project()?;
+        project.set(store, ui.config_sel, &field, parse_value(value)).map_err(|e| format!("{e:#}"))?;
+        Ok(format!("{field} = {value}"))
+    }
+
+    fn config_unset(&mut self, field: Option<String>) -> Outcome {
+        let field = match (field, self.tab().config_row()) {
+            (Some(field), _) | (None, Some(ConfigRow::Field(field))) => field,
+            (None, Some(ConfigRow::Mapping(remote))) => return self.config_map(&format!("{remote}=")),
+            (None, _) => return Err("no field selected; /config unset ‹field›".into()),
+        };
+        let (project, ui, store) = self.selected_project()?;
+        project.unset(store, ui.config_sel, &field).map_err(|e| format!("{e:#}"))?;
+        let rows = self.tab().config_rows().len();
+        self.tab_mut().ui.config.clamp(rows);
+        Ok(format!("removed {field}"))
+    }
+
+    /// `remote=local`; an empty `local` removes the mapping.
+    fn config_map(&mut self, mapping: &str) -> Outcome {
+        let (remote, local) =
+            mapping.split_once('=').ok_or("expected remote=local, e.g. /config map /var/www/app=.")?;
+        let (remote, local) = (remote.trim(), local.trim());
+        let (project, ui, store) = self.selected_project()?;
+        project.map(store, ui.config_sel, remote, local).map_err(|e| format!("{e:#}"))?;
+        let rows = self.tab().config_rows().len();
+        self.tab_mut().ui.config.clamp(rows);
+        Ok(if local.is_empty() { format!("{remote} is no longer mapped") } else { format!("{remote} → {local}") })
+    }
+
+    fn config_add(&mut self, adapter: &str) -> Outcome {
+        let (project, ui, store) = self.selected_project()?;
+        let index = project.add(store, adapter).map_err(|e| format!("{e:#}"))?;
+        ui.config_sel = index;
+        ui.config.pos = index;
+        let config = &project.configurations[index];
+        let (name, adapter) = (config.name().to_owned(), config.adapter().to_owned());
+        if self.adapters.get(&adapter).is_none() {
+            return Ok(format!("added “{name}”; tuitor has no `{adapter}` adapter yet (tuitor configs lists them)"));
+        }
+        Ok(format!("added “{name}” ({adapter}); adjust it here, S starts it"))
+    }
+
+    fn config_delete(&mut self) -> Outcome {
+        let (project, ui, store) = self.selected_project()?;
+        let removed = project.delete(store, ui.config_sel).map_err(|e| format!("{e:#}"))?;
+        ui.config_sel = ui.config_sel.min(project.configurations.len().saturating_sub(1));
+        ui.config.pos = ui.config_sel;
+        Ok(format!("deleted “{}”", removed.name()))
     }
 
     fn history_move(&mut self, delta: i64) -> Outcome {
@@ -843,6 +970,15 @@ impl App {
                 let len = tab.engine.events().len();
                 tab.ui.events.move_by(delta, len);
             }
+            Pane::Config => {
+                let tab = self.tab_mut();
+                let rows = tab.config_rows();
+                tab.ui.config.move_by(delta, rows.len());
+                // The configuration under the cursor is the one shown and started.
+                if let Some(ConfigRow::Configuration(index)) = rows.get(tab.ui.config.pos) {
+                    tab.ui.config_sel = *index;
+                }
+            }
             Pane::History => {
                 let tab = self.tab_mut();
                 let Some(sid) = tab.ui.session else { return Ok(String::new()) };
@@ -935,6 +1071,17 @@ impl App {
                 tab.jump_to_execution();
                 Ok("showing the selected stop".into())
             }
+            // A configuration starts; a field or mapping goes to the palette to be edited.
+            Pane::Config => match self.tab().config_row() {
+                Some(ConfigRow::Configuration(index)) => self.start_configuration(index),
+                Some(ConfigRow::Field(field)) => self.config_set(&field),
+                Some(row @ ConfigRow::Mapping(_)) => {
+                    let mapping = self.tab().config_text(&row).unwrap_or_default();
+                    self.open_palette(format!("/config map {mapping}"));
+                    Ok(String::new())
+                }
+                None => Ok(String::new()),
+            },
             _ => Ok(String::new()),
         }
     }
@@ -998,12 +1145,13 @@ impl Tab {
         }
     }
 
-    /// Shows `path` at `line` in SOURCE, in the CODE view when BREAKPOINTS fills the screen.
+    /// Shows `path` at `line` in SOURCE, in the CODE view when PROJECT, which has no SOURCE,
+    /// is on screen.
     pub fn browse(&mut self, path: PathBuf, line: u32) {
         self.ui.source.browse = Some(path);
         self.ui.source.cursor = line;
         self.ui.source.recenter.set(true);
-        if self.ui.view == View::Breakpoints {
+        if self.ui.view == View::Project {
             self.ui.view = View::Code;
         }
         self.set_focus(Pane::Source);
