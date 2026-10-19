@@ -86,6 +86,9 @@ async fn breakpoint_step_and_delta_with_gdb() {
     assert!(top.name.contains("total"), "top frame was {}", top.name);
     assert_eq!(first.hit_breakpoints, [1]);
     assert_eq!(first.local_value("sum"), Some("0"));
+    // Children of collapsed variables are read ahead, so that a change inside can be marked.
+    let prices = first.scopes.iter().filter_map(|s| s.vars.as_deref()).flatten().find(|v| v.name == "prices");
+    assert!(prices.is_some_and(|v| v.children.is_some()), "`prices` was not read ahead: {prices:?}");
     assert!(matches!(first.watch("sum"), Some(Ok(v)) if v == "0"));
     assert_eq!(engine.breakpoints().get(1).map(|b| b.hits), Some(1));
 

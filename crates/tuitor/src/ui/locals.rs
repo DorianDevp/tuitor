@@ -9,7 +9,7 @@ use crate::command::View;
 pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
     let rows = app.local_rows();
     let snapshot = app.viewed();
-    let changed = rows.iter().filter(|r| r.change.is_some()).count();
+    let changed = rows.iter().filter(|r| changed_here(r.change.as_ref())).count();
     let vars = rows.iter().filter(|r| !r.scope && !r.note && r.depth == 1).count();
 
     let title = if app.ui.view == View::History { "SNAPSHOT" } else { "LOCALS" };
@@ -80,13 +80,18 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
             Some(Change::New) => {
                 p.text(inner.x, y, "+", bold(GREEN), inner.right());
             }
+            // Only a hint: what changed is further down, bright once expanded.
+            Some(Change::Inside) => {
+                p.text(inner.x, y, "△", fg(GREEN_DIM), inner.right());
+            }
             None => {}
         }
+        let fresh = changed_here(row.change.as_ref());
         let nx = x_name + indent;
         if row.expandable {
             p.text(nx, y, if row.expanded { "▾" } else { "▸" }, fg(FAINT), inner.right());
         }
-        let name_style = if row.change.is_some() {
+        let name_style = if fresh {
             fg(WHITE)
         } else if row.depth == 1 {
             fg(SYN_VAR)
@@ -104,16 +109,22 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
                 (segs, w)
             }
             Some(Change::New) => (vec![seg("new", italic(FAINT))], 3),
-            None => (vec![], 0),
+            Some(Change::Inside) | None => (vec![], 0),
         };
         let value_end = if delta_w > 0 { inner.right().saturating_sub(delta_w + 2) } else { inner.right() };
         let value = one_line(&row.value);
-        let value_style = if row.change.is_some() { bold(GREEN) } else { value_style(&value) };
+        let value_style = if fresh { bold(GREEN) } else { value_style(&value) };
         p.text(x_value, y, &value, value_style, value_end.max(x_value + 4));
         if delta_w > 0 {
             p.segs_right(inner.right(), y, &delta, value_end);
         }
     }
+}
+
+/// The row's own value changed or appeared in this step (bright), as opposed to
+/// something inside it (dim).
+fn changed_here(change: Option<&Change>) -> bool {
+    matches!(change, Some(Change::Changed { .. } | Change::New))
 }
 
 fn value_style(value: &str) -> ratatui::style::Style {

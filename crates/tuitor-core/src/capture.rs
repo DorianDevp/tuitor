@@ -5,13 +5,19 @@ use std::path::{Path, PathBuf};
 
 use tuitor_dap::requests::{Evaluate, Scopes, StackTrace, Threads, Variables};
 use tuitor_dap::types::{
-    Empty, EvaluateArguments, Scope, ScopesArguments, StackFrame, StackTraceArguments, VariablesArguments,
+    Empty, EvaluateArguments, Scope, ScopesArguments, StackFrame, StackTraceArguments, Variable, VariablesArguments,
 };
 use tuitor_dap::{Client, Error};
 
 use crate::snapshot::{Frame, ScopeVars, Var, VarPath, WatchValue, is_library_path};
 
 const MAX_FRAMES: i64 = 200;
+/// `variables` requests per stop for reading children of collapsed arguments and locals
+/// ahead, so that a change inside a collapsed object shows.
+const PREFETCH_REQUESTS: usize = 30;
+/// Variables announcing more children than this are not read ahead: one level of a
+/// large array costs more than the hint is worth.
+const PREFETCH_MAX_CHILDREN: i64 = 100;
 
 pub(crate) struct Capture {
     pub thread_id: i64,
@@ -47,19 +53,23 @@ pub(crate) async fn capture(
     let mut watch_values = Vec::with_capacity(watches.len());
     if let Some(top) = frames.first() {
         let response = client.request::<Scopes>(ScopesArguments { frame_id: top.id }).await?;
+        let mut prefetch_budget = PREFETCH_REQUESTS;
         for (index, scope) in response.scopes.into_iter().enumerate() {
             let path = vec![scope.name.clone()];
-            let open_by_default = is_default_scope(&scope, index) && !seen_scopes.contains(&scope.name);
-            let wanted = open_by_default || expanded.contains(&path);
+            let default_open = is_default_scope(&scope, index);
+            let wanted = (default_open && !seen_scopes.contains(&scope.name)) || expanded.contains(&path);
             let vars = if wanted {
                 let mut vars = fetch_vars(&client, scope.variables_reference).await.unwrap_or_default();
                 expand_paths(&client, &scope.name, &mut vars, &expanded).await;
+                if default_open {
+                    prefetch_children(&client, &mut vars, &mut prefetch_budget).await;
+                }
                 Some(vars)
             } else {
                 None
             };
             scopes.push(ScopeVars {
-                default_open: is_default_scope(&scope, index),
+                default_open,
                 name: scope.name,
                 reference: scope.variables_reference,
                 expensive: scope.expensive,
@@ -78,18 +88,24 @@ pub(crate) async fn capture(
 
 pub(crate) async fn fetch_vars(client: &Client, reference: i64) -> Result<Vec<Var>, Error> {
     let response = client.request::<Variables>(VariablesArguments { variables_reference: reference }).await?;
-    Ok(response
-        .variables
-        .into_iter()
-        .map(|v| Var {
-            name: v.name,
-            value: v.value,
-            type_name: v.type_name.filter(|t| !t.is_empty()),
-            evaluate_name: v.evaluate_name,
-            reference: v.variables_reference,
-            children: None,
-        })
-        .collect())
+    Ok(response.variables.into_iter().map(var).collect())
+}
+
+/// A variable as a snapshot keeps it; its children are read separately.
+pub(crate) fn var(v: Variable) -> Var {
+    let child_count = match (v.named_variables, v.indexed_variables) {
+        (None, None) => None,
+        (named, indexed) => Some(named.unwrap_or(0) + indexed.unwrap_or(0)),
+    };
+    Var {
+        name: v.name,
+        value: v.value,
+        type_name: v.type_name.filter(|t| !t.is_empty()),
+        evaluate_name: v.evaluate_name,
+        reference: v.variables_reference,
+        child_count,
+        children: None,
+    }
 }
 
 pub(crate) async fn evaluate(
@@ -135,6 +151,38 @@ async fn expand_paths(client: &Client, scope: &str, vars: &mut [Var], expanded: 
             var.children = fetch_vars(client, var.reference).await.ok();
         }
     }
+}
+
+/// Reads one level of children of top-level variables that are not expanded, so that
+/// `diff` can mark an object whose fields changed even while it is collapsed. Children
+/// are shown only when the user expands the variable. Each read takes one request out
+/// of `budget`, in order, so the cost per stop stays bounded.
+async fn prefetch_children(client: &Client, vars: &mut [Var], budget: &mut usize) {
+    for var in vars.iter_mut().filter(|v| worth_prefetching(v)) {
+        if !take(budget) {
+            return;
+        }
+        var.children = fetch_vars(client, var.reference).await.ok();
+        // A pointer or reference has one child, what it points to (gdb: `*p` or `value`).
+        // Its fields are read too, so a change made through a pointer shows like one in
+        // a struct.
+        if let Some([pointee]) = var.children.as_deref_mut()
+            && worth_prefetching(pointee)
+            && take(budget)
+        {
+            pointee.children = fetch_vars(client, pointee.reference).await.ok();
+        }
+    }
+}
+
+fn worth_prefetching(var: &Var) -> bool {
+    var.reference > 0 && var.children.is_none() && var.child_count.is_none_or(|n| n <= PREFETCH_MAX_CHILDREN)
+}
+
+fn take(budget: &mut usize) -> bool {
+    let Some(left) = budget.checked_sub(1) else { return false };
+    *budget = left;
+    true
 }
 
 fn find_mut<'a>(vars: &'a mut [Var], path: &[String]) -> Option<&'a mut Var> {

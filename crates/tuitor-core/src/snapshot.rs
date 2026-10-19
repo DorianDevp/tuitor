@@ -1,7 +1,7 @@
 //! Everything captured at one stop. Snapshots are immutable history: the UI can
 //! show any of them after the program moved on, and compare neighbours.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use chrono::{DateTime, Local};
@@ -59,6 +59,8 @@ pub struct Var {
     pub evaluate_name: Option<String>,
     /// > 0 when the variable has children.
     pub reference: i64,
+    /// How many children the adapter announced, if it did.
+    pub child_count: Option<i64>,
     pub children: Option<Vec<Var>>,
 }
 
@@ -68,10 +70,14 @@ pub struct WatchValue {
     pub value: Result<String, String>,
 }
 
+/// How a variable differs from the previous stop. `Inside`: its value reads the same,
+/// but loaded children (at any depth) changed, appeared or disappeared. Objects whose
+/// value is just a class name only ever change this way.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Change {
     Changed { was: String },
     New,
+    Inside,
 }
 
 impl Frame {
@@ -158,24 +164,39 @@ pub fn diff(prev: Option<&Snapshot>, cur: &Snapshot) -> HashMap<VarPath, Change>
     changes
 }
 
-fn diff_vars(path: &mut VarPath, cur: &[Var], prev: &[Var], out: &mut HashMap<VarPath, Change>) {
+/// Records changes below `path` and tells whether there were any, so that parents can
+/// be marked [`Change::Inside`].
+fn diff_vars(path: &mut VarPath, cur: &[Var], prev: &[Var], out: &mut HashMap<VarPath, Change>) -> bool {
+    // Indexed by name, as an expanded array can have thousands of elements. Reversed, so
+    // that of equal names (shadowed locals) the first one is compared.
+    let old_by_name: HashMap<&str, &Var> = prev.iter().rev().map(|v| (v.name.as_str(), v)).collect();
+    let names: HashSet<&str> = cur.iter().map(|v| v.name.as_str()).collect();
+    let mut any = prev.iter().any(|old| !names.contains(old.name.as_str())); // one disappeared
     for var in cur {
         path.push(var.name.clone());
-        match prev.iter().find(|p| p.name == var.name) {
+        match old_by_name.get(var.name.as_str()) {
             None => {
                 out.insert(path.clone(), Change::New);
+                any = true;
             }
             Some(old) => {
-                if old.value != var.value {
+                let inside = match (&var.children, &old.children) {
+                    (Some(children), Some(old_children)) => diff_vars(path, children, old_children, out),
+                    _ => false,
+                };
+                let changed = old.value != var.value;
+                // The value itself changing says more than anything below it.
+                if changed {
                     out.insert(path.clone(), Change::Changed { was: old.value.clone() });
+                } else if inside {
+                    out.insert(path.clone(), Change::Inside);
                 }
-                if let (Some(children), Some(old_children)) = (&var.children, &old.children) {
-                    diff_vars(path, children, old_children, out);
-                }
+                any |= changed || inside;
             }
         }
         path.pop();
     }
+    any
 }
 
 #[cfg(test)]
@@ -189,8 +210,13 @@ mod tests {
             type_name: None,
             evaluate_name: None,
             reference: 0,
+            child_count: None,
             children: None,
         }
+    }
+
+    fn object(name: &str, value: &str, children: Vec<Var>) -> Var {
+        Var { reference: 1, children: Some(children), ..var(name, value) }
     }
 
     fn snap(function: &str, vars: Vec<Var>) -> Snapshot {
@@ -244,6 +270,61 @@ mod tests {
         order2.children = Some(vec![var("status", "Assigned")]);
         let d = diff(Some(&snap("f", vec![order])), &snap("f", vec![order2]));
         assert!(d.contains_key(&path(&["Locals", "$order", "status"])));
+    }
+
+    #[test]
+    fn object_whose_field_changed_is_marked_inside() {
+        let prev = snap("orderTotal", vec![object("$line", "Line", vec![var("sku", "KB-01"), var("qty", "1")])]);
+        let cur = snap("orderTotal", vec![object("$line", "Line", vec![var("sku", "MS-02"), var("qty", "1")])]);
+        let d = diff(Some(&prev), &cur);
+        assert_eq!(d.get(&path(&["Locals", "$line"])), Some(&Change::Inside));
+        assert_eq!(d.get(&path(&["Locals", "$line", "sku"])), Some(&Change::Changed { was: "KB-01".into() }));
+        assert!(!d.contains_key(&path(&["Locals", "$line", "qty"])));
+    }
+
+    #[test]
+    fn inside_reaches_every_ancestor() {
+        let order = |city: &str| {
+            let address = object("address", "Address", vec![var("city", city)]);
+            object("$order", "Order", vec![var("id", "1001"), object("customer", "Customer", vec![address])])
+        };
+        let d = diff(Some(&snap("f", vec![order("London")])), &snap("f", vec![order("Paris")]));
+        for parent in
+            [&["Locals", "$order"][..], &["Locals", "$order", "customer"], &["Locals", "$order", "customer", "address"]]
+        {
+            assert_eq!(d.get(&path(parent)), Some(&Change::Inside), "{parent:?}");
+        }
+        assert!(!d.contains_key(&path(&["Locals", "$order", "id"])));
+    }
+
+    #[test]
+    fn own_value_change_wins_over_inside() {
+        let prev = snap("f", vec![object("line", "0x10", vec![var("qty", "1")])]);
+        let cur = snap("f", vec![object("line", "0x20", vec![var("qty", "2")])]);
+        let d = diff(Some(&prev), &cur);
+        assert_eq!(d.get(&path(&["Locals", "line"])), Some(&Change::Changed { was: "0x10".into() }));
+        assert_eq!(d.get(&path(&["Locals", "line", "qty"])), Some(&Change::Changed { was: "1".into() }));
+    }
+
+    #[test]
+    fn children_that_appear_or_disappear_mark_the_parent() {
+        let prev = snap("f", vec![object("$o", "Order", vec![var("a", "1"), var("b", "2")])]);
+        let fewer = snap("f", vec![object("$o", "Order", vec![var("a", "1")])]);
+        let more = snap("f", vec![object("$o", "Order", vec![var("a", "1"), var("b", "2"), var("c", "3")])]);
+        assert_eq!(diff(Some(&prev), &fewer).get(&path(&["Locals", "$o"])), Some(&Change::Inside));
+        let d = diff(Some(&prev), &more);
+        assert_eq!(d.get(&path(&["Locals", "$o"])), Some(&Change::Inside));
+        assert_eq!(d.get(&path(&["Locals", "$o", "c"])), Some(&Change::New));
+    }
+
+    #[test]
+    fn same_or_unloaded_children_mark_nothing() {
+        let loaded = || object("$o", "Order", vec![var("a", "1")]);
+        assert!(diff(Some(&snap("f", vec![loaded()])), &snap("f", vec![loaded()])).is_empty());
+        // Children read at only one of the stops cannot be compared.
+        let unloaded = var("$o", "Order");
+        assert!(diff(Some(&snap("f", vec![unloaded.clone()])), &snap("f", vec![loaded()])).is_empty());
+        assert!(diff(Some(&snap("f", vec![loaded()])), &snap("f", vec![unloaded])).is_empty());
     }
 
     #[test]

@@ -216,6 +216,11 @@ pub struct Variable {
     pub evaluate_name: Option<String>,
     #[serde(default)]
     pub variables_reference: i64,
+    /// How many children the variable has, when the adapter says so.
+    #[serde(default)]
+    pub named_variables: Option<i64>,
+    #[serde(default)]
+    pub indexed_variables: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]

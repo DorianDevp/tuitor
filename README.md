@@ -51,7 +51,9 @@ Any pane can be maximised with `z`.
 
 Bright colour means something: amber is where execution is, green is what
 changed in this step (`▲`, with the previous value), red is a hit breakpoint or
-an error. Everything else is grey.
+an error. Everything else is grey. A dim green `△` marks a variable that reads
+the same but changed inside, such as an object whose field changed or a pointer
+whose target did; expand it to see what.
 
 `[` and `]` step through recorded stops. An older stop is shown read-only with
 the values captured at that moment; nothing is re-read from the program.

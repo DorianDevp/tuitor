@@ -451,7 +451,7 @@ impl Engine {
                 sid,
                 number,
                 path,
-                result: result.map(|r| r.variables.into_iter().map(var_from_dap).collect()),
+                result: result.map(|r| r.variables.into_iter().map(capture::var).collect()),
             }
         });
         Ok(())
@@ -981,17 +981,6 @@ fn native_tag(path: &Path) -> Option<&'static str> {
         "zig" => "zig",
         _ => return None,
     })
-}
-
-fn var_from_dap(v: dap::Variable) -> Var {
-    Var {
-        name: v.name,
-        value: v.value,
-        type_name: v.type_name.filter(|t| !t.is_empty()),
-        evaluate_name: v.evaluate_name,
-        reference: v.variables_reference,
-        children: None,
-    }
 }
 
 fn file_name(path: &Path) -> String {

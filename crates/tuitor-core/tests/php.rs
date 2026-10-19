@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tuitor_core::config::{Adapters, LaunchConfig, RequestKind};
 use tuitor_core::session::{SessionId, SessionState};
+use tuitor_core::snapshot::{Change, diff};
 use tuitor_core::{Engine, EngineMsg, EngineOptions, Step};
 
 const BREAK_LINE: u32 = 12; // `$total += $item['price'] * $item['qty'];`
@@ -94,6 +95,11 @@ async fn xdebug_connects_back_and_stops() {
     pump(&mut engine, &mut rx, |e| stops(e, sid) >= 2).await;
     let second = engine.session(sid).and_then(|s| s.latest()).expect("second");
     assert_eq!(second.local_value("$total"), Some("89.99"));
+    // `$item` reads `array(4)` at both stops, but its elements were read ahead while it
+    // was collapsed, so the next item is still noticed.
+    let locals = second.scopes.iter().find(|s| s.vars.iter().flatten().any(|v| v.name == "$item")).expect("scope");
+    let item_path = vec![locals.name.clone(), "$item".to_owned()];
+    assert_eq!(diff(Some(&snap), second).get(&item_path), Some(&Change::Inside));
 
     engine.toggle_breakpoint(&script, BREAK_LINE);
     engine.resume(sid, Step::Continue).expect("continue");
