@@ -1,0 +1,2 @@
+# What dlv builds for a session; it removes it when the session ends.
+/__debug_bin*
