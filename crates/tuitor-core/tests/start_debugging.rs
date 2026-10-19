@@ -217,3 +217,29 @@ async fn a_request_for_a_terminal_ends_the_session_and_says_what_to_change() {
 
     std::fs::remove_dir_all(dir).ok();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_restarted_session_keeps_its_name() {
+    let (address, mut adapter) = fake_adapter().await;
+    let (dir, _, adapters) = workspace("restart", &address);
+    let (mut engine, mut rx) = Engine::new(EngineOptions { adapters, workspace: dir.clone(), state_file: None });
+    let config = LaunchConfig::adhoc("orders", "fake", RequestKind::Launch, Default::default());
+    let first = engine.start(config.clone()).expect("start");
+    let mut log = Vec::new();
+    let has_child = |e: &Engine| e.sessions().iter().any(|s| s.parent == Some(first));
+    pump(&mut engine, &mut rx, &mut adapter, &mut log, |e, _| has_child(e)).await;
+    let name = |e: &Engine, sid| e.session(sid).map(|s| s.name.clone()).expect("session");
+
+    // The old session still runs as the new one starts, but is on its way out.
+    let second = engine.restart(first).expect("restart");
+    assert_eq!(name(&engine, second), name(&engine, first));
+    let running = |e: &Engine| e.session(second).is_some_and(|s| s.state == SessionState::Running);
+    let first_ended = |e: &Engine| e.sessions().iter().filter(|s| s.id != second).all(|s| !s.is_alive());
+    pump(&mut engine, &mut rx, &mut adapter, &mut log, |e, _| running(e) && first_ended(e)).await;
+
+    // Sessions that run side by side are told apart.
+    let third = engine.start(config).expect("start");
+    assert_eq!(name(&engine, third), format!("{}#2", name(&engine, second)));
+
+    std::fs::remove_dir_all(dir).ok();
+}

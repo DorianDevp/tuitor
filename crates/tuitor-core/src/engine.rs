@@ -230,6 +230,11 @@ impl Engine {
 
     /// Starts the adapter for `config`; progress arrives through [`Engine::handle`].
     pub fn start(&mut self, config: LaunchConfig) -> Result<SessionId> {
+        self.launch(config, None)
+    }
+
+    /// Starts a session for `config` in place of `replaces`, which gives up its name.
+    fn launch(&mut self, config: LaunchConfig, replaces: Option<SessionId>) -> Result<SessionId> {
         let spec = self.adapters.get(&config.adapter).cloned().ok_or_else(|| {
             let known: Vec<&str> = self.adapters.names().collect();
             anyhow!("no adapter for type `{}` (known: {})", config.adapter, known.join(", "))
@@ -239,7 +244,7 @@ impl Engine {
         let sid = self.next_session;
         self.next_session += 1;
         let tag = self.tag_for(&spec);
-        let name = self.unique_name(&tag);
+        let name = self.unique_name(&tag, replaces);
         self.log_event(sid, "starting", format!("{} · {}", config.name, describe(&transport)));
         let mut session = Session::new(sid, name, spec, config, tag);
         session.tmp = tmp;
@@ -284,14 +289,15 @@ impl Engine {
     }
 
     /// Starts the same configuration again in a new session; for a child session, its
-    /// parent's, since the adapter made up the child's.
+    /// parent's, since the adapter made up the child's. The new session keeps the name: the
+    /// old one is on its way out, and a `#2` would outlast it.
     pub fn restart(&mut self, sid: SessionId) -> Result<SessionId> {
         let sid = self.root(sid);
         let config = self.session_ref(sid)?.config.clone();
         if self.session_ref(sid)?.is_alive() {
             self.stop(sid)?;
         }
-        self.start(config)
+        self.launch(config, Some(sid))
     }
 
     /// Disconnects every session and ends the adapters, with their temporary directories;
@@ -725,7 +731,7 @@ impl Engine {
         };
         // js-debug names the target: the script and its pid, or the page's title.
         let title = configuration.get("name").and_then(Value::as_str).unwrap_or("child").to_owned();
-        let name = self.unique(format!("{} › {title}", parent_session.name));
+        let name = self.unique(format!("{} › {title}", parent_session.name), None);
         let detail = format!("{title} · child of {}", parent_session.name);
         let tag = parent_session.tag.clone();
         let config =
@@ -755,7 +761,7 @@ impl Engine {
         }
         let title = thread.name.clone();
         let parent_name = self.session(parent).map(|p| p.name.clone()).unwrap_or_default();
-        let name = self.unique(format!("{parent_name} › {title}"));
+        let name = self.unique(format!("{parent_name} › {title}"), None);
         if let Ok(session) = self.session_mut(sid) {
             session.name = name;
             session.config.name = title;
@@ -1197,14 +1203,17 @@ impl Engine {
         }
     }
 
-    fn unique_name(&self, tag: &str) -> String {
+    fn unique_name(&self, tag: &str, replaces: Option<SessionId>) -> String {
         let base = self.workspace.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        self.unique(format!("{base}·{tag}"))
+        self.unique(format!("{base}·{tag}"), replaces)
     }
 
-    /// `name`, or `name#2`, `name#3`, … when a live session already has it.
-    fn unique(&self, name: String) -> String {
-        let taken = |candidate: &str| self.sessions.iter().any(|s| s.name == candidate && s.is_alive());
+    /// `name`, or `name#2`, `name#3`, … when a live session already has it, other than the
+    /// one being replaced and its children.
+    fn unique(&self, name: String, replaces: Option<SessionId>) -> String {
+        let taken = |candidate: &str| {
+            self.sessions.iter().any(|s| s.name == candidate && s.is_alive() && Some(self.root(s.id)) != replaces)
+        };
         if !taken(&name) {
             return name;
         }
