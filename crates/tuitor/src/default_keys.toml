@@ -43,10 +43,11 @@ O = "tab open"
 ctrl-w = "tab close"
 "g s" = "session next"
 "g S" = "session prev"
-S = "palette /session start "
+S = "config start"
 "g o" = "view overview"
 "g c" = "view code"
 "g h" = "view history"
+"g p" = "view config"
 "g b" = "view breakpoints"
 B = "view breakpoints"
 j = "down"
@@ -82,3 +83,9 @@ v = "vendor"
 
 [pane.output]
 C = "clear output"
+
+[pane.config]
+a = "config add"
+m = "config map"
+u = "config unset"
+d = "config delete"

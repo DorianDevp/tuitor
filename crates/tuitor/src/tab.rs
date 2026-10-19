@@ -192,6 +192,10 @@ pub struct TabUi {
     pub output_back: usize,
     pub events: Cursor,
     pub history_col: usize,
+    /// Row of CONFIG under the cursor.
+    pub config: Cursor,
+    /// The configuration CONFIG shows the fields of; `S` starts it.
+    pub config_sel: usize,
     pub(crate) seen_stops: HashMap<SessionId, usize>,
 }
 
@@ -213,6 +217,8 @@ impl Default for TabUi {
             output_back: 0,
             events: Cursor::default(),
             history_col: 0,
+            config: Cursor::default(),
+            config_sel: 0,
             seen_stops: HashMap::new(),
         }
     }

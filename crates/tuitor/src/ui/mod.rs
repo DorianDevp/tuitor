@@ -2,6 +2,7 @@
 //! state except the scroll offsets and the animation flag kept in `Cell`s.
 
 mod breakpoints;
+mod config;
 mod history;
 mod locals;
 mod logo;
@@ -75,10 +76,11 @@ fn draw_pane(p: &mut Painter<'_>, app: &App, pane: Pane, area: Rect) {
         Pane::Locals => locals::draw(p, tab, area, focus),
         Pane::Stack => stack::draw(p, tab, area, focus),
         Pane::Watch => watch::draw(p, tab, area, focus),
-        Pane::Breakpoints => breakpoints::draw(p, app, area, focus, tab.ui.view == View::Breakpoints || tab.ui.zoom),
+        Pane::Breakpoints => breakpoints::draw(p, app, area, focus, tab.ui.view == View::Project || tab.ui.zoom),
         Pane::Output => logs::output(p, tab, area, focus),
         Pane::Events => logs::events(p, tab, area, focus),
         Pane::History => history::table(p, tab, area, focus),
+        Pane::Config => config::draw(p, app, area, focus),
     }
 }
 
@@ -129,7 +131,10 @@ fn layout(app: &App, body: Rect) -> Vec<(Pane, Rect)> {
                 (Pane::Locals, Rect::new(x + half, y + table_h, w - half, h - table_h)),
             ]
         }
-        View::Breakpoints => vec![(Pane::Breakpoints, body)],
+        View::Project => {
+            let lw = pct(w, 55);
+            vec![(Pane::Breakpoints, Rect::new(x, y, lw, h)), (Pane::Config, Rect::new(x + lw, y, w - lw, h))]
+        }
     }
 }
 
@@ -178,7 +183,7 @@ fn topbar(p: &mut Painter<'_>, app: &App, area: Rect) {
     for (index, tab) in tabs.iter().enumerate().take(fit.shown.end).skip(fit.shown.start) {
         let start = x;
         let active = index == app.tabs.active_index();
-        let name = format!(" {}", paint::truncate(&tab.name, fit.name));
+        let name = format!(" {}", paint::truncate_middle(&tab.name, fit.name));
         x = p.text(x, y, &name, if active { bold(WHITE) } else { fg(FAINT) }, area.right());
         if let Some((glyph, color)) = tab.glyph {
             x = p.text(x, y, &format!(" {glyph}"), bold(color), area.right());
@@ -381,18 +386,24 @@ fn idle(tab: &Tab) -> Vec<Seg<'static>> {
         ];
     };
     let configs = project.configurations.len();
-    vec![
+    let start = match tab.selected_configuration() {
+        Some(config) => vec![seg("S", bold(KEY)), seg(format!(" starts {}   ", config.name()), fg(FAINT))],
+        None => vec![seg("g p", bold(KEY)), seg(" adds one   ", fg(FAINT))],
+    };
+    let mut segs = vec![
         seg("no session", fg(DIM)),
         sep(),
         seg(format!("{configs} launch configuration{}", if configs == 1 { "" } else { "s" }), fg(FAINT)),
         sep(),
-        seg("S", bold(KEY)),
-        seg(" start one   ", fg(FAINT)),
+    ];
+    segs.extend(start);
+    segs.extend([
         seg("f", bold(KEY)),
         seg(" find a file   ", fg(FAINT)),
         seg("b", bold(KEY)),
         seg(" breakpoints work before starting", fg(FAINT)),
-    ]
+    ]);
+    segs
 }
 
 fn status(p: &mut Painter<'_>, app: &App, area: Rect) {
@@ -444,6 +455,14 @@ fn hints(p: &mut Painter<'_>, app: &App, area: Rect) {
             ("bp delete", "delete"),
         ],
         Pane::Output => &[("clear output", "clear")],
+        Pane::Config => &[
+            ("config start", "start"),
+            ("open", "edit"),
+            ("config add", "add"),
+            ("config map", "map"),
+            ("config unset", "unset"),
+            ("config delete", "delete"),
+        ],
         Pane::Events => &[],
         Pane::History => &[("open", "open stop"), ("right", "column")],
     };

@@ -122,16 +122,13 @@ fn main() -> Result<()> {
             }
         }
         let mut first_tab = None;
-        let mut errors = Vec::new();
         for project in projects {
-            errors.extend(project.errors.iter().cloned());
-            first_tab.get_or_insert(app.open(project));
+            let (id, outcome) = app.open(project);
+            first_tab.get_or_insert(id);
+            app.report(outcome);
         }
         if let Some(id) = first_tab {
             app.tabs.activate(id);
-        }
-        if let Some(error) = errors.first() {
-            app.execute_error(error);
         }
         match &cli.script {
             Some(script) => script::run(app, rx, start, script, parse_size(&cli.size)?).await,

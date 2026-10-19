@@ -1,7 +1,7 @@
 use ratatui::layout::Rect;
 use tuitor_core::config::home_relative;
 
-use super::paint::{Painter, Panel, Seg, seg};
+use super::paint::{Painter, Panel, Seg, seg, truncate_left};
 use super::theme::*;
 use crate::app::App;
 use crate::command::BpScope;
@@ -54,7 +54,8 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool)
                 let name = owner.name();
                 let x = p.text(inner.x + 1, y, &name, bold(if *id == current { WHITE } else { DIM }), inner.right());
                 let dir = owner.project.as_ref().map(|p| home_relative(&p.dir)).unwrap_or_default();
-                p.text(x + 2, y, &dir, fg(GHOST), inner.right());
+                let room = usize::from(inner.right().saturating_sub(x + 3));
+                p.text(x + 2, y, &truncate_left(&dir, room), fg(GHOST), inner.right());
             }
             BpRow::Breakpoint { tab: owner, id } => {
                 let Some(owner_tab) = app.tabs.get(*owner) else { continue };
