@@ -23,6 +23,9 @@ tuitor configs                 # what tuitor sees: configurations and adapters
 
 `-C <dir>` sets the workspace (default: current directory).
 
+[`examples/`](examples) has a small program for PHP, Rust and C, each with a
+launch.json and a walk through a first session.
+
 ### PHP in a container
 
 Xdebug connects *out* of the container to tuitor on the host:
@@ -90,26 +93,73 @@ enter = "open"
 
 ## Adapters
 
-Built in (looked up on `PATH` and in Mason's `~/.local/share/nvim/mason/bin`):
+| type | runs | debugs |
+|---|---|---|
+| `php` | `node <adapters>/vscode-php-debug/extension/out/phpDebug.js` | PHP with Xdebug |
+| `gdb` | `gdb --interpreter=dap` | C, C++, Rust, Zig |
+| `lldb-dap` | `lldb-dap` | C, C++, Rust, Zig |
+| `lldb` | `<adapters>/codelldb/extension/adapter/codelldb --port ${port}` (CodeLLDB) | C, C++, Rust, Zig |
 
-| type | adapter |
-|---|---|
-| `php` | `php-debug-adapter` (vscode-php-debug; `:MasonInstall php-debug-adapter`) |
-| `gdb` | `gdb --interpreter=dap` (gdb ≥ 14) |
-| `lldb-dap` | `lldb-dap` |
-| `lldb` | CodeLLDB (`codelldb --port ${port}`) |
+Programs are looked up on `PATH` only. Adapters released as VS Code extensions
+are unpacked from their official `.vsix` into `<adapters>`:
+`${XDG_DATA_HOME:-~/.local/share}/tuitor/adapters` (macOS:
+`~/Library/Application Support/tuitor/adapters`). `tuitor configs` shows what
+is installed and what is missing.
 
 Override or add in `~/.config/tuitor/adapters.toml`:
 
 ```toml
 [php]
 command = "node"
-args = ["/opt/vscode-php-debug/out/phpDebug.js"]
+args = ["/opt/vscode-php-debug/extension/out/phpDebug.js"]
 extensions = ["php"]        # breakpoints in these files go to this adapter
 ```
 
 `transport` is `stdio` (default), `server` (adapter listens on `${port}`) or
 `tcp` (connect to `address`).
+
+### Installing adapters
+
+Each from where its authors publish it.
+
+**PHP** needs three things:
+
+- Xdebug 3, loaded by PHP (`php -v` mentions it): your distribution's package
+  (`apt-get install php-xdebug`, `dnf install php-xdebug`, `pacman -S xdebug`)
+  or `pie install xdebug/xdebug`; see [xdebug.org/docs/install](https://xdebug.org/docs/install).
+- Node.js 20.18 or newer: [nodejs.org/en/download](https://nodejs.org/en/download)
+  or your distribution's `nodejs`.
+- vscode-php-debug, from its [GitHub releases](https://github.com/xdebug/vscode-php-debug/releases):
+
+  ```sh
+  v=1.40.2    # or a newer release
+  dir="${XDG_DATA_HOME:-$HOME/.local/share}/tuitor/adapters/vscode-php-debug"
+  rm -rf "$dir" && mkdir -p "$dir"
+  curl -fL -o "$dir/php-debug.vsix" "https://github.com/xdebug/vscode-php-debug/releases/download/v$v/php-debug-$v.vsix"
+  unzip -q "$dir/php-debug.vsix" -d "$dir" && rm "$dir/php-debug.vsix"
+  ```
+
+**gdb** 14 or newer, built with Python (its DAP server is written in Python):
+your distribution's `gdb` (Debian 13, Ubuntu 24.04 and Arch qualify; Debian 12's
+13.1 does not) or the [GNU release](https://www.sourceware.org/gdb/download/).
+
+**lldb-dap** comes with LLDB: `pacman -S lldb`, or the `LLVM-<version>-<platform>`
+archive from [LLVM's releases](https://github.com/llvm/llvm-project/releases)
+(`bin/lldb-dap`). Debian and Ubuntu install it as `lldb-dap-NN` with
+`lldb-NN`; link it as `lldb-dap` into a directory on `PATH`.
+
+**CodeLLDB** brings its own LLDB. Take the `.vsix` for your platform
+(`codelldb-linux-x64`, `-linux-arm64`, `-darwin-arm64`, …) from its
+[GitHub releases](https://github.com/vadimcn/codelldb/releases):
+
+```sh
+dir="${XDG_DATA_HOME:-$HOME/.local/share}/tuitor/adapters/codelldb"
+rm -rf "$dir" && mkdir -p "$dir"
+curl -fL -o "$dir/codelldb.vsix" https://github.com/vadimcn/codelldb/releases/latest/download/codelldb-linux-x64.vsix
+unzip -q "$dir/codelldb.vsix" -d "$dir" && rm "$dir/codelldb.vsix"
+```
+
+On macOS, use `~/Library/Application Support/tuitor/adapters/…` as `dir`.
 
 Breakpoints and watches are remembered per workspace in
 `~/.local/state/tuitor/`, outside the repository. Logs:
@@ -131,7 +181,7 @@ applied in one place (`App::apply`).
 ```sh
 cargo test --workspace                       # includes a real gdb session
 TUITOR_PHP=/path/to/php-with-xdebug \
-TUITOR_PHP_ADAPTER=/path/to/phpDebug.js \
+TUITOR_PHP_ADAPTER=~/.local/share/tuitor/adapters/vscode-php-debug/extension/out/phpDebug.js \
 cargo test -p tuitor-core --test php -- --ignored
 ```
 

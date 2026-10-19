@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/tuitor-dap", "crates/tuitor-core", "crates/tuitor"]
+# Each example is a project of its own, built from its directory.
+exclude = ["examples"]
 
 [workspace.package]
 version = "0.1.0"

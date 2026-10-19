@@ -1,0 +1,20 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Listen for Xdebug",
+      "type": "php",
+      "request": "launch",
+      "port": 9003
+    },
+    {
+      // For compose.yaml. Only here: a mapping also rewrites local breakpoints, so PHP run
+      // outside the container would no longer stop.
+      "name": "Listen for Xdebug in Docker",
+      "type": "php",
+      "request": "launch",
+      "port": 9003,
+      "pathMappings": { "/app": "${workspaceFolder}" }
+    }
+  ]
+}

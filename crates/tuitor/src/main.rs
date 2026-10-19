@@ -14,7 +14,9 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use serde_json::{Map, Value};
-use tuitor_core::config::{Adapters, LaunchConfig, RequestKind, Variables, load_launch_json};
+use tuitor_core::config::{
+    Adapters, INSTALL_HELP, LaunchConfig, RequestKind, TransportKind, Variables, load_launch_json,
+};
 use tuitor_core::{Engine, EngineOptions, persist};
 
 use crate::app::App;
@@ -91,7 +93,7 @@ fn main() -> Result<()> {
     };
 
     let start = match &cli.command {
-        Some(Command::Configs) => return print_configs(&configs, &adapters, &launch_json, config_error),
+        Some(Command::Configs) => return print_configs(&configs, &adapters, &workspace, &launch_json, config_error),
         Some(Command::Exec { adapter, program, args }) => Some(exec_config(adapter, program, args, &workspace)?),
         Some(Command::Listen { port, maps }) => Some(listen_config(*port, maps, &workspace)?),
         None => match &cli.config {
@@ -159,6 +161,7 @@ fn listen_config(port: u16, maps: &[String], workspace: &std::path::Path) -> Res
 fn print_configs(
     configs: &[LaunchConfig],
     adapters: &Adapters,
+    workspace: &std::path::Path,
     launch_json: &std::path::Path,
     error: Option<String>,
 ) -> Result<()> {
@@ -174,11 +177,24 @@ fn print_configs(
         println!("  {:<32} type={}{known}", config.name, config.adapter);
     }
     println!("\nadapters:");
+    let mut missing = false;
     for spec in adapters.all() {
-        let found = tuitor_core::config::resolve_program(&spec.command)
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "not found".into());
-        println!("  {:<10} {} {}  → {found}", spec.name, spec.command, spec.args.join(" "));
+        let command = std::iter::once(&spec.command).chain(&spec.args).map(String::as_str).collect::<Vec<_>>();
+        print!("  {:<10} {}", spec.name, command.join(" "));
+        match spec.transport {
+            TransportKind::Tcp => println!("  → {}", spec.address.as_deref().unwrap_or("(no address)")),
+            TransportKind::Stdio | TransportKind::Server => match spec.locate(workspace) {
+                Ok(program) => println!("  → {}", program.display()),
+                // Paths can be long; the reason gets a line of its own.
+                Err(what) => {
+                    missing = true;
+                    println!("\n  {:<10} not installed: {what}", "");
+                }
+            },
+        }
+    }
+    if missing {
+        println!("\nTo install a missing adapter, {INSTALL_HELP}.");
     }
     Ok(())
 }

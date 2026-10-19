@@ -1,0 +1,14 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "orders",
+      "type": "gdb",
+      "request": "launch",
+      "program": "${workspaceFolder}/target/debug/orders",
+      "cwd": "${workspaceFolder}",
+      // Stop at the start of main, so there is time to set breakpoints on the first run.
+      "stopAtBeginningOfMainSubprogram": true
+    }
+  ]
+}

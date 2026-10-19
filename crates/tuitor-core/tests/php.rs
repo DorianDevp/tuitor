@@ -1,10 +1,10 @@
 //! End-to-end with vscode-php-debug listening for Xdebug, the way PHP in a
 //! container connects back to the host. Needs two environment variables, so it
-//! is ignored by default:
+//! is ignored by default (the adapter path is where README's install steps put it):
 //!
 //! ```sh
 //! TUITOR_PHP=/path/to/php-with-xdebug \
-//! TUITOR_PHP_ADAPTER=/path/to/vscode-php-debug/out/phpDebug.js \
+//! TUITOR_PHP_ADAPTER=~/.local/share/tuitor/adapters/vscode-php-debug/extension/out/phpDebug.js \
 //! cargo test -p tuitor-core --test php -- --ignored
 //! ```
 

@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Result, anyhow, bail};
 use chrono::Local;
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -22,7 +22,7 @@ use tuitor_dap::{AdapterCommand, Client, Event, Incoming, Transport};
 
 use crate::breakpoints::{Breakpoint, BreakpointId, Breakpoints, Toggle};
 use crate::capture::{self, Capture, canonical, short_error};
-use crate::config::{AdapterSpec, Adapters, LaunchConfig, RequestKind, TransportKind, resolve_program};
+use crate::config::{AdapterSpec, Adapters, INSTALL_HELP, LaunchConfig, RequestKind, TransportKind};
 use crate::log::{Bounded, EventLine, OutputKind, OutputLine};
 use crate::persist::{self, Persisted};
 use crate::session::{ExceptionFilter, PendingStop, Session, SessionId, SessionState};
@@ -795,7 +795,11 @@ impl Engine {
         let vars = match result {
             Ok(vars) => vars,
             Err(err) => {
-                return self.notice(Some(sid), Level::Warn, format!("expand {}: {}", path.join("."), short_error(&err)));
+                return self.notice(
+                    Some(sid),
+                    Level::Warn,
+                    format!("expand {}: {}", path.join("."), short_error(&err)),
+                );
             }
         };
         let Some(snapshot) = self.session_mut(sid).ok().and_then(|s| s.snapshot_mut(number)) else { return };
@@ -928,9 +932,9 @@ impl Engine {
 
     fn transport(&self, spec: &AdapterSpec) -> Result<Transport> {
         let command = || -> Result<AdapterCommand> {
-            let program = resolve_program(&spec.command).with_context(|| {
-                format!("adapter `{}`: `{}` is not on PATH or in Mason's bin directory", spec.name, spec.command)
-            })?;
+            let program = spec
+                .locate(&self.workspace)
+                .map_err(|missing| anyhow!("adapter `{}`: {missing}; {INSTALL_HELP}", spec.name))?;
             Ok(AdapterCommand {
                 program: program.display().to_string(),
                 args: spec.args.clone(),
