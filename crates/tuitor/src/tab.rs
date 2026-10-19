@@ -256,10 +256,6 @@ impl Tab {
     pub fn name(&self) -> String {
         self.project.as_ref().map_or_else(|| "new".to_owned(), Project::name)
     }
-
-    pub fn has_live_session(&self) -> bool {
-        self.engine.sessions().iter().any(|s| s.is_alive())
-    }
 }
 
 #[cfg(test)]

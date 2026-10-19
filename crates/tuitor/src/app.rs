@@ -871,15 +871,17 @@ impl App {
         Ok(String::new())
     }
 
+    /// Moves to another session; a parent and the children it runs its program in are one.
     fn cycle_session(&mut self, delta: isize) -> Outcome {
         let tab = self.tab_mut();
-        let ids: Vec<SessionId> = tab.engine.sessions().iter().map(|s| s.id).collect();
+        let ids: Vec<SessionId> = tab.sessions().map(|s| s.id).collect();
         if ids.is_empty() {
             return Err("no sessions".into());
         }
-        let index = tab.ui.session.and_then(|sid| ids.iter().position(|i| *i == sid)).unwrap_or(0);
+        let current = tab.ui.session.map(|sid| tab.engine.root(sid));
+        let index = current.and_then(|root| ids.iter().position(|i| *i == root)).unwrap_or(0);
         let next = ids[(index as isize + delta).rem_euclid(ids.len() as isize) as usize];
-        tab.ui.session = Some(next);
+        tab.ui.session = Some(tab.shown(next));
         tab.jump_to_execution();
         Ok(tab.engine.session(next).map(|s| s.name.clone()).unwrap_or_default())
     }
@@ -897,10 +899,13 @@ impl App {
     fn close_tab(&mut self) -> Outcome {
         let id = self.tabs.active_id();
         let name = self.tab().name();
-        if self.tab().has_live_session() && self.ui.closing != Some(id) {
+        let live = self.tab().live_sessions();
+        if live > 0 && self.ui.closing != Some(id) {
             self.ui.closing = Some(id);
             let again = self.keymap.key_for(self.focus().name(), "tab close").unwrap_or_else(|| "/tab close".into());
-            return Err(Refusal::warn(format!("{name} has a live session: {again} again stops it and closes the tab")));
+            let (sessions, them) =
+                if live == 1 { ("a live session".into(), "it") } else { (format!("{live} live sessions"), "them") };
+            return Err(Refusal::warn(format!("{name} has {sessions}: {again} again stops {them} and closes the tab")));
         }
         self.ui.closing = None;
         let adapters = self.adapters.clone();
@@ -1158,7 +1163,8 @@ impl Tab {
     }
 
     /// Follows new stops: the session that stopped becomes active unless the active one is
-    /// stopped too, and SOURCE goes to where it stopped.
+    /// stopped too, and SOURCE goes to where it stopped. A session started from a
+    /// configuration gives way to the child its adapter runs the program in, once there is one.
     pub fn follow_stops(&mut self) {
         let mut newest: Option<SessionId> = None;
         for session in self.engine.sessions() {
@@ -1182,6 +1188,9 @@ impl Tab {
                 self.jump_to_execution();
             }
         }
+        // The part that runs the program is shown. Its stops were followed above, so SOURCE
+        // has nothing new to go to.
+        self.ui.session = self.ui.session.map(|sid| self.shown(sid));
     }
 }
 

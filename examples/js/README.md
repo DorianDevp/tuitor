@@ -19,9 +19,9 @@ tuitor (`./run.sh --script demo.tsc`).
 By hand: `tuitor` in this directory.
 
 js-debug starts Node and then asks tuitor for a second session, in which the
-program runs: the top bar shows `js·js`, the launch, and
-`js·js › orders.js [pid]`, the program. Stops happen in the second one, and
-breakpoints go there.
+program runs: stops happen there, and breakpoints go there. tuitor shows the
+two as one session, `orders › orders.js [pid]` on the context line: the
+configuration and the program.
 
 Put a breakpoint on line 50, `total += lineTotal(line);`: press `f`, type
 `orders.js:50`, press `ctrl-b`, then `esc` to close the finder. Then try:
