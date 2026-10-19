@@ -2,6 +2,8 @@
 //! started from a configuration asks for a child with `startDebugging`, and the child
 //! connects to the same address. Runs without Node, unlike `tests/js.rs`.
 
+mod common;
+
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -12,6 +14,8 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tuitor_core::config::{Adapters, LaunchConfig, RequestKind};
 use tuitor_core::session::SessionState;
 use tuitor_core::{Engine, EngineMsg, EngineOptions, Level};
+
+use common::TestDir;
 
 /// What the fake adapter received, by connection: 0 is the parent, 1 the child.
 type Received = (usize, Value);
@@ -136,14 +140,13 @@ fn response<'a>(log: &'a [Received], command: &str) -> Option<&'a Value> {
 }
 
 /// A directory with an empty `orders.js`, and adapters with `fake` for it at `address`.
-fn workspace(name: &str, address: &str) -> (PathBuf, PathBuf, Adapters) {
-    let dir = std::env::temp_dir().join(format!("tuitor-{name}-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("tmp dir");
-    let file = dir.join("adapters.toml");
+fn workspace(name: &str, address: &str) -> (TestDir, PathBuf, Adapters) {
+    let dir = TestDir::new(name);
+    let file = dir.path().join("adapters.toml");
     std::fs::write(&file, format!("[fake]\ntransport = \"tcp\"\naddress = {address:?}\nextensions = [\"js\"]\n"))
         .expect("adapters.toml");
     let adapters = Adapters::load(Some(&file)).expect("adapters");
-    let script = dir.join("orders.js");
+    let script = dir.path().join("orders.js");
     std::fs::write(&script, "").expect("script");
     let script = std::fs::canonicalize(script).expect("script path");
     (dir, script, adapters)
@@ -153,7 +156,8 @@ fn workspace(name: &str, address: &str) -> (PathBuf, PathBuf, Adapters) {
 async fn child_sessions_connect_to_the_same_adapter() {
     let (address, mut adapter) = fake_adapter().await;
     let (dir, script, adapters) = workspace("start-debugging", &address);
-    let (mut engine, mut rx) = Engine::new(EngineOptions { adapters, workspace: dir.clone(), state_file: None });
+    let (mut engine, mut rx) =
+        Engine::new(EngineOptions { adapters, workspace: dir.path().to_path_buf(), state_file: None });
     engine.toggle_breakpoint(&script, 3);
     let config = LaunchConfig::adhoc("orders", "fake", RequestKind::Launch, Default::default());
     let parent = engine.start(config).expect("start");
@@ -187,15 +191,14 @@ async fn child_sessions_connect_to_the_same_adapter() {
     pump(&mut engine, &mut rx, &mut adapter, &mut log, |e, _| all_ended(e)).await;
     assert!(requests(&log, 0, "disconnect").next().is_some(), "the parent was not stopped");
     assert!(requests(&log, 1, "disconnect").next().is_some(), "the child was not ended");
-
-    std::fs::remove_dir_all(dir).ok();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_request_for_a_terminal_ends_the_session_and_says_what_to_change() {
     let (address, mut adapter) = fake_adapter().await;
     let (dir, _, adapters) = workspace("run-in-terminal", &address);
-    let (mut engine, mut rx) = Engine::new(EngineOptions { adapters, workspace: dir.clone(), state_file: None });
+    let (mut engine, mut rx) =
+        Engine::new(EngineOptions { adapters, workspace: dir.path().to_path_buf(), state_file: None });
     let Value::Object(args) = json!({ "console": "integratedTerminal" }) else { unreachable!() };
     let sid = engine.start(LaunchConfig::adhoc("orders", "fake", RequestKind::Launch, args)).expect("start");
     let mut log = Vec::new();
@@ -214,15 +217,14 @@ async fn a_request_for_a_terminal_ends_the_session_and_says_what_to_change() {
     let last = notices.last().expect("a notice");
     assert_eq!(last.level, Level::Error);
     assert!(last.text.contains("\"console\": \"internalConsole\""), "{notices:?}");
-
-    std::fs::remove_dir_all(dir).ok();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_restarted_session_keeps_its_name() {
     let (address, mut adapter) = fake_adapter().await;
     let (dir, _, adapters) = workspace("restart", &address);
-    let (mut engine, mut rx) = Engine::new(EngineOptions { adapters, workspace: dir.clone(), state_file: None });
+    let (mut engine, mut rx) =
+        Engine::new(EngineOptions { adapters, workspace: dir.path().to_path_buf(), state_file: None });
     let config = LaunchConfig::adhoc("orders", "fake", RequestKind::Launch, Default::default());
     let first = engine.start(config.clone()).expect("start");
     let mut log = Vec::new();
@@ -240,6 +242,4 @@ async fn a_restarted_session_keeps_its_name() {
     // Sessions that run side by side are told apart.
     let third = engine.start(config).expect("start");
     assert_eq!(name(&engine, third), format!("{}#2", name(&engine, second)));
-
-    std::fs::remove_dir_all(dir).ok();
 }

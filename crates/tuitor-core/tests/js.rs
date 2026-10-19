@@ -7,6 +7,8 @@
 //! cargo test -p tuitor-core --test js -- --ignored
 //! ```
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -17,6 +19,8 @@ use tuitor_core::log::OutputKind;
 use tuitor_core::session::{Session, SessionId};
 use tuitor_core::snapshot::{Change, diff};
 use tuitor_core::{Engine, EngineMsg, EngineOptions, Step};
+
+use common::TestDir;
 
 const BREAK_LINE: u32 = 50; // `total += lineTotal(line);`
 
@@ -46,19 +50,18 @@ fn child_stops(engine: &Engine, parent: SessionId) -> usize {
 }
 
 /// A directory with the Node example and an adapters.toml that runs js-debug for `adapter`.
-fn workspace(name: &str, adapter: &str) -> (PathBuf, PathBuf, Adapters) {
+fn workspace(name: &str, adapter: &str) -> (TestDir, PathBuf, Adapters) {
     let server = std::env::var("TUITOR_JS_ADAPTER").expect("TUITOR_JS_ADAPTER");
-    let dir = std::env::temp_dir().join(format!("tuitor-{name}-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("tmp dir");
+    let dir = TestDir::new(name);
     let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/js/orders.js");
-    std::fs::copy(&example, dir.join("orders.js")).expect("copy");
-    let script = std::fs::canonicalize(dir.join("orders.js")).expect("script path");
+    std::fs::copy(&example, dir.path().join("orders.js")).expect("copy");
+    let script = std::fs::canonicalize(dir.path().join("orders.js")).expect("script path");
 
     // The built-in entry with the server from the environment.
     let builtin = Adapters::default();
     let spec = builtin.get(adapter).expect("built-in adapter");
     let launch_type = spec.launch_type.as_deref().map(|t| format!("launch_type = {t:?}\n")).unwrap_or_default();
-    let file = dir.join("adapters.toml");
+    let file = dir.path().join("adapters.toml");
     let toml = format!(
         "[{adapter}]\ntransport = \"server\"\ncommand = \"node\"\nargs = [{server:?}, \"${{port}}\", \"127.0.0.1\"]\n\
          extensions = {:?}\n{launch_type}",
@@ -72,13 +75,14 @@ fn workspace(name: &str, adapter: &str) -> (PathBuf, PathBuf, Adapters) {
 #[ignore = "needs TUITOR_JS_ADAPTER"]
 async fn node_runs_in_a_child_session() {
     let (dir, script, adapters) = workspace("js", "pwa-node");
-    let (mut engine, mut rx) = Engine::new(EngineOptions { adapters, workspace: dir.clone(), state_file: None });
+    let (mut engine, mut rx) =
+        Engine::new(EngineOptions { adapters, workspace: dir.path().to_path_buf(), state_file: None });
     engine.toggle_breakpoint(&script, BREAK_LINE);
     engine.add_watch("total");
 
     let Value::Object(args) = json!({
         "program": script.display().to_string(),
-        "cwd": dir.display().to_string(),
+        "cwd": dir.path().display().to_string(),
         "console": "internalConsole",
     }) else {
         unreachable!()
@@ -128,15 +132,14 @@ async fn node_runs_in_a_child_session() {
     // With the adapter gone, so is its temporary directory.
     engine.shutdown().await;
     assert!(!tmp.exists(), "{} is left over", tmp.display());
-
-    std::fs::remove_dir_all(dir).ok();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "needs TUITOR_JS_ADAPTER"]
 async fn stopping_a_child_stops_the_program() {
     let (dir, script, adapters) = workspace("js-stop", "node");
-    let (mut engine, mut rx) = Engine::new(EngineOptions { adapters, workspace: dir.clone(), state_file: None });
+    let (mut engine, mut rx) =
+        Engine::new(EngineOptions { adapters, workspace: dir.path().to_path_buf(), state_file: None });
     // `node`, as VS Code's own configurations say; tuitor sends it as `pwa-node`.
     let Value::Object(args) = json!({ "program": script.display().to_string(), "stopOnEntry": true }) else {
         unreachable!()
@@ -148,6 +151,4 @@ async fn stopping_a_child_stops_the_program() {
     engine.stop(cid).expect("stop");
     pump(&mut engine, &mut rx, |e| e.sessions().iter().all(|s| !s.is_alive())).await;
     assert!(!engine.output().iter().any(|l| l.text.contains("revenue")), "the program ran on after stop");
-
-    std::fs::remove_dir_all(dir).ok();
 }

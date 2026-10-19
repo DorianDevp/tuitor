@@ -1,6 +1,8 @@
 //! End-to-end: the engine drives a real adapter (`gdb --interpreter=dap`) through
 //! a breakpoint, a step and a delta. Skipped when gdb is not installed.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -12,6 +14,8 @@ use tuitor_core::log::OutputKind;
 use tuitor_core::session::{SessionId, SessionState};
 use tuitor_core::snapshot::{Change, diff};
 use tuitor_core::{Engine, EngineMsg, EngineOptions, Step};
+
+use common::TestDir;
 
 const BREAK_LINE: u32 = 4; // `sum += price;`
 
@@ -62,8 +66,8 @@ async fn breakpoint_step_and_delta_with_gdb() {
         eprintln!("gdb not installed; skipping");
         return;
     }
-    let dir = std::env::temp_dir().join(format!("tuitor-gdb-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("tmp dir");
+    let tmp = TestDir::new("gdb");
+    let dir = tmp.path().to_path_buf();
     let bin = build_fixture(&dir);
     let source = std::fs::canonicalize(dir.join("sum.rs")).expect("source path");
 
@@ -122,6 +126,4 @@ async fn breakpoint_step_and_delta_with_gdb() {
     let kind = |text: &str| engine.output().iter().find(|l| l.text.contains(text)).map(|l| l.kind);
     assert_eq!(kind("total=60"), Some(OutputKind::Stdout), "program output missing");
     assert!(matches!(kind("pending"), None | Some(OutputKind::Console)), "gdb's own output shown as the program's");
-
-    std::fs::remove_dir_all(dir).ok();
 }
