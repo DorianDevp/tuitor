@@ -1,3 +1,9 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/logo_white.svg">
+  <source media="(prefers-color-scheme: light)" srcset="assets/logo_black.svg">
+  <img alt="tuitor" src="assets/logo_black.svg" width="442">
+</picture>
+
 # tuitor
 
 A terminal debugger built like a trading terminal: the whole state of a stopped
