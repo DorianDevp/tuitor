@@ -38,5 +38,5 @@ Put a breakpoint on line 50, `total += lineTotal(line);`: press `f`, type
 
 What the program prints shows in OUTPUT: `"console": "internalConsole"` in
 `.vscode/launch.json` has js-debug send it there. `"integratedTerminal"`, which
-VS Code offers too, would ask tuitor for a terminal to run the program in,
-and tuitor has none to give.
+VS Code offers too, would ask tuitor for a terminal to run the program in;
+tuitor has none to give, so it would end the session and say so.

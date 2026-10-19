@@ -2,6 +2,7 @@
 //! started from a configuration asks for a child with `startDebugging`, and the child
 //! connects to the same address. Runs without Node, unlike `tests/js.rs`.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -10,7 +11,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tuitor_core::config::{Adapters, LaunchConfig, RequestKind};
 use tuitor_core::session::SessionState;
-use tuitor_core::{Engine, EngineMsg, EngineOptions};
+use tuitor_core::{Engine, EngineMsg, EngineOptions, Level};
 
 /// What the fake adapter received, by connection: 0 is the parent, 1 the child.
 type Received = (usize, Value);
@@ -39,8 +40,9 @@ async fn write_message(writer: &mut tokio::net::tcp::OwnedWriteHalf, message: Va
     writer.write_all(frame.as_bytes()).await.expect("write to tuitor");
 }
 
-/// Answers every request with success. The parent asks for a child and for a terminal
-/// once launched, and ends when told to disconnect, like js-debug.
+/// Answers every request with success. Once launched, the parent asks for a child, or for
+/// a terminal when the configuration wants the program in one, and ends when told to
+/// disconnect, like js-debug.
 async fn serve(conn: usize, stream: TcpStream, received: UnboundedSender<Received>) {
     let (read, mut write) = stream.into_split();
     let mut reader = BufReader::new(read);
@@ -73,14 +75,15 @@ async fn serve(conn: usize, stream: TcpStream, received: UnboundedSender<Receive
                 write_message(&mut write, json!({ "seq": next(), "type": "event", "event": "initialized" })).await;
             }
             (0, "launch") => {
-                let configuration = json!({ "type": "pwa-node", "name": "orders.js [42]", "__pendingTargetId": "t1" });
-                let start = json!({ "request": "launch", "configuration": configuration });
-                let terminal = json!({ "kind": "integrated", "cwd": "/", "args": ["node", "orders.js"] });
-                for (command, arguments) in [("startDebugging", start), ("runInTerminal", terminal)] {
-                    let request =
-                        json!({ "seq": next(), "type": "request", "command": command, "arguments": arguments });
-                    write_message(&mut write, request).await;
-                }
+                let (command, arguments) = if message["arguments"]["console"] == "integratedTerminal" {
+                    ("runInTerminal", json!({ "kind": "integrated", "cwd": "/", "args": ["node", "orders.js"] }))
+                } else {
+                    let configuration =
+                        json!({ "type": "pwa-node", "name": "orders.js [42]", "__pendingTargetId": "t1" });
+                    ("startDebugging", json!({ "request": "launch", "configuration": configuration }))
+                };
+                let request = json!({ "seq": next(), "type": "request", "command": command, "arguments": arguments });
+                write_message(&mut write, request).await;
             }
             (_, "disconnect") => {
                 write_message(&mut write, json!({ "seq": next(), "type": "event", "event": "terminated" })).await;
@@ -132,10 +135,9 @@ fn response<'a>(log: &'a [Received], command: &str) -> Option<&'a Value> {
     log.iter().map(|(_, m)| m).find(|m| m["type"] == "response" && m["command"] == command)
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn child_sessions_connect_to_the_same_adapter() {
-    let (address, mut adapter) = fake_adapter().await;
-    let dir = std::env::temp_dir().join(format!("tuitor-start-debugging-{}", std::process::id()));
+/// A directory with an empty `orders.js`, and adapters with `fake` for it at `address`.
+fn workspace(name: &str, address: &str) -> (PathBuf, PathBuf, Adapters) {
+    let dir = std::env::temp_dir().join(format!("tuitor-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("tmp dir");
     let file = dir.join("adapters.toml");
     std::fs::write(&file, format!("[fake]\ntransport = \"tcp\"\naddress = {address:?}\nextensions = [\"js\"]\n"))
@@ -144,7 +146,13 @@ async fn child_sessions_connect_to_the_same_adapter() {
     let script = dir.join("orders.js");
     std::fs::write(&script, "").expect("script");
     let script = std::fs::canonicalize(script).expect("script path");
+    (dir, script, adapters)
+}
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn child_sessions_connect_to_the_same_adapter() {
+    let (address, mut adapter) = fake_adapter().await;
+    let (dir, script, adapters) = workspace("start-debugging", &address);
     let (mut engine, mut rx) = Engine::new(EngineOptions { adapters, workspace: dir.clone(), state_file: None });
     engine.toggle_breakpoint(&script, 3);
     let config = LaunchConfig::adhoc("orders", "fake", RequestKind::Launch, Default::default());
@@ -153,8 +161,7 @@ async fn child_sessions_connect_to_the_same_adapter() {
 
     // The child sends back the configuration the adapter made up and is configured on its own.
     let child_configured = |log: &[Received]| requests(log, 1, "configurationDone").next().is_some();
-    let terminal_refused = |log: &[Received]| response(log, "runInTerminal").is_some();
-    pump(&mut engine, &mut rx, &mut adapter, &mut log, |_, log| child_configured(log) && terminal_refused(log)).await;
+    pump(&mut engine, &mut rx, &mut adapter, &mut log, |_, log| child_configured(log)).await;
     let started = response(&log, "startDebugging").expect("startDebugging answered");
     assert_eq!(started["success"], true);
     let launch = requests(&log, 1, "launch").next().expect("child launch");
@@ -164,11 +171,6 @@ async fn child_sessions_connect_to_the_same_adapter() {
     assert_eq!(child.name, format!("{} › orders.js [42]", engine.session(parent).expect("parent").name));
     let child_breakpoints = requests(&log, 1, "setBreakpoints").next().expect("child breakpoints");
     assert_eq!(child_breakpoints["arguments"]["breakpoints"], json!([{ "line": 3 }]));
-
-    // Unknown reverse requests get a reason, not silence.
-    let refused = response(&log, "runInTerminal").expect("runInTerminal answered");
-    assert_eq!(refused["success"], false);
-    assert!(refused["message"].as_str().is_some_and(|m| m.contains("internalConsole")), "{refused}");
 
     // From now on breakpoints go to the child, where the code runs.
     let parent_sets = requests(&log, 0, "setBreakpoints").count();
@@ -185,6 +187,33 @@ async fn child_sessions_connect_to_the_same_adapter() {
     pump(&mut engine, &mut rx, &mut adapter, &mut log, |e, _| all_ended(e)).await;
     assert!(requests(&log, 0, "disconnect").next().is_some(), "the parent was not stopped");
     assert!(requests(&log, 1, "disconnect").next().is_some(), "the child was not ended");
+
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_request_for_a_terminal_ends_the_session_and_says_what_to_change() {
+    let (address, mut adapter) = fake_adapter().await;
+    let (dir, _, adapters) = workspace("run-in-terminal", &address);
+    let (mut engine, mut rx) = Engine::new(EngineOptions { adapters, workspace: dir.clone(), state_file: None });
+    let Value::Object(args) = json!({ "console": "integratedTerminal" }) else { unreachable!() };
+    let sid = engine.start(LaunchConfig::adhoc("orders", "fake", RequestKind::Launch, args)).expect("start");
+    let mut log = Vec::new();
+
+    // The adapter answered `launch` with success, and would wait for the terminal for good.
+    let closed = |e: &Engine| e.events().iter().any(|event| event.name == "closed");
+    pump(&mut engine, &mut rx, &mut adapter, &mut log, |e, log| response(log, "runInTerminal").is_some() && closed(e))
+        .await;
+    let refused = response(&log, "runInTerminal").expect("runInTerminal answered");
+    assert_eq!(refused["success"], false);
+    assert!(refused["message"].as_str().is_some_and(|m| m.contains("internalConsole")), "{refused}");
+    assert_eq!(engine.session(sid).map(|s| s.state), Some(SessionState::Exited));
+
+    // What to change is the last thing said, not buried under the connection closing.
+    let notices = engine.take_notices();
+    let last = notices.last().expect("a notice");
+    assert_eq!(last.level, Level::Error);
+    assert!(last.text.contains("\"console\": \"internalConsole\""), "{notices:?}");
 
     std::fs::remove_dir_all(dir).ok();
 }
