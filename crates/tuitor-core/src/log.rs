@@ -19,10 +19,13 @@ pub enum OutputKind {
 }
 
 impl OutputKind {
-    pub(crate) fn from_category(category: Option<&str>) -> Option<Self> {
+    /// `program_may_run`: the adapter has answered `configurationDone`. Before that the
+    /// debuggee cannot run, so stdout and stderr are the adapter's own text (gdb sends its
+    /// CLI messages, such as a pending breakpoint, as stdout).
+    pub(crate) fn from_category(category: Option<&str>, program_may_run: bool) -> Option<Self> {
         Some(match category {
-            Some("stdout") => Self::Stdout,
-            Some("stderr") => Self::Stderr,
+            Some("stdout") if program_may_run => Self::Stdout,
+            Some("stderr") if program_may_run => Self::Stderr,
             Some("telemetry") => return None,
             _ => Self::Console,
         })

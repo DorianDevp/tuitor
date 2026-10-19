@@ -86,12 +86,15 @@ impl AdapterCommand {
     }
 }
 
-/// Everything the adapter sends that is not a response to our own request.
+/// Everything the adapter sends that no caller of [`Client::call`] waits for. Protocol
+/// messages keep the order the adapter sent them in.
 #[derive(Debug)]
 pub enum Incoming {
     Event(Event),
     /// Reverse request (`runInTerminal`, `startDebugging`); answer with [`Client::respond`].
     Request(RequestMessage),
+    /// Response to a request sent with [`Client::call_in_stream`].
+    Response(ResponseMessage),
     /// A line the adapter process wrote outside the protocol (stderr, or stdout for TCP adapters).
     Log(String),
     /// The connection is gone; no more messages will follow.
@@ -105,9 +108,16 @@ pub struct Client {
 
 struct Inner {
     out: mpsc::UnboundedSender<Bytes>,
-    pending: Mutex<HashMap<i64, oneshot::Sender<ResponseMessage>>>,
+    pending: Mutex<HashMap<i64, Reply>>,
     seq: AtomicI64,
     child: Mutex<Option<Child>>,
+}
+
+/// Where the response to a request goes.
+enum Reply {
+    Caller(oneshot::Sender<ResponseMessage>),
+    /// Into the [`Incoming`] stream, between the events sent before and after it.
+    Stream,
 }
 
 impl Client {
@@ -193,6 +203,13 @@ impl Client {
         Ok(Pending { command: R::COMMAND, rx, _body: PhantomData })
     }
 
+    /// Writes the request immediately, like [`Client::call`], but its response arrives as
+    /// [`Incoming::Response`], after the events the adapter sent before it. A response
+    /// awaited in another task can overtake those events on the way to the caller.
+    pub fn call_in_stream<R: Request>(&self, args: R::Arguments) -> Result<(), Error> {
+        self.send_request(R::COMMAND, serde_json::to_value(args)?, Reply::Stream)
+    }
+
     /// Sends a request with arbitrary arguments; fails on `success: false`.
     pub async fn request_raw(&self, command: &str, arguments: Value) -> Result<ResponseMessage, Error> {
         let response = self.start(command, arguments)?.await.map_err(|_| Error::Closed)?;
@@ -200,16 +217,21 @@ impl Client {
     }
 
     fn start(&self, command: &str, arguments: Value) -> Result<oneshot::Receiver<ResponseMessage>, Error> {
-        let seq = self.inner.seq.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
-        self.inner.pending().insert(seq, tx);
+        self.send_request(command, arguments, Reply::Caller(tx))?;
+        Ok(rx)
+    }
+
+    fn send_request(&self, command: &str, arguments: Value, reply: Reply) -> Result<(), Error> {
+        let seq = self.inner.seq.fetch_add(1, Ordering::Relaxed);
+        self.inner.pending().insert(seq, reply);
 
         let msg = ProtocolMessage::Request(RequestMessage { seq, command: command.to_owned(), arguments });
         if let Err(err) = self.send(&msg) {
             self.inner.pending().remove(&seq);
             return Err(err);
         }
-        Ok(rx)
+        Ok(())
     }
 
     /// Answers a reverse request received as [`Incoming::Request`].
@@ -241,7 +263,7 @@ impl Client {
 }
 
 impl Inner {
-    fn pending(&self) -> std::sync::MutexGuard<'_, HashMap<i64, oneshot::Sender<ResponseMessage>>> {
+    fn pending(&self) -> std::sync::MutexGuard<'_, HashMap<i64, Reply>> {
         self.pending.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
@@ -272,8 +294,15 @@ async fn read_loop<R>(
         match msg {
             ProtocolMessage::Response(response) => {
                 let Some(inner) = inner.upgrade() else { break };
-                if let Some(tx) = inner.pending().remove(&response.request_seq) {
-                    let _ = tx.send(response);
+                let reply = inner.pending().remove(&response.request_seq);
+                match reply {
+                    Some(Reply::Caller(tx)) => {
+                        let _ = tx.send(response);
+                    }
+                    Some(Reply::Stream) => {
+                        let _ = incoming.send(Incoming::Response(response));
+                    }
+                    None => {}
                 }
             }
             ProtocolMessage::Event(event) => match Event::try_from(event) {
@@ -374,7 +403,7 @@ async fn connect_with_retry(addr: &str) -> Result<TcpStream, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::requests::Threads;
+    use crate::requests::{ConfigurationDone, Threads};
     use crate::types::Empty;
 
     /// A fake adapter on the other end of an in-memory pipe.
@@ -417,6 +446,37 @@ mod tests {
         let threads = pending.await.expect("join").expect("threads");
         assert_eq!(threads.threads[0].id, 4);
         assert!(matches!(incoming.recv().await, Some(Incoming::Event(Event::Stopped(b))) if b.thread_id == Some(4)));
+    }
+
+    #[tokio::test]
+    async fn response_in_stream_keeps_its_place_among_events() {
+        let (client, mut incoming, peer) = fake_adapter().await;
+        let (peer_read, peer_write) = tokio::io::split(peer);
+        let mut peer_read = FramedRead::new(peer_read, DapCodec::default());
+        let mut peer_write = FramedWrite::new(peer_write, DapCodec::default());
+
+        client.call_in_stream::<ConfigurationDone>(Empty {}).expect("send");
+        let seq = reply(&mut peer_read).await["seq"].as_i64().expect("seq");
+        let output = |seq: i64, text: &str| {
+            let body = serde_json::json!({"category": "stdout", "output": text});
+            serde_json::json!({"seq": seq, "type": "event", "event": "output", "body": body})
+        };
+        let done = serde_json::json!({
+            "seq":2,"type":"response","request_seq":seq,"success":true,"command":"configurationDone"
+        });
+        for message in [output(1, "before"), done, output(3, "after")] {
+            peer_write.send(Bytes::from(message.to_string())).await.expect("send");
+        }
+
+        let mut order = Vec::new();
+        for _ in 0..3 {
+            order.push(match incoming.recv().await {
+                Some(Incoming::Event(Event::Output(body))) => body.output,
+                Some(Incoming::Response(response)) => response.command,
+                other => panic!("unexpected {other:?}"),
+            });
+        }
+        assert_eq!(order, ["before", "configurationDone", "after"]);
     }
 
     #[tokio::test]

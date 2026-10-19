@@ -64,6 +64,11 @@ pub struct Session {
     /// Partial output lines per kind, until their newline arrives.
     pub(crate) partial_output: HashMap<OutputKind, String>,
     pub(crate) configured: bool,
+    /// Requests sent by `configure` that the adapter has not answered; `configurationDone` waits for them.
+    pub(crate) configuration_unanswered: usize,
+    /// The adapter answered `configurationDone` (or does not support it). Until then the
+    /// debuggee cannot run, so output sent before is the adapter's own.
+    pub(crate) configuration_done: bool,
 }
 
 impl Session {
@@ -90,6 +95,8 @@ impl Session {
             pending_stop: None,
             partial_output: HashMap::new(),
             configured: false,
+            configuration_unanswered: 0,
+            configuration_done: false,
         }
     }
 

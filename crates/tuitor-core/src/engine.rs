@@ -10,6 +10,7 @@ use anyhow::{Result, anyhow, bail};
 use chrono::Local;
 use serde_json::Value;
 use tokio::sync::mpsc;
+use tuitor_dap::protocol::ResponseMessage;
 use tuitor_dap::requests::{
     Attach, ConfigurationDone, Continue, Disconnect, Initialize, Launch, Next, Pause, Request, SetBreakpoints,
     SetExceptionBreakpoints, StepIn, StepOut, Terminate, Threads, Variables,
@@ -474,14 +475,17 @@ impl Engine {
             Msg::Connected { sid, result } => self.on_connected(sid, result),
             Msg::Initialized { sid, result } => self.on_initialized(sid, result),
             Msg::Incoming { sid, incoming } => self.on_incoming(sid, incoming),
-            Msg::BreakpointsSet { sid, path, ids, result } => match result {
-                Ok(response) => self.breakpoints.bind(sid, &path, &ids, &response.breakpoints),
-                Err(err) => self.notice(
-                    Some(sid),
-                    Level::Warn,
-                    format!("breakpoints in {}: {}", file_name(&path), short_error(&err)),
-                ),
-            },
+            Msg::BreakpointsSet { sid, path, ids, result } => {
+                match result {
+                    Ok(response) => self.breakpoints.bind(sid, &path, &ids, &response.breakpoints),
+                    Err(err) => self.notice(
+                        Some(sid),
+                        Level::Warn,
+                        format!("breakpoints in {}: {}", file_name(&path), short_error(&err)),
+                    ),
+                }
+                self.configuration_answered(sid);
+            }
             Msg::Captured { sid, epoch, result } => self.on_captured(sid, epoch, result),
             Msg::Children { sid, number, path, result } => self.on_children(sid, number, &path, result),
             Msg::Watch { sid, number, expr, result } => {
@@ -507,6 +511,9 @@ impl Engine {
             Msg::Done { sid, command, result } => {
                 if let Err(err) = result {
                     self.notice(Some(sid), Level::Error, format!("{command}: {}", short_error(&err)));
+                }
+                if command == SetExceptionBreakpoints::COMMAND {
+                    self.configuration_answered(sid);
                 }
             }
         }
@@ -565,7 +572,8 @@ impl Engine {
         }
     }
 
-    /// Sends breakpoints and `configurationDone` once the adapter says it is ready.
+    /// Sends breakpoints once the adapter says it is ready, and `configurationDone` once they
+    /// are answered.
     fn configure(&mut self, sid: SessionId) {
         let Ok(session) = self.session_mut(sid) else { return };
         session.configured = true;
@@ -574,19 +582,46 @@ impl Engine {
             session.state = SessionState::Running;
         }
         let Some(client) = session.client.clone() else { return };
-        let config_done = session.capabilities.supports_configuration_done_request;
         let spec = session.adapter.clone();
 
-        for path in self.breakpoints.files().into_iter().filter(|p| spec.handles(p)) {
+        let files: Vec<PathBuf> = self.breakpoints.files().into_iter().filter(|p| spec.handles(p)).collect();
+        let mut unanswered = files.len();
+        for path in files {
             self.send_breakpoints(sid, &client, path);
         }
-        self.send_exception_filters(sid);
-        if config_done {
-            self.call::<ConfigurationDone>(sid, &client, Empty {}, move |r| Msg::Done {
-                sid,
-                command: "configurationDone",
-                result: r.map(drop),
-            });
+        unanswered += usize::from(self.send_exception_filters(sid));
+        let Ok(session) = self.session_mut(sid) else { return };
+        session.configuration_unanswered = unanswered;
+        if unanswered == 0 {
+            self.send_configuration_done(sid);
+        }
+    }
+
+    /// Counts an answer to a request sent by `configure`; after the last one the program may start.
+    fn configuration_answered(&mut self, sid: SessionId) {
+        let Ok(session) = self.session_mut(sid) else { return };
+        if session.configuration_unanswered == 0 {
+            return; // an answer to a later change
+        }
+        session.configuration_unanswered -= 1;
+        if session.configuration_unanswered == 0 {
+            self.send_configuration_done(sid);
+        }
+    }
+
+    /// Lets the program start. Like VS Code, tuitor waits for the breakpoints to be answered
+    /// first: gdb writes "Breakpoint 1 (…) pending." from another thread, and text that lagged
+    /// behind this response would pass for the program's output.
+    fn send_configuration_done(&mut self, sid: SessionId) {
+        let Ok(session) = self.session_mut(sid) else { return };
+        if !session.capabilities.supports_configuration_done_request {
+            session.configuration_done = true; // nothing to wait for
+            return;
+        }
+        let Some(client) = session.client.clone() else { return };
+        // Its answer comes among the events, so that output sent before it is known to be the adapter's.
+        if let Err(err) = client.call_in_stream::<ConfigurationDone>(Empty {}) {
+            self.notice(Some(sid), Level::Error, format!("configurationDone: {}", short_error(&err)));
         }
     }
 
@@ -604,6 +639,7 @@ impl Engine {
                     format!("adapter asked for `{}`, which tuitor does not support yet", request.command),
                 );
             }
+            Incoming::Response(response) => self.on_response(sid, response),
             Incoming::Log(line) => self.push_output(sid, OutputKind::Adapter, &format!("{line}\n")),
             Incoming::Closed => {
                 self.breakpoints.unbind_session(sid);
@@ -621,6 +657,19 @@ impl Engine {
                 }
                 self.log_event(sid, "closed", String::new());
             }
+        }
+    }
+
+    /// Answers to requests sent with `call_in_stream`, in their place among the events.
+    fn on_response(&mut self, sid: SessionId, response: ResponseMessage) {
+        if response.command == ConfigurationDone::COMMAND
+            && let Ok(session) = self.session_mut(sid)
+        {
+            session.configuration_done = true;
+        }
+        if !response.success {
+            let message = response.message.unwrap_or_default();
+            self.notice(Some(sid), Level::Error, format!("{}: {message}", response.command));
         }
     }
 
@@ -693,7 +742,8 @@ impl Engine {
                 self.refresh_threads(sid);
             }
             Event::Output(body) => {
-                if let Some(kind) = OutputKind::from_category(body.category.as_deref()) {
+                let program_may_run = self.session_ref(sid).is_ok_and(|s| s.configuration_done);
+                if let Some(kind) = OutputKind::from_category(body.category.as_deref(), program_may_run) {
                     if body.category.as_deref() == Some("important") {
                         self.notice(Some(sid), Level::Warn, body.output.trim().to_owned());
                     }
@@ -848,16 +898,18 @@ impl Engine {
         self.call::<SetBreakpoints>(sid, client, args, move |result| Msg::BreakpointsSet { sid, path, ids, result });
     }
 
-    fn send_exception_filters(&self, sid: SessionId) {
-        let Ok(session) = self.session_ref(sid) else { return };
-        let (Some(client), true) = (session.client.clone(), session.configured) else { return };
+    /// Returns whether a request was sent.
+    fn send_exception_filters(&self, sid: SessionId) -> bool {
+        let Ok(session) = self.session_ref(sid) else { return false };
+        let (Some(client), true) = (session.client.clone(), session.configured) else { return false };
         if session.capabilities.exception_breakpoint_filters.is_empty() {
-            return;
+            return false;
         }
         let filters = session.exception_filters.iter().filter(|f| f.enabled).map(|f| f.filter.clone()).collect();
         self.call::<SetExceptionBreakpoints>(sid, &client, SetExceptionBreakpointsArguments { filters }, move |r| {
             Msg::Done { sid, command: "setExceptionBreakpoints", result: r.map(drop) }
         });
+        true
     }
 
     fn breakpoints_changed(&mut self, path: &Path) {

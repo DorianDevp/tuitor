@@ -8,6 +8,7 @@ use std::time::Duration;
 use serde_json::{Map, Value};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tuitor_core::config::{Adapters, LaunchConfig, RequestKind};
+use tuitor_core::log::OutputKind;
 use tuitor_core::session::{SessionId, SessionState};
 use tuitor_core::snapshot::{Change, diff};
 use tuitor_core::{Engine, EngineMsg, EngineOptions, Step};
@@ -75,6 +76,11 @@ async fn breakpoint_step_and_delta_with_gdb() {
     args.insert("program".into(), Value::String(bin.display().to_string()));
     args.insert("cwd".into(), Value::String(dir.display().to_string()));
     let sid = engine.start(LaunchConfig::adhoc("sum", "gdb", RequestKind::Launch, args)).expect("start session");
+    // gdb writes its own text from another thread, which can lag behind its responses. Waiting
+    // before the breakpoint's answer is handled (and `configurationDone` sent) keeps the test
+    // independent of gdb's thread scheduling.
+    pump(&mut engine, &mut rx, |e| e.session(sid).is_some_and(|s| s.state == SessionState::Running)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
 
     // First hit: price = 10, sum = 0.
     pump(&mut engine, &mut rx, |e| stops(e, sid) >= 1).await;
@@ -111,7 +117,11 @@ async fn breakpoint_step_and_delta_with_gdb() {
     engine.toggle_breakpoint(&source, BREAK_LINE);
     engine.resume(sid, Step::Continue).expect("continue");
     pump(&mut engine, &mut rx, |e| e.session(sid).is_some_and(|s| s.state == SessionState::Exited)).await;
-    assert!(engine.output().iter().any(|l| l.text.contains("total=60")), "program output missing");
+    // gdb ≥ 15 loads the program only at `configurationDone` and reports the breakpoint set
+    // before that as pending, in output with category stdout. That text is gdb's, not the program's.
+    let kind = |text: &str| engine.output().iter().find(|l| l.text.contains(text)).map(|l| l.kind);
+    assert_eq!(kind("total=60"), Some(OutputKind::Stdout), "program output missing");
+    assert!(matches!(kind("pending"), None | Some(OutputKind::Console)), "gdb's own output shown as the program's");
 
     std::fs::remove_dir_all(dir).ok();
 }
