@@ -8,6 +8,8 @@
 //! cargo test -p tuitor-core --test php -- --ignored
 //! ```
 
+mod common;
+
 use std::path::Path;
 use std::time::Duration;
 
@@ -17,6 +19,8 @@ use tuitor_core::config::{Adapters, LaunchConfig, RequestKind};
 use tuitor_core::session::{SessionId, SessionState};
 use tuitor_core::snapshot::{Change, diff};
 use tuitor_core::{Engine, EngineMsg, EngineOptions, Step};
+
+use common::TestDir;
 
 const BREAK_LINE: u32 = 12; // `$total += $item['price'] * $item['qty'];`
 
@@ -47,8 +51,8 @@ async fn xdebug_connects_back_and_stops() {
     let php = std::env::var("TUITOR_PHP").expect("TUITOR_PHP");
     let adapter_js = std::env::var("TUITOR_PHP_ADAPTER").expect("TUITOR_PHP_ADAPTER");
 
-    let dir = std::env::temp_dir().join(format!("tuitor-php-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("tmp dir");
+    let tmp = TestDir::new("php");
+    let dir = tmp.path().to_path_buf();
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/orders.php");
     std::fs::copy(&fixture, dir.join("orders.php")).expect("copy");
     let script = std::fs::canonicalize(dir.join("orders.php")).expect("script path");
@@ -118,5 +122,4 @@ async fn xdebug_connects_back_and_stops() {
     assert!(output.success());
 
     engine.stop(sid).expect("stop");
-    std::fs::remove_dir_all(dir).ok();
 }

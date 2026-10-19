@@ -5,7 +5,9 @@
 //! TUITOR_DLV="$(go env GOPATH)/bin/dlv" cargo test -p tuitor-core --test go -- --ignored
 //! ```
 
-use std::path::{Path, PathBuf};
+mod common;
+
+use std::path::Path;
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -15,6 +17,8 @@ use tuitor_core::log::OutputKind;
 use tuitor_core::session::{SessionId, SessionState};
 use tuitor_core::snapshot::{Change, diff};
 use tuitor_core::{Engine, EngineMsg, EngineOptions, Step};
+
+use common::TestDir;
 
 const BREAK_LINE: u32 = 58; // `total += lineTotal(line)`
 const LINE_TOTAL: u32 = 40; // `func lineTotal(line Line) int {`
@@ -46,15 +50,14 @@ fn exited(engine: &Engine, sid: SessionId) -> bool {
 }
 
 /// A directory with the Go example and an adapters.toml that runs dlv from the environment.
-fn workspace(name: &str) -> (PathBuf, Adapters) {
+fn workspace(name: &str) -> (TestDir, Adapters) {
     let dlv = std::env::var("TUITOR_DLV").expect("TUITOR_DLV");
-    let dir = std::env::temp_dir().join(format!("tuitor-{name}-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("tmp dir");
+    let tmp = TestDir::new(name);
+    let dir = tmp.path();
     let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/go");
     for file in ["go.mod", "main.go"] {
         std::fs::copy(example.join(file), dir.join(file)).expect("copy");
     }
-    let dir = std::fs::canonicalize(&dir).expect("workspace path");
 
     // The built-in entry with dlv from the environment.
     let builtin = Adapters::default();
@@ -65,7 +68,7 @@ fn workspace(name: &str) -> (PathBuf, Adapters) {
         spec.args, spec.extensions
     );
     std::fs::write(&file, toml).expect("adapters.toml");
-    (dir, Adapters::load(Some(&file)).expect("adapters"))
+    (tmp, Adapters::load(Some(&file)).expect("adapters"))
 }
 
 fn launch(fields: Value) -> LaunchConfig {
@@ -76,9 +79,10 @@ fn launch(fields: Value) -> LaunchConfig {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "needs TUITOR_DLV"]
 async fn delve_builds_stops_steps_and_cleans_up() {
-    let (dir, adapters) = workspace("go");
+    let (tmp, adapters) = workspace("go");
+    let dir = tmp.path();
     let source = dir.join("main.go");
-    let (mut engine, mut rx) = Engine::new(EngineOptions { adapters, workspace: dir.clone(), state_file: None });
+    let (mut engine, mut rx) = Engine::new(EngineOptions { adapters, workspace: dir.to_path_buf(), state_file: None });
     engine.toggle_breakpoint(&source, BREAK_LINE);
     engine.add_watch("total");
 
@@ -102,7 +106,7 @@ async fn delve_builds_stops_steps_and_cleans_up() {
         let entries = std::fs::read_dir(dir).expect("workspace").filter_map(Result::ok);
         entries.map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with("__debug_bin")).count()
     };
-    assert_eq!(built(&dir), 1);
+    assert_eq!(built(dir), 1);
 
     engine.resume(sid, Step::Continue).expect("continue");
     pump(&mut engine, &mut rx, |e| stops(e, sid) >= 2).await;
@@ -128,15 +132,14 @@ async fn delve_builds_stops_steps_and_cleans_up() {
     // As the program's, not as dlv's own lines: tuitor asks dlv for it as output events.
     assert!(printed("revenue 564.03"), "program output missing");
     engine.shutdown().await;
-    assert_eq!(built(&dir), 0, "dlv left its build behind");
-
-    std::fs::remove_dir_all(dir).ok();
+    assert_eq!(built(dir), 0, "dlv left its build behind");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "needs TUITOR_DLV"]
 async fn auto_mode_tests_a_test_file_as_vs_code_does() {
-    let (dir, adapters) = workspace("go-test");
+    let (tmp, adapters) = workspace("go-test");
+    let dir = tmp.path();
     let test = dir.join("orders_test.go");
     std::fs::write(
         &test,
@@ -144,7 +147,7 @@ async fn auto_mode_tests_a_test_file_as_vs_code_does() {
          \tif got := lineTotal(Line{Qty: 2, Price: 450}); got != 900 {\n\t\tt.Fatalf(\"lineTotal = %d\", got)\n\t}\n}\n",
     )
     .expect("test file");
-    let (mut engine, mut rx) = Engine::new(EngineOptions { adapters, workspace: dir.clone(), state_file: None });
+    let (mut engine, mut rx) = Engine::new(EngineOptions { adapters, workspace: dir.to_path_buf(), state_file: None });
     engine.toggle_breakpoint(&dir.join("main.go"), LINE_TOTAL + 1);
 
     // VS Code's "Go: Launch package" snippet with `program` on a test file: dlv knows no
@@ -158,5 +161,4 @@ async fn auto_mode_tests_a_test_file_as_vs_code_does() {
     engine.stop(sid).expect("stop");
     pump(&mut engine, &mut rx, |e| exited(e, sid)).await;
     engine.shutdown().await;
-    std::fs::remove_dir_all(dir).ok();
 }
