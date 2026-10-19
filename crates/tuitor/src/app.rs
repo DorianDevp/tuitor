@@ -1,15 +1,19 @@
-//! Application state and the single place where commands take effect.
+//! Application state and the single place where commands take effect. What belongs to
+//! one project lives in its [`Tab`]; `App` keeps what the tabs share: keys, popups,
+//! the status line and the commands run recently.
 
-use std::cell::Cell;
-use std::collections::HashMap;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crossterm::event::KeyEvent;
+use tokio::sync::mpsc::UnboundedSender;
 use tuitor_core::breakpoints::Toggle;
-use tuitor_core::config::LaunchConfig;
+use tuitor_core::config::{Adapters, LaunchConfig, home_relative};
+use tuitor_core::project::Project;
 use tuitor_core::session::SessionId;
-use tuitor_core::{Engine, EngineMsg, Level, Step};
+use tuitor_core::store::Store;
+use tuitor_core::{Engine, EngineMsg, Level, Step, persist};
 
 use crate::clipboard;
 use crate::command::{self, Action, Arg, BpScope, Location, View};
@@ -17,6 +21,7 @@ use crate::keymap::{self, Key, Keymap, Lookup};
 use crate::model::{BpRow, StackRow};
 use crate::overlay::{Finder, Overlay, Palette};
 use crate::sources::Sources;
+use crate::tab::{Tab, TabId, Tabs, forward};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Pane {
@@ -55,53 +60,6 @@ pub fn panes(view: View) -> &'static [Pane] {
     }
 }
 
-/// A selection in a list plus the scroll offset the renderer keeps it visible with.
-#[derive(Debug, Default)]
-pub struct Cursor {
-    pub pos: usize,
-    offset: Cell<usize>,
-}
-
-impl Cursor {
-    pub fn move_by(&mut self, delta: isize, len: usize) {
-        if len == 0 {
-            self.pos = 0;
-            return;
-        }
-        self.pos = self.pos.saturating_add_signed(delta).min(len - 1);
-    }
-
-    pub fn clamp(&mut self, len: usize) {
-        self.pos = self.pos.min(len.saturating_sub(1));
-    }
-
-    /// First visible row for a window of `height` rows over `len` rows.
-    pub fn window(&self, height: usize, len: usize) -> usize {
-        let mut offset = self.offset.get().min(len.saturating_sub(height));
-        if self.pos < offset {
-            offset = self.pos;
-        } else if height > 0 && self.pos >= offset + height {
-            offset = self.pos + 1 - height;
-        }
-        self.offset.set(offset);
-        offset
-    }
-}
-
-/// What SOURCE shows: the execution point (follow) or a file the user opened.
-#[derive(Debug, Default)]
-pub struct SourceState {
-    /// The file the user opened or moved the cursor in; the next automatic change
-    /// (`App::jump_to_execution`) drops it.
-    pub browse: Option<PathBuf>,
-    /// 1-based line of the cursor.
-    pub cursor: u32,
-    /// First visible line (1-based), kept by the renderer.
-    pub top: Cell<u32>,
-    /// Centre the cursor vertically on the next render.
-    pub recenter: Cell<bool>,
-}
-
 #[derive(Debug, Clone)]
 pub struct Status {
     pub key: Option<String>,
@@ -110,35 +68,20 @@ pub struct Status {
     pub level: Level,
 }
 
+/// What every tab shares on screen.
 pub struct Ui {
-    pub view: View,
-    focus: HashMap<View, Pane>,
-    pub zoom: bool,
-    pub session: Option<SessionId>,
-    /// Stop number shown per session; absent means the latest (live) stop.
-    pub viewing: HashMap<SessionId, u32>,
-    pub source: SourceState,
-    pub locals: Cursor,
-    pub stack: Cursor,
-    pub show_vendor: bool,
-    pub watch: Cursor,
-    pub bps: Cursor,
-    pub bp_scope: BpScope,
-    /// Lines up from the bottom of OUTPUT; 0 follows new output.
-    pub output_back: usize,
-    pub events: Cursor,
-    pub history_col: usize,
     pub overlay: Option<Overlay>,
     pub status: Option<Status>,
     pub pending: Vec<Key>,
     pub recent: Vec<String>,
-    seen_stops: HashMap<SessionId, usize>,
     /// Time for animations, set by the loop before each frame. `None` draws them
     /// still, which keeps headless screens the same on every run.
     pub clock: Option<Duration>,
     /// Set by the renderer when the frame holds a moving animation: how soon it
     /// changes next, so the loop redraws only then.
     pub animating: Cell<Option<Duration>>,
+    /// A tab with a live session that `tab close` was asked for; asking again closes it.
+    closing: Option<TabId>,
 }
 
 impl Ui {
@@ -149,61 +92,143 @@ impl Ui {
 }
 
 pub struct App {
-    pub engine: Engine,
+    pub tabs: Tabs<Tab>,
     pub keymap: Keymap,
-    pub configs: Vec<LaunchConfig>,
     pub ui: Ui,
-    pub sources: std::cell::RefCell<Sources>,
+    pub sources: RefCell<Sources>,
+    pub adapters: Adapters,
+    pub store: Store,
+    /// Projects opened recently, newest first.
+    pub recent_projects: Vec<PathBuf>,
+    /// Where the engines of all tabs report, each message labelled with its tab.
+    inbox: UnboundedSender<(TabId, EngineMsg)>,
     pub quit: bool,
     pub headless: bool,
-    files: Option<Vec<String>>,
 }
 
-type Outcome = Result<String, String>;
+/// Why a command did not happen: an error, or a warning that asks for something first.
+struct Refusal {
+    level: Level,
+    message: String,
+}
+
+impl Refusal {
+    fn warn(message: String) -> Refusal {
+        Refusal { level: Level::Warn, message }
+    }
+}
+
+impl From<String> for Refusal {
+    fn from(message: String) -> Refusal {
+        Refusal { level: Level::Error, message }
+    }
+}
+
+impl From<&str> for Refusal {
+    fn from(message: &str) -> Refusal {
+        message.to_owned().into()
+    }
+}
+
+type Outcome = Result<String, Refusal>;
+
+const NO_PROJECT: &str = "no project in this tab; /tab open ‹dir› opens one";
 
 impl App {
-    pub fn new(engine: Engine, keymap: Keymap, configs: Vec<LaunchConfig>) -> App {
+    /// An app with one empty tab; [`App::open`] puts projects in tabs.
+    pub fn new(keymap: Keymap, adapters: Adapters, store: Store, inbox: UnboundedSender<(TabId, EngineMsg)>) -> App {
+        let recent_projects =
+            persist::recent_file().and_then(|file| persist::load_recent(&file).ok()).unwrap_or_default();
         App {
-            engine,
+            tabs: Tabs::new(Tab::empty(&adapters)),
             keymap,
-            configs,
             ui: Ui {
-                view: View::Overview,
-                focus: HashMap::new(),
-                zoom: false,
-                session: None,
-                viewing: HashMap::new(),
-                source: SourceState::default(),
-                locals: Cursor::default(),
-                stack: Cursor::default(),
-                show_vendor: false,
-                watch: Cursor::default(),
-                bps: Cursor::default(),
-                bp_scope: BpScope::Session,
-                output_back: 0,
-                events: Cursor::default(),
-                history_col: 0,
                 overlay: None,
                 status: None,
                 pending: Vec::new(),
                 recent: Vec::new(),
-                seen_stops: HashMap::new(),
                 clock: None,
                 animating: Cell::new(None),
+                closing: None,
             },
             sources: Default::default(),
+            adapters,
+            store,
+            recent_projects,
+            inbox,
             quit: false,
             headless: false,
-            files: None,
         }
     }
 
-    pub fn focus(&self) -> Pane {
-        self.ui.focus.get(&self.ui.view).copied().unwrap_or(panes(self.ui.view)[0])
+    pub fn tab(&self) -> &Tab {
+        self.tabs.active()
     }
 
-    fn set_focus(&mut self, pane: Pane) {
-        self.ui.focus.insert(self.ui.view, pane);
+    pub fn tab_mut(&mut self) -> &mut Tab {
+        self.tabs.active_mut()
+    }
+
+    pub fn focus(&self) -> Pane {
+        self.tab().focus()
+    }
+
+    // ---- projects ---------------------------------------------------------------------
+
+    /// Shows `project` in a new tab, or in this one if it is empty, and makes it active.
+    pub fn open(&mut self, project: Project) -> TabId {
+        let dir = project.dir.clone();
+        let (tab, rx) = Tab::open(project, &self.adapters);
+        let id = if self.tab().project.is_none() { self.tabs.replace_active(tab).0 } else { self.tabs.push(tab) };
+        forward(id, rx, self.inbox.clone());
+        match persist::recent_file().map(|file| persist::remember_recent(&file, &dir)) {
+            Some(Ok(recent)) => self.recent_projects = recent,
+            // The list only saves typing; the project is open either way.
+            Some(Err(err)) => tracing::warn!("remembering {}: {err:#}", dir.display()),
+            None => {}
+        }
+        id
+    }
+
+    /// `/tab open`: a directory as typed, `~` and relative to the current project allowed.
+    fn open_dir(&mut self, typed: &str) -> Outcome {
+        let base = match &self.tab().project {
+            Some(project) => project.dir.clone(),
+            None => std::env::current_dir().unwrap_or_default(),
+        };
+        let path = crate::paths::expand(typed, dirs::home_dir().as_deref(), &base);
+        let dir = std::fs::canonicalize(&path)
+            .ok()
+            .filter(|dir| dir.is_dir())
+            .ok_or_else(|| format!("no directory {}", home_relative(&path)))?;
+        let open = self.tabs.iter().find(|(_, tab)| tab.project.as_ref().is_some_and(|p| p.dir == dir));
+        if let Some((id, _)) = open {
+            self.tabs.activate(id);
+            return Ok(format!("{} is open already", home_relative(&dir)));
+        }
+        let project = Project::open(&dir, &self.store, None);
+        let errors = project.errors.clone();
+        self.open(project);
+        match errors.first() {
+            Some(error) => Err(error.clone().into()),
+            None => Ok(format!("opened {}", home_relative(&dir))),
+        }
+    }
+
+    /// Starts `config` in the active tab.
+    pub fn start(&mut self, config: LaunchConfig) {
+        let name = config.name.clone();
+        let tab = self.tab_mut();
+        match tab.engine.start(config) {
+            Ok(sid) => tab.ui.session = Some(sid),
+            Err(err) => self.execute_error(&format!("{name}: {err:#}")),
+        }
+    }
+
+    /// Disconnects every tab's sessions; used when quitting.
+    pub async fn shutdown(&mut self) {
+        let engines = self.tabs.iter_mut().map(|(_, tab)| tab.engine.shutdown());
+        futures::future::join_all(engines).await;
     }
 
     // ---- input ------------------------------------------------------------------------
@@ -278,50 +303,45 @@ impl App {
                     finder.select(1);
                 } else if key.is("backspace") {
                     finder.input.pop();
-                    let bps = self.engine.breakpoints();
-                    finder.refresh(self.files.as_deref().unwrap_or_default(), bps, self.engine.workspace());
+                    let tab = self.tabs.active();
+                    finder.refresh(
+                        tab.files.as_deref().unwrap_or_default(),
+                        tab.engine.breakpoints(),
+                        tab.engine.workspace(),
+                    );
                 } else if let Some(c) = key.text_char() {
                     finder.input.push(c);
-                    let bps = self.engine.breakpoints();
-                    finder.refresh(self.files.as_deref().unwrap_or_default(), bps, self.engine.workspace());
+                    let tab = self.tabs.active();
+                    finder.refresh(
+                        tab.files.as_deref().unwrap_or_default(),
+                        tab.engine.breakpoints(),
+                        tab.engine.workspace(),
+                    );
                 }
             }
         }
     }
 
-    // ---- engine -----------------------------------------------------------------------
+    // ---- engines ----------------------------------------------------------------------
 
-    pub fn on_engine(&mut self, msg: EngineMsg) {
-        self.engine.handle(msg);
+    /// A message from the engine of tab `tab`; one for a tab closed since is dropped.
+    pub fn on_engine(&mut self, tab: TabId, msg: EngineMsg) {
+        if let Some(tab) = self.tabs.get_mut(tab) {
+            tab.engine.handle(msg);
+        }
     }
 
     /// Runs after a batch of engine messages: follow new stops, surface notices.
     pub fn after_engine(&mut self) {
-        for notice in self.engine.take_notices() {
-            self.ui.status = Some(Status { key: None, command: None, message: notice.text, level: notice.level });
-        }
-
-        let mut newest: Option<SessionId> = None;
-        for session in self.engine.sessions() {
-            let seen = self.ui.seen_stops.entry(session.id).or_default();
-            if session.history.len() > *seen {
-                *seen = session.history.len();
-                newest = Some(session.id);
+        let active = self.tabs.active_id();
+        for (id, tab) in self.tabs.iter_mut() {
+            let name = tab.name();
+            for notice in tab.engine.take_notices() {
+                // News from another tab says which tab it is from.
+                let message = if id == active { notice.text } else { format!("{name}: {}", notice.text) };
+                self.ui.status = Some(Status { key: None, command: None, message, level: notice.level });
             }
-        }
-        let active_busy = self.active().is_some_and(|s| s.is_stopped() && s.is_alive());
-        if self.ui.session.is_none() || self.active().is_none() {
-            self.ui.session = self.engine.sessions().iter().rev().find(|s| s.is_alive()).map(|s| s.id);
-        }
-        if let Some(sid) = newest {
-            if !active_busy || self.ui.session == Some(sid) {
-                self.ui.session = Some(sid);
-            }
-            if self.ui.session == Some(sid) {
-                self.ui.viewing.remove(&sid);
-                self.ui.stack.pos = 0;
-                self.jump_to_execution();
-            }
+            tab.follow_stops();
         }
     }
 
@@ -331,7 +351,7 @@ impl App {
     pub fn execute(&mut self, line: &str, key: Option<String>) {
         let line = line.trim();
         let shown = format!("/{}", line.trim_start_matches('/'));
-        let result = command::parse(line).and_then(|inv| {
+        let result = command::parse(line).map_err(Refusal::from).and_then(|inv| {
             if key.is_none() && !matches!(inv.action, Action::Palette(_) | Action::Help) {
                 self.remember(&shown);
             }
@@ -339,7 +359,7 @@ impl App {
         });
         let (message, level) = match result {
             Ok(message) => (message, Level::Info),
-            Err(message) => (message, Level::Error),
+            Err(Refusal { level, message }) => (message, level),
         };
         let quiet_nav = key.is_some() && level == Level::Info && message.is_empty();
         if !quiet_nav || self.ui.status.is_none() {
@@ -359,47 +379,55 @@ impl App {
     }
 
     fn apply(&mut self, action: Action, spec: &'static command::Spec) -> Outcome {
+        // Asking to close a tab is answered by the very next command.
+        if action != Action::TabClose {
+            self.ui.closing = None;
+        }
         match action {
             Action::Continue => self.step(Step::Continue),
             Action::Next => self.step(Step::Over),
             Action::StepIn => self.step(Step::In),
             Action::StepOut => self.step(Step::Out),
             Action::Pause => {
-                let sid = self.require_session()?;
-                self.engine.pause(sid).map_err(|e| e.to_string())?;
+                let tab = self.tab_mut();
+                let sid = tab.require_session()?;
+                tab.engine.pause(sid).map_err(|e| e.to_string())?;
                 Ok("pausing…".into())
             }
             Action::Stop => {
-                let sid = self.require_session()?;
-                self.engine.stop(sid).map_err(|e| e.to_string())?;
+                let tab = self.tab_mut();
+                let sid = tab.require_session()?;
+                tab.engine.stop(sid).map_err(|e| e.to_string())?;
                 Ok("stopping…".into())
             }
             Action::Restart => {
-                let sid = self.require_session()?;
-                let new = self.engine.restart(sid).map_err(|e| e.to_string())?;
-                self.ui.session = Some(new);
+                let tab = self.tab_mut();
+                let sid = tab.require_session()?;
+                let new = tab.engine.restart(sid).map_err(|e| e.to_string())?;
+                tab.ui.session = Some(new);
                 Ok("restarting…".into())
             }
             Action::HistoryPrev => self.history_move(-1),
             Action::HistoryNext => self.history_move(1),
             Action::HistoryLive => {
-                let sid = self.require_session()?;
-                self.ui.viewing.remove(&sid);
-                self.jump_to_execution();
+                let tab = self.tab_mut();
+                let sid = tab.require_session()?;
+                tab.ui.viewing.remove(&sid);
+                tab.jump_to_execution();
                 Ok("live".into())
             }
             Action::BpToggle(location) => self.bp_toggle(location),
             Action::BpCondition(expr) => self.bp_edit(expr, spec, false),
             Action::BpLog(message) => self.bp_edit(message, spec, true),
             Action::BpDelete => {
-                let id = self.selected_bp_id().ok_or("no breakpoint selected")?;
-                self.engine.delete_breakpoint(id).map_err(|e| e.to_string())?;
+                let (tab, id) = self.selected_bp().ok_or("no breakpoint selected")?;
+                self.engine_of(tab)?.delete_breakpoint(id).map_err(|e| e.to_string())?;
                 Ok(format!("deleted #{id}"))
             }
-            Action::BpEnable => match self.bp_rows().get(self.ui.bps.pos).cloned() {
-                Some(BpRow::Breakpoint(id)) => {
+            Action::BpEnable => match self.bp_rows().get(self.tab().ui.bps.pos).cloned() {
+                Some(BpRow::Breakpoint { tab, id }) => {
                     let mut enabled = false;
-                    self.engine
+                    self.engine_of(tab)?
                         .update_breakpoint(id, |b| {
                             b.enabled = !b.enabled;
                             enabled = b.enabled;
@@ -407,49 +435,55 @@ impl App {
                         .map_err(|e| e.to_string())?;
                     Ok(format!("#{id} {}", if enabled { "enabled" } else { "disabled" }))
                 }
-                Some(BpRow::Exception { session, filter, label }) => {
-                    let on = self.engine.toggle_exception_filter(session, &filter).map_err(|e| e.to_string())?;
+                Some(BpRow::Exception { tab, session, filter, label }) => {
+                    let engine = self.engine_of(tab)?;
+                    let on = engine.toggle_exception_filter(session, &filter).map_err(|e| e.to_string())?;
                     Ok(format!("{label}: {}", if on { "on" } else { "off" }))
                 }
-                None => Err("no breakpoint selected".into()),
+                Some(BpRow::Tab(_)) | None => Err("no breakpoint selected".into()),
             },
             Action::BpScope(scope) => {
-                self.ui.bp_scope = scope.unwrap_or(match self.ui.bp_scope {
+                let ui = &mut self.tab_mut().ui;
+                ui.bp_scope = scope.unwrap_or(match ui.bp_scope {
                     BpScope::Session => BpScope::All,
                     BpScope::All => BpScope::Session,
                 });
-                self.ui.bps.pos = 0;
-                Ok(match self.ui.bp_scope {
+                ui.bps.pos = 0;
+                Ok(match ui.bp_scope {
                     BpScope::Session => "breakpoints of this session".into(),
-                    BpScope::All => "breakpoints of all sessions".into(),
+                    BpScope::All => "breakpoints of every session and tab".into(),
                 })
             }
             Action::BpClear => {
-                let n = self.engine.breakpoints().len();
-                self.engine.clear_breakpoints();
+                let engine = &mut self.tab_mut().engine;
+                let n = engine.breakpoints().len();
+                engine.clear_breakpoints();
                 Ok(format!("deleted {n} breakpoints"))
             }
             Action::WatchAdd(expr) => {
+                let tab = self.tab_mut();
                 let expr = match expr {
                     Some(expr) => expr,
-                    None => match self.selected_local_expr() {
-                        Some(expr) if self.focus() == Pane::Locals => expr,
+                    None => match tab.selected_local_expr() {
+                        Some(expr) if tab.focus() == Pane::Locals => expr,
                         _ => return self.prompt(spec),
                     },
                 };
-                self.engine.add_watch(&expr);
+                tab.engine.add_watch(&expr);
                 Ok(format!("watching {expr}"))
             }
             Action::WatchDelete => {
-                let expr = self.engine.watches().get(self.ui.watch.pos).cloned().ok_or("no watch selected")?;
-                self.engine.remove_watch(&expr);
-                self.ui.watch.clamp(self.engine.watches().len());
+                let tab = self.tab_mut();
+                let expr = tab.engine.watches().get(tab.ui.watch.pos).cloned().ok_or("no watch selected")?;
+                tab.engine.remove_watch(&expr);
+                tab.ui.watch.clamp(tab.engine.watches().len());
                 Ok(format!("removed {expr}"))
             }
             Action::Eval(expr) => {
                 let Some(expr) = expr else { return self.prompt(spec) };
-                let sid = self.require_session()?;
-                self.engine.evaluate(sid, &expr).map_err(|e| e.to_string())?;
+                let tab = self.tab_mut();
+                let sid = tab.require_session()?;
+                tab.engine.evaluate(sid, &expr).map_err(|e| e.to_string())?;
                 Ok("evaluating…".into())
             }
             Action::Copy => {
@@ -460,14 +494,16 @@ impl App {
                 Ok(format!("copied {}", crate::ui::paint::truncate(&text, 60)))
             }
             Action::View(view) => {
-                self.ui.view = view;
-                self.ui.zoom = false;
+                let ui = &mut self.tab_mut().ui;
+                ui.view = view;
+                ui.zoom = false;
                 Ok(String::new())
             }
             Action::PaneNext => self.cycle_focus(1),
             Action::PanePrev => self.cycle_focus(-1),
             Action::Zoom => {
-                self.ui.zoom = !self.ui.zoom;
+                let ui = &mut self.tab_mut().ui;
+                ui.zoom = !ui.zoom;
                 Ok(String::new())
             }
             Action::Close => self.close(),
@@ -479,21 +515,24 @@ impl App {
             Action::Bottom => self.nav(isize::MAX / 2),
             Action::Left => self.horizontal(-1),
             Action::Right => self.horizontal(1),
-            Action::Open => self.open(),
+            Action::Open => self.open_selection(),
             Action::Follow => {
-                self.jump_to_execution();
+                self.tab_mut().jump_to_execution();
                 Ok("following execution".into())
             }
             Action::Vendor => {
-                self.ui.show_vendor = !self.ui.show_vendor;
-                self.ui.stack.pos = 0;
-                self.jump_to_execution();
-                Ok(if self.ui.show_vendor { "library frames shown" } else { "library frames collapsed" }.into())
+                let tab = self.tab_mut();
+                tab.ui.show_vendor = !tab.ui.show_vendor;
+                tab.ui.stack.pos = 0;
+                tab.jump_to_execution();
+                Ok(if tab.ui.show_vendor { "library frames shown" } else { "library frames collapsed" }.into())
             }
             Action::Find(query) => {
-                let files = self.files.get_or_insert_with(|| crate::overlay::workspace_files(self.engine.workspace()));
+                let tab = self.tabs.active_mut();
+                let workspace = tab.project.as_ref().ok_or(NO_PROJECT)?.dir.clone();
+                let files = tab.files.get_or_insert_with(|| crate::overlay::workspace_files(&workspace));
                 let mut finder = Finder::new(query.unwrap_or_default());
-                finder.refresh(files, self.engine.breakpoints(), self.engine.workspace());
+                finder.refresh(files, tab.engine.breakpoints(), &workspace);
                 self.ui.overlay = Some(Overlay::Finder(finder));
                 Ok(String::new())
             }
@@ -501,14 +540,23 @@ impl App {
             Action::SessionPrev => self.cycle_session(-1),
             Action::SessionStart(name) => {
                 let Some(name) = name else { return self.prompt(spec) };
-                let config = self.find_config(&name)?;
-                let sid = self.engine.start(config.clone()).map_err(|e| format!("{e:#}"))?;
-                self.ui.session = Some(sid);
-                Ok(format!("starting {}", config.name))
+                self.start_configuration(&name)
             }
+            Action::TabNext => self.cycle_tab(1),
+            Action::TabPrev => self.cycle_tab(-1),
+            Action::TabNew => {
+                self.tabs.push(Tab::empty(&self.adapters));
+                Ok("new tab · /tab open ‹dir› opens a project in it".into())
+            }
+            Action::TabOpen(dir) => {
+                let Some(dir) = dir else { return self.prompt(spec) };
+                self.open_dir(&dir)
+            }
+            Action::TabClose => self.close_tab(),
             Action::ClearOutput => {
-                self.engine.clear_output();
-                self.ui.output_back = 0;
+                let tab = self.tab_mut();
+                tab.engine.clear_output();
+                tab.ui.output_back = 0;
                 Ok(String::new())
             }
             Action::Palette(text) => {
@@ -544,31 +592,51 @@ impl App {
         Ok(String::new())
     }
 
+    fn engine_of(&mut self, tab: TabId) -> Result<&mut Engine, Refusal> {
+        self.tabs.get_mut(tab).map(|tab| &mut tab.engine).ok_or_else(|| "that tab is closed".into())
+    }
+
     fn step(&mut self, step: Step) -> Outcome {
-        let sid = self.require_session()?;
-        self.ui.viewing.remove(&sid);
-        self.engine.resume(sid, step).map_err(|e| e.to_string())?;
+        let tab = self.tab_mut();
+        let sid = tab.require_session()?;
+        tab.ui.viewing.remove(&sid);
+        tab.engine.resume(sid, step).map_err(|e| e.to_string())?;
         Ok(String::new())
     }
 
+    /// Starts the configuration of this tab's project named, or partly named, `name`.
+    fn start_configuration(&mut self, name: &str) -> Outcome {
+        let Tab { project, engine, ui, .. } = self.tab_mut();
+        let project = project.as_ref().ok_or(NO_PROJECT)?;
+        let index = project.find(name).ok_or_else(|| {
+            let names: Vec<&str> = project.configurations.iter().map(|c| c.name()).collect();
+            format!("no configuration `{name}` (have: {})", names.join(", "))
+        })?;
+        let config = project.configurations[index].launch(&project.variables()).map_err(|e| format!("{e:#}"))?;
+        let started = format!("starting {}", config.name);
+        ui.session = Some(engine.start(config).map_err(|e| format!("{e:#}"))?);
+        Ok(started)
+    }
+
     fn history_move(&mut self, delta: i64) -> Outcome {
-        let sid = self.require_session()?;
-        let session = self.engine.session(sid).ok_or("no session")?;
+        let tab = self.tab_mut();
+        let sid = tab.require_session()?;
+        let session = tab.engine.session(sid).ok_or("no session")?;
         let len = u32::try_from(session.history.len()).unwrap_or(u32::MAX);
         if len == 0 {
             return Err("nothing recorded yet".into());
         }
-        let current = i64::from(self.ui.viewing.get(&sid).copied().unwrap_or(len));
+        let current = i64::from(tab.ui.viewing.get(&sid).copied().unwrap_or(len));
         let target = (current + delta).clamp(1, i64::from(len));
         let target = u32::try_from(target).unwrap_or(len);
         let location = session.snapshot(target).and_then(|s| s.top()).map(|f| f.location()).unwrap_or_default();
         if target == len {
-            self.ui.viewing.remove(&sid);
+            tab.ui.viewing.remove(&sid);
         } else {
-            self.ui.viewing.insert(sid, target);
+            tab.ui.viewing.insert(sid, target);
         }
-        self.ui.stack.pos = 0;
-        self.jump_to_execution();
+        tab.ui.stack.pos = 0;
+        tab.jump_to_execution();
         Ok(if target == len {
             format!("#{target} {location} · live")
         } else {
@@ -577,16 +645,17 @@ impl App {
     }
 
     fn bp_toggle(&mut self, location: Option<Location>) -> Outcome {
+        let tab = self.tab();
         let (path, line) = match location {
             Some(Location { file: Some(file), line }) => (self.resolve_file(&file)?, line),
-            Some(Location { file: None, line }) => (self.source_path().ok_or("no file in SOURCE")?, line),
+            Some(Location { file: None, line }) => (tab.source_path().ok_or("no file in SOURCE")?, line),
             None => {
-                let path = self.source_path().ok_or("no file in SOURCE")?;
-                (path, self.ui.source.cursor.max(1))
+                let path = tab.source_path().ok_or("no file in SOURCE")?;
+                (path, tab.ui.source.cursor.max(1))
             }
         };
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        Ok(match self.engine.toggle_breakpoint(&path, line) {
+        Ok(match self.tab_mut().engine.toggle_breakpoint(&path, line) {
             Toggle::Added(id) => format!("added #{id} at {name}:{line}"),
             Toggle::Removed(id) => format!("removed #{id} at {name}:{line}"),
         })
@@ -595,23 +664,25 @@ impl App {
     /// `e` / `l` on a breakpoint: with an argument it sets the value (`-` clears),
     /// without one it opens the palette pre-filled with the current value.
     fn bp_edit(&mut self, value: Option<String>, spec: &'static command::Spec, log: bool) -> Outcome {
-        let id = match self.selected_bp_id() {
-            Some(id) => id,
+        let (tab, id) = match self.selected_bp() {
+            Some(selected) => selected,
             None => {
-                let path = self.source_path().ok_or("no breakpoint selected")?;
-                let line = self.ui.source.cursor.max(1);
-                match self.engine.breakpoints().at(&tuitor_core_canonical(&path), line) {
+                let tab = self.tab_mut();
+                let path = tab.source_path().ok_or("no breakpoint selected")?;
+                let line = tab.ui.source.cursor.max(1);
+                let id = match tab.engine.breakpoints().at(&canonical(&path), line) {
                     Some(bp) => bp.id,
-                    None => match self.engine.toggle_breakpoint(&path, line) {
+                    None => match tab.engine.toggle_breakpoint(&path, line) {
                         Toggle::Added(id) => id,
                         Toggle::Removed(_) => return Err("no breakpoint selected".into()),
                     },
-                }
+                };
+                (self.tabs.active_id(), id)
             }
         };
+        let engine = self.engine_of(tab)?;
         let Some(value) = value else {
-            let current = self
-                .engine
+            let current = engine
                 .breakpoints()
                 .get(id)
                 .and_then(|b| if log { b.log_message.clone() } else { b.condition.clone() });
@@ -620,7 +691,7 @@ impl App {
         };
         let cleared = value.trim() == "-";
         let value = (!cleared).then(|| value.clone());
-        self.engine
+        engine
             .update_breakpoint(id, |b| if log { b.log_message = value } else { b.condition = value })
             .map_err(|e| e.to_string())?;
         Ok(match (log, cleared) {
@@ -632,39 +703,67 @@ impl App {
     }
 
     fn cycle_focus(&mut self, delta: isize) -> Outcome {
-        let list = panes(self.ui.view);
-        let index = list.iter().position(|p| *p == self.focus()).unwrap_or(0);
+        let tab = self.tab_mut();
+        let list = panes(tab.ui.view);
+        let index = list.iter().position(|p| *p == tab.focus()).unwrap_or(0);
         let next = (index as isize + delta).rem_euclid(list.len() as isize) as usize;
-        self.set_focus(list[next]);
+        tab.set_focus(list[next]);
         Ok(String::new())
     }
 
     fn cycle_session(&mut self, delta: isize) -> Outcome {
-        let ids: Vec<SessionId> = self.engine.sessions().iter().map(|s| s.id).collect();
+        let tab = self.tab_mut();
+        let ids: Vec<SessionId> = tab.engine.sessions().iter().map(|s| s.id).collect();
         if ids.is_empty() {
             return Err("no sessions".into());
         }
-        let index = self.ui.session.and_then(|sid| ids.iter().position(|i| *i == sid)).unwrap_or(0);
+        let index = tab.ui.session.and_then(|sid| ids.iter().position(|i| *i == sid)).unwrap_or(0);
         let next = ids[(index as isize + delta).rem_euclid(ids.len() as isize) as usize];
-        self.ui.session = Some(next);
-        self.jump_to_execution();
-        let name = self.engine.session(next).map(|s| s.name.clone()).unwrap_or_default();
-        Ok(name)
+        tab.ui.session = Some(next);
+        tab.jump_to_execution();
+        Ok(tab.engine.session(next).map(|s| s.name.clone()).unwrap_or_default())
+    }
+
+    fn cycle_tab(&mut self, delta: isize) -> Outcome {
+        if self.tabs.len() == 1 {
+            return Err("there is one tab; /tab open ‹dir› opens a project in another".into());
+        }
+        self.tabs.cycle(delta);
+        Ok(self.tab().name())
+    }
+
+    /// Closes the active tab, stopping its debuggers; one with a live session is closed
+    /// only when asked twice in a row.
+    fn close_tab(&mut self) -> Outcome {
+        let id = self.tabs.active_id();
+        let name = self.tab().name();
+        if self.tab().has_live_session() && self.ui.closing != Some(id) {
+            self.ui.closing = Some(id);
+            let again = self.keymap.key_for(self.focus().name(), "tab close").unwrap_or_else(|| "/tab close".into());
+            return Err(Refusal::warn(format!("{name} has a live session: {again} again stops it and closes the tab")));
+        }
+        self.ui.closing = None;
+        let adapters = self.adapters.clone();
+        if let Some(mut closed) = self.tabs.close(id, || Tab::empty(&adapters)) {
+            tokio::spawn(async move { closed.engine.shutdown().await });
+        }
+        Ok(format!("closed {name}"))
     }
 
     fn close(&mut self) -> Outcome {
-        if self.ui.zoom {
-            self.ui.zoom = false;
+        let tab = self.tab_mut();
+        if tab.ui.zoom {
+            tab.ui.zoom = false;
             return Ok(String::new());
         }
-        if let Some(sid) = self.ui.session
-            && self.ui.viewing.remove(&sid).is_some()
+        if let Some(sid) = tab.ui.session
+            && tab.ui.viewing.remove(&sid).is_some()
         {
-            self.jump_to_execution();
+            tab.jump_to_execution();
             return Ok("back to the live stop".into());
         }
-        if self.ui.source.browse.is_some() {
-            self.jump_to_execution();
+        if tab.ui.source.browse.is_some() {
+            tab.jump_to_execution();
             return Ok("following execution".into());
         }
         Ok(String::new())
@@ -673,114 +772,134 @@ impl App {
     fn nav(&mut self, delta: isize) -> Outcome {
         match self.focus() {
             Pane::Source => {
-                if self.ui.source.browse.is_none() {
-                    self.ui.source.browse = self.source_path();
-                }
                 let len = self.source_len();
-                let line = (self.ui.source.cursor.max(1) as isize).saturating_add(delta).clamp(1, len.max(1) as isize);
-                self.ui.source.cursor = line as u32;
-            }
-            Pane::Locals => {
-                let len = self.local_rows().len();
-                self.ui.locals.move_by(delta, len);
-            }
-            Pane::Stack => {
-                let len = self.stack_rows().len();
-                self.ui.stack.move_by(delta, len);
-                self.jump_to_execution();
-            }
-            Pane::Watch => {
-                let len = self.engine.watches().len();
-                self.ui.watch.move_by(delta, len);
+                let tab = self.tab_mut();
+                if tab.ui.source.browse.is_none() {
+                    tab.ui.source.browse = tab.source_path();
+                }
+                let line = (tab.ui.source.cursor.max(1) as isize).saturating_add(delta).clamp(1, len.max(1) as isize);
+                tab.ui.source.cursor = line as u32;
             }
             Pane::Breakpoints => {
                 let len = self.bp_rows().len();
-                self.ui.bps.move_by(delta, len);
+                self.tab_mut().ui.bps.move_by(delta, len);
+            }
+            Pane::Locals => {
+                let tab = self.tab_mut();
+                let len = tab.local_rows().len();
+                tab.ui.locals.move_by(delta, len);
+            }
+            Pane::Stack => {
+                let tab = self.tab_mut();
+                let len = tab.stack_rows().len();
+                tab.ui.stack.move_by(delta, len);
+                tab.jump_to_execution();
+            }
+            Pane::Watch => {
+                let tab = self.tab_mut();
+                let len = tab.engine.watches().len();
+                tab.ui.watch.move_by(delta, len);
             }
             Pane::Output => {
-                let len = self.engine.output().len();
-                self.ui.output_back = (self.ui.output_back as isize - delta).clamp(0, len as isize) as usize;
+                let tab = self.tab_mut();
+                let len = tab.engine.output().len();
+                tab.ui.output_back = (tab.ui.output_back as isize - delta).clamp(0, len as isize) as usize;
             }
             Pane::Events => {
-                let len = self.engine.events().len();
-                self.ui.events.move_by(delta, len);
+                let tab = self.tab_mut();
+                let len = tab.engine.events().len();
+                tab.ui.events.move_by(delta, len);
             }
             Pane::History => {
-                let Some(sid) = self.ui.session else { return Ok(String::new()) };
-                let len = self.engine.session(sid).map_or(0, |s| s.history.len());
+                let tab = self.tab_mut();
+                let Some(sid) = tab.ui.session else { return Ok(String::new()) };
+                let len = tab.engine.session(sid).map_or(0, |s| s.history.len());
                 if len == 0 {
                     return Ok(String::new());
                 }
-                let current = self.ui.viewing.get(&sid).map_or(len, |n| *n as usize) as isize;
+                let current = tab.ui.viewing.get(&sid).map_or(len, |n| *n as usize) as isize;
                 let target = (current + delta).clamp(1, len as isize) as usize;
                 if target == len {
-                    self.ui.viewing.remove(&sid);
+                    tab.ui.viewing.remove(&sid);
                 } else {
-                    self.ui.viewing.insert(sid, target as u32);
+                    tab.ui.viewing.insert(sid, target as u32);
                 }
-                self.ui.stack.pos = 0;
-                self.jump_to_execution();
+                tab.ui.stack.pos = 0;
+                tab.jump_to_execution();
             }
         }
         Ok(String::new())
     }
 
     fn horizontal(&mut self, delta: isize) -> Outcome {
-        match self.focus() {
+        let tab = self.tab_mut();
+        match tab.focus() {
             Pane::Locals => {
-                let rows = self.local_rows();
-                let Some(row) = rows.get(self.ui.locals.pos) else { return Ok(String::new()) };
-                let (sid, number) = self.viewed_ids().ok_or("nothing to expand")?;
+                let rows = tab.local_rows();
+                let Some(row) = rows.get(tab.ui.locals.pos) else { return Ok(String::new()) };
+                let (sid, number) = tab.viewed_ids().ok_or("nothing to expand")?;
                 if delta > 0 {
                     if row.expandable && !row.expanded {
-                        self.engine.expand(sid, number, row.path.clone()).map_err(|e| e.to_string())?;
+                        tab.engine.expand(sid, number, row.path.clone()).map_err(|e| e.to_string())?;
                     }
                 } else if row.expanded {
-                    self.engine.collapse(sid, &row.path);
+                    tab.engine.collapse(sid, &row.path);
                 } else if row.path.len() > 1 {
                     let parent = row.path[..row.path.len() - 1].to_vec();
                     if let Some(index) = rows.iter().position(|r| r.path == parent) {
-                        self.ui.locals.pos = index;
+                        tab.ui.locals.pos = index;
                     }
                 }
             }
             Pane::History => {
-                self.ui.history_col = self.ui.history_col.saturating_add_signed(delta);
+                tab.ui.history_col = tab.ui.history_col.saturating_add_signed(delta);
             }
             _ => {}
         }
         Ok(String::new())
     }
 
-    fn open(&mut self) -> Outcome {
+    /// `enter`: what it means depends on the focused pane.
+    fn open_selection(&mut self) -> Outcome {
         match self.focus() {
             Pane::Locals => {
-                let row = self.local_rows().into_iter().nth(self.ui.locals.pos).ok_or("nothing selected")?;
-                let (sid, number) = self.viewed_ids().ok_or("nothing to expand")?;
+                let tab = self.tab_mut();
+                let row = tab.local_rows().into_iter().nth(tab.ui.locals.pos).ok_or("nothing selected")?;
+                let (sid, number) = tab.viewed_ids().ok_or("nothing to expand")?;
                 if row.expanded {
-                    self.engine.collapse(sid, &row.path);
+                    tab.engine.collapse(sid, &row.path);
                 } else if row.expandable {
-                    self.engine.expand(sid, number, row.path).map_err(|e| e.to_string())?;
+                    tab.engine.expand(sid, number, row.path).map_err(|e| e.to_string())?;
                 }
                 Ok(String::new())
             }
             Pane::Stack => {
-                if let Some(StackRow::Collapsed { .. }) = self.stack_rows().get(self.ui.stack.pos) {
-                    self.ui.show_vendor = true;
+                let tab = self.tab_mut();
+                if let Some(StackRow::Collapsed { .. }) = tab.stack_rows().get(tab.ui.stack.pos) {
+                    tab.ui.show_vendor = true;
                 }
-                self.jump_to_execution();
+                tab.jump_to_execution();
                 Ok(String::new())
             }
-            Pane::Breakpoints => {
-                let id = self.selected_bp_id().ok_or("nothing selected")?;
-                let bp = self.engine.breakpoints().get(id).ok_or("gone")?;
-                let (path, line) = (bp.path.clone(), bp.line);
-                self.browse(path, line);
-                Ok(String::new())
-            }
+            Pane::Breakpoints => match self.bp_rows().get(self.tab().ui.bps.pos).cloned() {
+                Some(BpRow::Tab(id)) => {
+                    self.tabs.activate(id);
+                    Ok(self.tab().name())
+                }
+                Some(BpRow::Breakpoint { tab, id }) => {
+                    let bp = self.tabs.get(tab).and_then(|t| t.engine.breakpoints().get(id)).ok_or("gone")?;
+                    let (path, line) = (bp.path.clone(), bp.line);
+                    // A breakpoint of another tab opens in its own tab.
+                    self.tabs.activate(tab);
+                    self.tab_mut().browse(path, line);
+                    Ok(String::new())
+                }
+                Some(BpRow::Exception { .. }) | None => Err("nothing selected".into()),
+            },
             Pane::History => {
-                self.ui.view = View::Overview;
-                self.jump_to_execution();
+                let tab = self.tab_mut();
+                tab.ui.view = View::Overview;
+                tab.jump_to_execution();
                 Ok("showing the selected stop".into())
             }
             _ => Ok(String::new()),
@@ -789,16 +908,17 @@ impl App {
 
     fn open_choice(&mut self, choice: crate::overlay::Choice, toggle: bool) {
         use crate::overlay::Choice;
+        let tab = self.tab_mut();
         let (path, line) = match choice {
             Choice::File { path, line } => (path, line),
-            Choice::Breakpoint(id) => match self.engine.breakpoints().get(id) {
+            Choice::Breakpoint(id) => match tab.engine.breakpoints().get(id) {
                 Some(bp) => (bp.path.clone(), Some(bp.line)),
                 None => return,
             },
         };
         if toggle {
             let line = line.unwrap_or(1);
-            let message = match self.engine.toggle_breakpoint(&path, line) {
+            let message = match tab.engine.toggle_breakpoint(&path, line) {
                 Toggle::Added(id) => format!("added #{id} at line {line}"),
                 Toggle::Removed(id) => format!("removed #{id} at line {line}"),
             };
@@ -810,20 +930,27 @@ impl App {
             });
             return;
         }
-        self.ui.view = View::Code;
-        self.browse(path, line.unwrap_or(1));
+        tab.ui.view = View::Code;
+        tab.browse(path, line.unwrap_or(1));
     }
 
-    fn browse(&mut self, path: PathBuf, line: u32) {
-        self.ui.source.browse = Some(path);
-        self.ui.source.cursor = line;
-        self.ui.source.recenter.set(true);
-        if self.ui.view != View::Breakpoints {
-            self.set_focus(Pane::Source);
-        } else {
-            self.ui.view = View::Code;
-            self.set_focus(Pane::Source);
-        }
+    fn resolve_file(&self, file: &str) -> Result<PathBuf, String> {
+        let path = Path::new(file);
+        let path = if path.is_absolute() { path.to_path_buf() } else { self.tab().engine.workspace().join(path) };
+        if path.is_file() { Ok(path) } else { Err(format!("no such file: {}", path.display())) }
+    }
+
+    fn source_len(&self) -> u32 {
+        self.tab()
+            .source_path()
+            .and_then(|p| self.sources.borrow_mut().get(&p))
+            .map_or(0, |f| u32::try_from(f.lines.len()).unwrap_or(u32::MAX))
+    }
+}
+
+impl Tab {
+    pub fn require_session(&self) -> Result<SessionId, String> {
+        self.ui.session.filter(|sid| self.engine.session(*sid).is_some()).ok_or_else(|| "no active session".into())
     }
 
     /// Points SOURCE at the selected frame of the viewed stop, with the cursor on its line
@@ -838,36 +965,45 @@ impl App {
         }
     }
 
-    fn require_session(&self) -> Result<SessionId, String> {
-        self.ui.session.filter(|sid| self.engine.session(*sid).is_some()).ok_or_else(|| "no active session".into())
+    /// Shows `path` at `line` in SOURCE, in the CODE view when BREAKPOINTS fills the screen.
+    pub fn browse(&mut self, path: PathBuf, line: u32) {
+        self.ui.source.browse = Some(path);
+        self.ui.source.cursor = line;
+        self.ui.source.recenter.set(true);
+        if self.ui.view == View::Breakpoints {
+            self.ui.view = View::Code;
+        }
+        self.set_focus(Pane::Source);
     }
 
-    fn find_config(&self, name: &str) -> Result<LaunchConfig, String> {
-        let wanted = name.to_lowercase();
-        self.configs
-            .iter()
-            .find(|c| c.name.to_lowercase() == wanted)
-            .or_else(|| self.configs.iter().find(|c| c.name.to_lowercase().contains(&wanted)))
-            .cloned()
-            .ok_or_else(|| {
-                let names: Vec<&str> = self.configs.iter().map(|c| c.name.as_str()).collect();
-                format!("no configuration `{name}` (have: {})", names.join(", "))
-            })
-    }
-
-    fn resolve_file(&self, file: &str) -> Result<PathBuf, String> {
-        let path = Path::new(file);
-        let path = if path.is_absolute() { path.to_path_buf() } else { self.engine.workspace().join(path) };
-        if path.is_file() { Ok(path) } else { Err(format!("no such file: {}", path.display())) }
-    }
-
-    fn source_len(&self) -> u32 {
-        self.source_path()
-            .and_then(|p| self.sources.borrow_mut().get(&p))
-            .map_or(0, |f| u32::try_from(f.lines.len()).unwrap_or(u32::MAX))
+    /// Follows new stops: the session that stopped becomes active unless the active one is
+    /// stopped too, and SOURCE goes to where it stopped.
+    pub fn follow_stops(&mut self) {
+        let mut newest: Option<SessionId> = None;
+        for session in self.engine.sessions() {
+            let seen = self.ui.seen_stops.entry(session.id).or_default();
+            if session.history.len() > *seen {
+                *seen = session.history.len();
+                newest = Some(session.id);
+            }
+        }
+        let active_busy = self.active().is_some_and(|s| s.is_stopped() && s.is_alive());
+        if self.ui.session.is_none() || self.active().is_none() {
+            self.ui.session = self.engine.sessions().iter().rev().find(|s| s.is_alive()).map(|s| s.id);
+        }
+        if let Some(sid) = newest {
+            if !active_busy || self.ui.session == Some(sid) {
+                self.ui.session = Some(sid);
+            }
+            if self.ui.session == Some(sid) {
+                self.ui.viewing.remove(&sid);
+                self.ui.stack.pos = 0;
+                self.jump_to_execution();
+            }
+        }
     }
 }
 
-fn tuitor_core_canonical(path: &Path) -> PathBuf {
+fn canonical(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }

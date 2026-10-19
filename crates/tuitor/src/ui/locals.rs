@@ -3,18 +3,18 @@ use tuitor_core::snapshot::Change;
 
 use super::paint::{Painter, Panel, seg, truncate};
 use super::theme::*;
-use crate::app::App;
 use crate::command::View;
+use crate::tab::Tab;
 
-pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
-    let rows = app.local_rows();
-    let snapshot = app.viewed();
+pub fn draw(p: &mut Painter<'_>, tab: &Tab, area: Rect, focus: bool) {
+    let rows = tab.local_rows();
+    let snapshot = tab.viewed();
     let changed = rows.iter().filter(|r| changed_here(r.change.as_ref())).count();
     let vars = rows.iter().filter(|r| !r.scope && !r.note && r.depth == 1).count();
 
-    let title = if app.ui.view == View::History { "SNAPSHOT" } else { "LOCALS" };
+    let title = if tab.ui.view == View::History { "SNAPSHOT" } else { "LOCALS" };
     let sub = match snapshot {
-        Some(s) if app.in_history() => vec![seg(format!("stop #{} · recorded", s.number), fg(DIM))],
+        Some(s) if tab.in_history() => vec![seg(format!("stop #{} · recorded", s.number), fg(DIM))],
         Some(s) => vec![seg(format!("stop #{}", s.number), fg(DIM))],
         None => vec![],
     };
@@ -32,7 +32,7 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
 
     let inner = super::paint::inner(area);
     if rows.is_empty() {
-        let text = if app.active().is_some_and(|s| s.is_stopped()) {
+        let text = if tab.active().is_some_and(|s| s.is_stopped()) {
             "reading…"
         } else {
             "variables appear when the program stops"
@@ -50,15 +50,15 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
     p.text(x_name, y0, "NAME", bold(FAINT), inner.right());
     p.text(x_type, y0, "TYPE", bold(FAINT), inner.right());
     p.text(x_value, y0, "VALUE", bold(FAINT), inner.right());
-    if let Some(prev) = app.previous() {
+    if let Some(prev) = tab.previous() {
         p.segs_right(inner.right(), y0, &[seg(format!("Δ since #{}", prev.number), bold(FAINT))], x_value + 6);
     }
 
     let height = usize::from(inner.height.saturating_sub(1));
-    let offset = app.ui.locals.window(height, rows.len());
+    let offset = tab.ui.locals.window(height, rows.len());
     for (i, row) in rows.iter().enumerate().skip(offset).take(height) {
         let y = y0 + 1 + (i - offset) as u16;
-        let selected = focus && i == app.ui.locals.pos;
+        let selected = focus && i == tab.ui.locals.pos;
         if selected {
             p.band(inner.x, y, inner.width, SEL);
         }

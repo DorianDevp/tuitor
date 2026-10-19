@@ -3,19 +3,19 @@ use tuitor_core::snapshot::Snapshot;
 
 use super::paint::{Painter, Panel, seg, truncate};
 use super::theme::*;
-use crate::app::App;
+use crate::tab::Tab;
 
 const COL: u16 = 10;
 
-pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
-    let watches = app.engine.watches();
+pub fn draw(p: &mut Painter<'_>, tab: &Tab, area: Rect, focus: bool) {
+    let watches = tab.engine.watches();
     let inner = super::paint::inner(area);
     let expr_w = (inner.width * 34 / 100).clamp(10, 28);
     let trend_w = 8;
     let max_cols = usize::from(inner.width.saturating_sub(expr_w + trend_w + 2) / COL).max(1);
 
     // The last stops up to the one being viewed.
-    let history: Vec<&Snapshot> = match (app.active(), app.viewed()) {
+    let history: Vec<&Snapshot> = match (tab.active(), tab.viewed()) {
         (Some(session), Some(viewed)) => {
             let end = viewed.number as usize;
             session.history[end.saturating_sub(max_cols)..end].iter().collect()
@@ -32,7 +32,7 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
     }
     let y0 = inner.y;
     p.text(inner.x + 1, y0, "EXPRESSION", bold(FAINT), inner.right());
-    let latest = app.active().and_then(|s| s.latest()).map(|s| s.number);
+    let latest = tab.active().and_then(|s| s.latest()).map(|s| s.number);
     for (j, snap) in history.iter().enumerate() {
         let x = inner.x + 1 + expr_w + j as u16 * COL;
         let is_view = j + 1 == history.len();
@@ -45,10 +45,10 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
     p.text(trend_x, y0, "TREND", bold(FAINT), inner.right());
 
     let height = usize::from(inner.height.saturating_sub(1));
-    let offset = app.ui.watch.window(height, watches.len());
+    let offset = tab.ui.watch.window(height, watches.len());
     for (i, expr) in watches.iter().enumerate().skip(offset).take(height) {
         let y = y0 + 1 + (i - offset) as u16;
-        if focus && i == app.ui.watch.pos {
+        if focus && i == tab.ui.watch.pos {
             p.band(inner.x, y, inner.width, SEL);
         }
         p.text(inner.x + 1, y, expr, fg(FG), inner.x + expr_w);

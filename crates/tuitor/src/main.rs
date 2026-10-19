@@ -4,20 +4,22 @@ mod command;
 mod keymap;
 mod model;
 mod overlay;
+mod paths;
 mod runner;
 mod script;
 mod sources;
+mod tab;
 mod ui;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use serde_json::{Map, Value};
-use tuitor_core::config::{
-    Adapters, INSTALL_HELP, LaunchConfig, RequestKind, TransportKind, Variables, load_launch_json,
-};
-use tuitor_core::{Engine, EngineOptions, persist};
+use tokio::sync::mpsc;
+use tuitor_core::config::{Adapters, INSTALL_HELP, LaunchConfig, RequestKind, TransportKind, home_relative};
+use tuitor_core::project::{Project, Source};
+use tuitor_core::store::Store;
 
 use crate::app::App;
 use crate::keymap::Keymap;
@@ -26,12 +28,16 @@ use crate::keymap::Keymap;
 #[derive(Parser)]
 #[command(name = "tuitor", version)]
 struct Cli {
-    /// Launch configuration to start (a name from .vscode/launch.json).
+    /// Launch configuration to start (a name from .vscode/launch.json or tuitor's own).
     config: Option<String>,
 
-    /// Workspace directory; defaults to the current directory.
+    /// Project directory; defaults to the current directory.
     #[arg(short = 'C', long, global = true)]
     workspace: Option<PathBuf>,
+
+    /// Open another project in a tab of its own; repeatable.
+    #[arg(short = 'o', long = "open", value_name = "DIR", global = true)]
+    open: Vec<PathBuf>,
 
     /// launch.json to read; defaults to <workspace>/.vscode/launch.json.
     #[arg(long, global = true)]
@@ -68,57 +74,63 @@ enum Command {
         #[arg(long = "map")]
         maps: Vec<String>,
     },
-    /// Show the launch configurations and adapters tuitor sees.
+    /// Show the projects, launch configurations and adapters tuitor sees.
     Configs,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let workspace = std::fs::canonicalize(cli.workspace.clone().unwrap_or_else(|| PathBuf::from(".")))
-        .context("workspace directory")?;
     let config_dir = dirs::config_dir().map(|d| d.join("tuitor"));
     let _log = init_logging();
 
     let adapters = Adapters::load(config_dir.as_ref().map(|d| d.join("adapters.toml")).as_deref())?;
     let keymap = Keymap::load(config_dir.as_ref().map(|d| d.join("keys.toml")).as_deref())?;
-    let vars = Variables { workspace: workspace.clone() };
-    let launch_json = cli.launch_json.clone().unwrap_or_else(|| workspace.join(".vscode/launch.json"));
-    let (configs, config_error) = if launch_json.exists() {
-        match load_launch_json(&launch_json, &vars) {
-            Ok(configs) => (configs, None),
-            Err(err) => (Vec::new(), Some(format!("{err:#}"))),
-        }
-    } else {
-        (Vec::new(), None)
-    };
+    let store = Store::new(Store::default_path().context("no config directory for tuitor's configurations")?);
+    let workspace = directory(cli.workspace.as_deref().unwrap_or(Path::new(".")))?;
+    let first = Project::open(&workspace, &store, cli.launch_json.as_deref());
+    let others = cli.open.iter().map(|dir| directory(dir)).collect::<Result<Vec<_>>>()?;
 
     let start = match &cli.command {
-        Some(Command::Configs) => return print_configs(&configs, &adapters, &workspace, &launch_json, config_error),
+        Some(Command::Configs) => {
+            let mut projects = vec![first];
+            projects.extend(others.iter().map(|dir| Project::open(dir, &store, None)));
+            return print_configs(&projects, &adapters, &store);
+        }
         Some(Command::Exec { adapter, program, args }) => Some(exec_config(adapter, program, args, &workspace)?),
         Some(Command::Listen { port, maps }) => Some(listen_config(*port, maps, &workspace)?),
         None => match &cli.config {
-            Some(name) => Some(
-                configs
-                    .iter()
-                    .find(|c| c.name.eq_ignore_ascii_case(name))
-                    .cloned()
-                    .with_context(|| format!("no configuration named `{name}` in {}", launch_json.display()))?,
-            ),
-            None if configs.len() == 1 => configs.first().cloned(),
+            Some(name) => Some(named(&first, name)?),
+            // The one configuration of the only project starts by itself.
+            None if others.is_empty() && first.configurations.len() == 1 => {
+                first.configurations[0].launch(&first.variables()).ok()
+            }
             None => None,
         },
     };
+    // Unless asked for, the current directory gets a tab only if it is a project.
+    let open_first = cli.workspace.is_some() || start.is_some() || first.is_project();
 
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     runtime.block_on(async move {
-        let (engine, rx) = Engine::new(EngineOptions {
-            adapters,
-            workspace: workspace.clone(),
-            state_file: persist::state_file(&workspace),
-        });
-        let mut app = App::new(engine, keymap, configs);
-        if let Some(error) = config_error {
-            app.execute_error(&format!("launch.json: {error}"));
+        let (inbox, rx) = mpsc::unbounded_channel();
+        let mut app = App::new(keymap, adapters, store, inbox);
+        let mut projects: Vec<Project> = open_first.then_some(first).into_iter().collect();
+        for dir in others {
+            if !projects.iter().any(|p| p.dir == dir) {
+                projects.push(Project::open(&dir, &app.store, None));
+            }
+        }
+        let mut first_tab = None;
+        let mut errors = Vec::new();
+        for project in projects {
+            errors.extend(project.errors.iter().cloned());
+            first_tab.get_or_insert(app.open(project));
+        }
+        if let Some(id) = first_tab {
+            app.tabs.activate(id);
+        }
+        if let Some(error) = errors.first() {
+            app.execute_error(error);
         }
         match &cli.script {
             Some(script) => script::run(app, rx, start, script, parse_size(&cli.size)?).await,
@@ -127,12 +139,23 @@ fn main() -> Result<()> {
     })
 }
 
-fn exec_config(
-    adapter: &str,
-    program: &std::path::Path,
-    args: &[String],
-    workspace: &std::path::Path,
-) -> Result<LaunchConfig> {
+fn directory(path: &Path) -> Result<PathBuf> {
+    let dir = std::fs::canonicalize(path).with_context(|| format!("project directory {}", path.display()))?;
+    if !dir.is_dir() {
+        bail!("{} is not a directory", dir.display());
+    }
+    Ok(dir)
+}
+
+fn named(project: &Project, name: &str) -> Result<LaunchConfig> {
+    let config = project.configurations.iter().find(|c| c.name().eq_ignore_ascii_case(name)).with_context(|| {
+        let names: Vec<&str> = project.configurations.iter().map(|c| c.name()).collect();
+        format!("no configuration named `{name}` in {} (have: {})", home_relative(&project.dir), names.join(", "))
+    })?;
+    config.launch(&project.variables())
+}
+
+fn exec_config(adapter: &str, program: &Path, args: &[String], workspace: &Path) -> Result<LaunchConfig> {
     let program = std::fs::canonicalize(program).with_context(|| format!("program {}", program.display()))?;
     let mut extra = Map::new();
     extra.insert("program".into(), Value::String(program.display().to_string()));
@@ -142,7 +165,7 @@ fn exec_config(
     Ok(LaunchConfig::adhoc(&name, adapter, RequestKind::Launch, extra))
 }
 
-fn listen_config(port: u16, maps: &[String], workspace: &std::path::Path) -> Result<LaunchConfig> {
+fn listen_config(port: u16, maps: &[String], workspace: &Path) -> Result<LaunchConfig> {
     let mut mappings = Map::new();
     for map in maps {
         let Some((remote, local)) = map.split_once('=') else { bail!("--map expects remote=local, got `{map}`") };
@@ -158,25 +181,30 @@ fn listen_config(port: u16, maps: &[String], workspace: &std::path::Path) -> Res
     Ok(LaunchConfig::adhoc("Listen for Xdebug", "php", RequestKind::Launch, extra))
 }
 
-fn print_configs(
-    configs: &[LaunchConfig],
-    adapters: &Adapters,
-    workspace: &std::path::Path,
-    launch_json: &std::path::Path,
-    error: Option<String>,
-) -> Result<()> {
-    println!("launch configurations ({}):", launch_json.display());
-    if let Some(error) = error {
-        println!("  error: {error}");
+fn print_configs(projects: &[Project], adapters: &Adapters, store: &Store) -> Result<()> {
+    for project in projects {
+        let kinds: Vec<&str> = project.kinds.iter().map(|k| k.name()).collect();
+        let kinds = if kinds.is_empty() { "no known kind".to_owned() } else { kinds.join(", ") };
+        println!("{} ({kinds}):", home_relative(&project.dir));
+        for error in &project.errors {
+            println!("  error: {error}");
+        }
+        if project.configurations.is_empty() {
+            println!("  no launch configurations");
+        }
+        for config in &project.configurations {
+            let source = match &config.source {
+                Source::LaunchJson(path) => path.strip_prefix(&project.dir).unwrap_or(path).display().to_string(),
+                Source::Tuitor => "tuitor's own".to_owned(),
+            };
+            let known = if adapters.get(config.adapter()).is_some() { "" } else { "  (no adapter for this type)" };
+            println!("  {:<32} type={:<12} {source}{known}", config.name(), config.adapter());
+        }
+        println!();
     }
-    if configs.is_empty() {
-        println!("  none");
-    }
-    for config in configs {
-        let known = if adapters.get(&config.adapter).is_some() { "" } else { "  (no adapter for this type)" };
-        println!("  {:<32} type={}{known}", config.name, config.adapter);
-    }
+    println!("tuitor's own configurations are kept in {}", home_relative(store.path()));
     println!("\nadapters:");
+    let workspace = projects.first().map(|p| p.dir.as_path()).unwrap_or(Path::new("."));
     let mut missing = false;
     for spec in adapters.all() {
         let command = std::iter::once(&spec.command).chain(&spec.args).map(String::as_str).collect::<Vec<_>>();

@@ -1,14 +1,17 @@
 use ratatui::layout::Rect;
+use tuitor_core::config::home_relative;
 
 use super::paint::{Painter, Panel, Seg, seg};
 use super::theme::*;
 use crate::app::App;
 use crate::command::BpScope;
-use crate::model::BpRow;
+use crate::model::{BpRow, Hidden};
+use crate::tab::Tab;
 
 pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool) {
+    let tab = app.tab();
     let rows = app.bp_rows();
-    let scope = scope_toggle(app.ui.bp_scope);
+    let scope = scope_toggle(tab.ui.bp_scope);
     let keys =
         if focus { vec![("a", "scope"), ("e", "cond"), ("l", "log"), ("d", "del")] } else { vec![("a", "scope")] };
     p.panel(area, &Panel { title: "BREAKPOINTS", sub: scope, right: vec![], keys, focus });
@@ -18,8 +21,9 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool)
         p.text(inner.x + 2, inner.y, "b on a SOURCE line adds one · f finds files", fg(FAINT), inner.right());
         return;
     }
-    let hits = app.viewed().map(|s| s.hit_breakpoints.clone()).unwrap_or_default();
-    let workspace = app.engine.workspace();
+    // Breakpoint ids are per tab: only this tab's viewed stop marks one as hit.
+    let current = app.tabs.active_id();
+    let hits = tab.viewed().map(|s| s.hit_breakpoints.clone()).unwrap_or_default();
     let hits_x = inner.right().saturating_sub(5);
     let cond_x = if wide { inner.x + inner.width * 45 / 100 } else { inner.x + inner.width * 55 / 100 };
 
@@ -33,18 +37,29 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool)
     // Unfocused and narrow: exception filters collapse into one summary line.
     let compact = !wide && !focus;
     let rows: Vec<BpRow> =
-        if compact { rows.into_iter().filter(|r| matches!(r, BpRow::Breakpoint(_))).collect() } else { rows };
-    let summary = if compact { exception_summary(app) } else { None };
-    let footer = app.hidden_bp_count();
-    let reserved = usize::from(footer > 0) + usize::from(summary.is_some());
+        if compact { rows.into_iter().filter(|r| !matches!(r, BpRow::Exception { .. })).collect() } else { rows };
+    let summary = if compact { exception_summary(tab) } else { None };
+    let footer = hidden_note(&app.hidden_bps());
+    let reserved = usize::from(footer.is_some()) + usize::from(summary.is_some());
     let height = usize::from(inner.bottom().saturating_sub(y)).saturating_sub(reserved);
-    let offset = app.ui.bps.window(height, rows.len());
+    let offset = tab.ui.bps.window(height, rows.len());
     for (i, row) in rows.iter().enumerate().skip(offset).take(height) {
-        let selected = focus && i == app.ui.bps.pos;
+        let selected = focus && i == tab.ui.bps.pos;
         match row {
-            BpRow::Breakpoint(id) => {
-                let Some(bp) = app.engine.breakpoints().get(*id) else { continue };
-                let here = hits.contains(id);
+            BpRow::Tab(id) => {
+                let Some(owner) = app.tabs.get(*id) else { continue };
+                if selected {
+                    p.band(inner.x, y, inner.width, SEL2);
+                }
+                let name = owner.name();
+                let x = p.text(inner.x + 1, y, &name, bold(if *id == current { WHITE } else { DIM }), inner.right());
+                let dir = owner.project.as_ref().map(|p| home_relative(&p.dir)).unwrap_or_default();
+                p.text(x + 2, y, &dir, fg(GHOST), inner.right());
+            }
+            BpRow::Breakpoint { tab: owner, id } => {
+                let Some(owner_tab) = app.tabs.get(*owner) else { continue };
+                let Some(bp) = owner_tab.engine.breakpoints().get(*id) else { continue };
+                let here = *owner == current && hits.contains(id);
                 if here {
                     p.band(inner.x, y, inner.width, AMBER_BG);
                 } else if selected {
@@ -63,7 +78,7 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool)
                 };
                 p.text(inner.x + 1, y, glyph, bold(color), inner.right());
                 let path = if wide {
-                    bp.path.strip_prefix(workspace).unwrap_or(&bp.path).display().to_string()
+                    bp.path.strip_prefix(owner_tab.engine.workspace()).unwrap_or(&bp.path).display().to_string()
                 } else {
                     file_name(&bp.path)
                 };
@@ -93,13 +108,12 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool)
                 let hits_text = bp.hits.to_string();
                 p.segs_right(inner.right() - 1, y, &[seg(hits_text, fg(if bp.hits > 0 { FG } else { GHOST }))], hits_x);
             }
-            BpRow::Exception { session, filter, label } => {
+            BpRow::Exception { tab: owner, session, filter, label } => {
                 if selected {
                     p.band(inner.x, y, inner.width, SEL2);
                 }
-                let enabled = app
-                    .engine
-                    .session(*session)
+                let session = app.tabs.get(*owner).and_then(|t| t.engine.session(*session));
+                let enabled = session
                     .and_then(|s| s.exception_filters.iter().find(|f| &f.filter == filter))
                     .is_some_and(|f| f.enabled);
                 p.text(
@@ -110,7 +124,7 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool)
                     inner.right(),
                 );
                 p.text(inner.x + 3, y, label, fg(if enabled { FG } else { GHOST }), cond_x.saturating_sub(1));
-                let tag = app.engine.session(*session).map(|s| s.tag.clone()).unwrap_or_default();
+                let tag = session.map(|s| s.tag.clone()).unwrap_or_default();
                 p.text(cond_x, y, &format!("exceptions · {tag}"), italic(FAINT), hits_x);
             }
         }
@@ -119,14 +133,25 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool)
     if let Some(summary) = summary {
         p.segs(inner.x + 1, y, &summary, inner.right());
     }
-    if footer > 0 {
-        let text = format!("+ {footer} for other adapters   a → all");
-        p.text(inner.x + 1, inner.bottom() - 1, &text, fg(FAINT), inner.right());
+    if let Some(footer) = footer {
+        p.text(inner.x + 1, inner.bottom() - 1, &footer, fg(FAINT), inner.right());
     }
 }
 
-fn exception_summary(app: &App) -> Option<Vec<Seg<'static>>> {
-    let session = app.active()?;
+/// What the session scope leaves out, and the key that shows it.
+fn hidden_note(hidden: &Hidden) -> Option<String> {
+    let mut parts = Vec::new();
+    if hidden.here > 0 {
+        parts.push(format!("{} for other adapters", hidden.here));
+    }
+    if hidden.other_tabs > 0 {
+        parts.push(format!("{} in other tabs", hidden.other_tabs));
+    }
+    (!parts.is_empty()).then(|| format!("+ {}   a → all", parts.join(" · ")))
+}
+
+fn exception_summary(tab: &Tab) -> Option<Vec<Seg<'static>>> {
+    let session = tab.active()?;
     if session.exception_filters.is_empty() {
         return None;
     }

@@ -86,8 +86,10 @@ const WAVE_TOP: f32 = 7.5;
 const WAVE_SLOPE: f32 = 0.55;
 /// How finely the top bar looks ahead for the waves' next step.
 const WAVE_STEP: Duration = Duration::from_millis(10);
+/// Columns of the top bar's waves, one per stripe.
+pub const WAVES: u16 = STRIPES.len() as u16;
 /// Columns of the top bar's logo: the waves, a space and the name.
-pub const BAR_WIDTH: u16 = STRIPES.len() as u16 + 1 + NAME.len() as u16;
+pub const BAR_WIDTH: u16 = WAVES + 1 + NAME.len() as u16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Size {

@@ -1,8 +1,9 @@
 //! Read-only views of engine state shaped for the panes: rows of the variable
-//! tree, stack with library frames grouped, breakpoints in scope.
+//! tree, stack with library frames grouped, breakpoints in scope. What one project
+//! shows comes from its [`Tab`]; breakpoints can be listed across tabs.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tuitor_core::breakpoints::BreakpointId;
 use tuitor_core::session::{Session, SessionId};
@@ -10,6 +11,7 @@ use tuitor_core::snapshot::{Change, Frame, Snapshot, Var, VarPath, diff};
 
 use crate::app::{App, Pane};
 use crate::command::BpScope;
+use crate::tab::{Tab, TabId};
 
 #[derive(Debug, Clone)]
 pub struct LocalRow {
@@ -40,11 +42,36 @@ pub enum StackRow {
 
 #[derive(Debug, Clone)]
 pub enum BpRow {
-    Breakpoint(BreakpointId),
-    Exception { session: SessionId, filter: String, label: String },
+    /// Heads a tab's rows when the breakpoints of every tab are listed.
+    Tab(TabId),
+    Breakpoint {
+        tab: TabId,
+        id: BreakpointId,
+    },
+    Exception {
+        tab: TabId,
+        session: SessionId,
+        filter: String,
+        label: String,
+    },
 }
 
-impl App {
+/// Breakpoints the BREAKPOINTS scope leaves out.
+pub struct Hidden {
+    /// In this tab, for adapters the active session does not handle.
+    pub here: usize,
+    pub other_tabs: usize,
+}
+
+impl Tab {
+    pub fn focus(&self) -> Pane {
+        self.ui.focus.get(&self.ui.view).copied().unwrap_or(crate::app::panes(self.ui.view)[0])
+    }
+
+    pub fn set_focus(&mut self, pane: Pane) {
+        self.ui.focus.insert(self.ui.view, pane);
+    }
+
     pub fn active(&self) -> Option<&Session> {
         self.engine.session(self.ui.session?)
     }
@@ -162,80 +189,117 @@ impl App {
     pub fn source_path(&self) -> Option<PathBuf> {
         self.ui.source.browse.clone().or_else(|| self.selected_frame()?.path.clone())
     }
+}
 
+impl App {
     pub fn bp_rows(&self) -> Vec<BpRow> {
-        let session = self.active();
-        let in_scope = |path: &std::path::Path| match (self.ui.bp_scope, session) {
-            (BpScope::All, _) | (BpScope::Session, None) => true,
-            (BpScope::Session, Some(s)) => s.handles(path),
-        };
-        let mut rows: Vec<BpRow> =
-            self.engine.breakpoints().iter().filter(|b| in_scope(&b.path)).map(|b| BpRow::Breakpoint(b.id)).collect();
-        let sessions: Vec<&Session> = match self.ui.bp_scope {
-            BpScope::Session => session.into_iter().collect(),
-            BpScope::All => self.engine.sessions().iter().filter(|s| s.is_alive()).collect(),
-        };
-        for s in sessions {
-            for f in &s.exception_filters {
-                rows.push(BpRow::Exception { session: s.id, filter: f.filter.clone(), label: f.label.clone() });
+        let current = self.tab();
+        match current.ui.bp_scope {
+            BpScope::Session => tab_bp_rows(self.tabs.active_id(), current, true),
+            BpScope::All => {
+                let grouped = self.tabs.len() > 1;
+                let mut rows = Vec::new();
+                for (id, tab) in self.tabs.iter() {
+                    let tab_rows = tab_bp_rows(id, tab, false);
+                    if grouped && !tab_rows.is_empty() {
+                        rows.push(BpRow::Tab(id));
+                    }
+                    rows.extend(tab_rows);
+                }
+                rows
             }
         }
-        rows
     }
 
-    /// Breakpoints that exist but are hidden by the session scope.
-    pub fn hidden_bp_count(&self) -> usize {
-        let shown = self.bp_rows().iter().filter(|r| matches!(r, BpRow::Breakpoint(_))).count();
-        self.engine.breakpoints().len() - shown
+    pub fn hidden_bps(&self) -> Hidden {
+        let rows = self.bp_rows();
+        let shown =
+            |id: TabId| rows.iter().filter(|r| matches!(r, BpRow::Breakpoint { tab, .. } if *tab == id)).count();
+        let mut hidden = Hidden { here: 0, other_tabs: 0 };
+        for (id, tab) in self.tabs.iter() {
+            let count = tab.engine.breakpoints().len() - shown(id);
+            if id == self.tabs.active_id() {
+                hidden.here += count;
+            } else {
+                hidden.other_tabs += count;
+            }
+        }
+        hidden
     }
 
-    pub fn selected_bp_id(&self) -> Option<BreakpointId> {
-        if self.focus() != Pane::Breakpoints {
+    /// The breakpoint under the BREAKPOINTS cursor, and the tab it belongs to.
+    pub fn selected_bp(&self) -> Option<(TabId, BreakpointId)> {
+        let tab = self.tab();
+        if tab.focus() != Pane::Breakpoints {
             return None;
         }
-        match self.bp_rows().get(self.ui.bps.pos)? {
-            BpRow::Breakpoint(id) => Some(*id),
-            BpRow::Exception { .. } => None,
+        match self.bp_rows().get(tab.ui.bps.pos)? {
+            BpRow::Breakpoint { tab, id } => Some((*tab, *id)),
+            BpRow::Tab(_) | BpRow::Exception { .. } => None,
         }
     }
 
     /// Text for `copy`, depending on the focused pane.
     pub fn selected_text(&self) -> Option<String> {
-        match self.focus() {
+        let tab = self.tab();
+        match tab.focus() {
             Pane::Locals => {
-                let row = self.local_rows().into_iter().nth(self.ui.locals.pos)?;
+                let row = tab.local_rows().into_iter().nth(tab.ui.locals.pos)?;
                 (!row.scope && !row.note).then_some(row.value)
             }
             Pane::Watch => {
-                let expr = self.engine.watches().get(self.ui.watch.pos)?;
-                self.viewed()?.watch(expr)?.clone().ok()
+                let expr = tab.engine.watches().get(tab.ui.watch.pos)?;
+                tab.viewed()?.watch(expr)?.clone().ok()
             }
             Pane::Source => {
-                let path = self.source_path()?;
+                let path = tab.source_path()?;
                 let file = self.sources.borrow_mut().get(&path)?;
-                file.lines
-                    .get(usize::try_from(self.ui.source.cursor).ok()?.checked_sub(1)?)
-                    .map(|l| l.trim().to_owned())
+                file.lines.get(usize::try_from(tab.ui.source.cursor).ok()?.checked_sub(1)?).map(|l| l.trim().to_owned())
             }
             Pane::Stack => {
-                let frame = self.selected_frame()?;
+                let frame = tab.selected_frame()?;
                 Some(match &frame.path {
                     Some(path) => format!("{}:{}", path.display(), frame.line),
                     None => frame.name.clone(),
                 })
             }
             Pane::Breakpoints => {
-                let bp = self.engine.breakpoints().get(self.selected_bp_id()?)?;
+                let (tab, id) = self.selected_bp()?;
+                let bp = self.tabs.get(tab)?.engine.breakpoints().get(id)?;
                 Some(format!("{}:{}", bp.path.display(), bp.line))
             }
             Pane::Output => {
-                let len = self.engine.output().len();
-                let index = len.checked_sub(1 + self.ui.output_back)?;
-                self.engine.output().iter().nth(index).map(|l| l.text.clone())
+                let len = tab.engine.output().len();
+                let index = len.checked_sub(1 + tab.ui.output_back)?;
+                tab.engine.output().iter().nth(index).map(|l| l.text.clone())
             }
             Pane::Events | Pane::History => None,
         }
     }
+}
+
+/// A tab's breakpoints and exception filters: those of its active session, or of all of them.
+fn tab_bp_rows(id: TabId, tab: &Tab, session_only: bool) -> Vec<BpRow> {
+    let session = tab.active();
+    let in_scope = |path: &Path| !session_only || session.is_none_or(|s| s.handles(path));
+    let mut rows: Vec<BpRow> = tab
+        .engine
+        .breakpoints()
+        .iter()
+        .filter(|b| in_scope(&b.path))
+        .map(|b| BpRow::Breakpoint { tab: id, id: b.id })
+        .collect();
+    let sessions: Vec<&Session> = if session_only {
+        session.into_iter().collect()
+    } else {
+        tab.engine.sessions().iter().filter(|s| s.is_alive()).collect()
+    };
+    for s in sessions {
+        for f in &s.exception_filters {
+            rows.push(BpRow::Exception { tab: id, session: s.id, filter: f.filter.clone(), label: f.label.clone() });
+        }
+    }
+    rows
 }
 
 fn push_vars(

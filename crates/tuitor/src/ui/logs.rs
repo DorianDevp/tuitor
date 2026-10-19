@@ -3,12 +3,12 @@ use tuitor_core::log::OutputKind;
 
 use super::paint::{Painter, Panel, seg};
 use super::theme::*;
-use crate::app::App;
+use crate::tab::Tab;
 
-pub fn output(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
-    let lines = app.engine.output();
-    let right = if app.ui.output_back > 0 {
-        vec![seg(format!("{} lines up", app.ui.output_back), fg(AMBER_DIM))]
+pub fn output(p: &mut Painter<'_>, tab: &Tab, area: Rect, focus: bool) {
+    let lines = tab.engine.output();
+    let right = if tab.ui.output_back > 0 {
+        vec![seg(format!("{} lines up", tab.ui.output_back), fg(AMBER_DIM))]
     } else {
         vec![seg(format!("{} lines", lines.len()), fg(DIM))]
     };
@@ -17,11 +17,11 @@ pub fn output(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
 
     let inner = super::paint::inner(area);
     let height = usize::from(inner.height);
-    let end = lines.len().saturating_sub(app.ui.output_back);
+    let end = lines.len().saturating_sub(tab.ui.output_back);
     let start = end.saturating_sub(height);
     for (row, line) in lines.iter().skip(start).take(end - start).enumerate() {
         let y = inner.y + row as u16;
-        let tag = app.engine.session(line.session).map(|s| s.tag.clone()).unwrap_or_default();
+        let tag = tab.engine.session(line.session).map(|s| s.tag.clone()).unwrap_or_default();
         let mut x = p.text(inner.x + 1, y, &line.time.format("%H:%M:%S%.3f ").to_string(), fg(FAINT), inner.right());
         x = p.text(x, y, &format!("{tag:<5} "), fg(super::theme::tag(&tag)), inner.right());
         let style = match line.kind {
@@ -38,7 +38,7 @@ pub fn output(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
     }
 }
 
-pub fn events(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
+pub fn events(p: &mut Painter<'_>, tab: &Tab, area: Rect, focus: bool) {
     p.panel(
         area,
         &Panel {
@@ -51,15 +51,15 @@ pub fn events(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
     );
     let inner = super::paint::inner(area);
     let height = usize::from(inner.height);
-    let events: Vec<_> = app.engine.events().iter().rev().collect();
-    let offset = app.ui.events.window(height, events.len());
+    let events: Vec<_> = tab.engine.events().iter().rev().collect();
+    let offset = tab.ui.events.window(height, events.len());
     for (row, event) in events.iter().enumerate().skip(offset).take(height) {
         let y = inner.y + (row - offset) as u16;
-        if focus && row == app.ui.events.pos {
+        if focus && row == tab.ui.events.pos {
             p.band(inner.x, y, inner.width, SEL);
         }
         let newest = row == 0;
-        let tag = app.engine.session(event.session).map(|s| s.tag.clone()).unwrap_or_default();
+        let tag = tab.engine.session(event.session).map(|s| s.tag.clone()).unwrap_or_default();
         let mut x = p.text(inner.x + 1, y, &event.time.format("%H:%M:%S%.3f ").to_string(), fg(FAINT), inner.right());
         x = p.text(x, y, &format!("{tag:<5} "), fg(super::theme::tag(&tag)), inner.right());
         let name_style = match (event.name.as_str(), newest) {

@@ -125,7 +125,7 @@ pub const INSTALL_HELP: &str = "see README, \"Installing adapters\"";
 
 /// `~/…` for paths under the home directory: shorter on a one-line status, and still
 /// something a shell understands.
-fn home_relative(path: &Path) -> String {
+pub fn home_relative(path: &Path) -> String {
     match dirs::home_dir().and_then(|home| path.strip_prefix(home).ok().map(Path::to_path_buf)) {
         Some(rest) => format!("~/{}", rest.display()),
         None => path.display().to_string(),

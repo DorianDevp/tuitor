@@ -1,5 +1,5 @@
-//! The interactive loop: terminal input, engine messages, a clock tick, and a
-//! redraw when an animation on screen next changes.
+//! The interactive loop: terminal input, the messages of every tab's engine, a clock
+//! tick, and a redraw when an animation on screen next changes.
 
 use std::time::{Duration, Instant};
 
@@ -12,32 +12,29 @@ use tuitor_core::EngineMsg;
 use tuitor_core::config::LaunchConfig;
 
 use crate::app::App;
+use crate::tab::TabId;
 use crate::ui;
 
-pub async fn run(mut app: App, mut rx: UnboundedReceiver<EngineMsg>, start: Option<LaunchConfig>) -> Result<()> {
-    let mut terminal = ratatui::init();
-    let result = event_loop(&mut terminal, &mut app, &mut rx, start).await;
-    ratatui::restore();
-    app.engine.shutdown().await;
-    result
-}
+/// Messages of every tab's engine, each labelled with its tab.
+pub type Inbox = UnboundedReceiver<(TabId, EngineMsg)>;
 
-pub fn start(app: &mut App, config: Option<LaunchConfig>) {
-    let Some(config) = config else { return };
-    let name = config.name.clone();
-    match app.engine.start(config) {
-        Ok(sid) => app.ui.session = Some(sid),
-        Err(err) => app.execute_error(&format!("{name}: {err:#}")),
-    }
+pub async fn run(mut app: App, mut inbox: Inbox, start: Option<LaunchConfig>) -> Result<()> {
+    let mut terminal = ratatui::init();
+    let result = event_loop(&mut terminal, &mut app, &mut inbox, start).await;
+    ratatui::restore();
+    app.shutdown().await;
+    result
 }
 
 async fn event_loop(
     terminal: &mut DefaultTerminal,
     app: &mut App,
-    rx: &mut UnboundedReceiver<EngineMsg>,
+    inbox: &mut Inbox,
     config: Option<LaunchConfig>,
 ) -> Result<()> {
-    start(app, config);
+    if let Some(config) = config {
+        app.start(config);
+    }
     let mut input = EventStream::new();
     // The time in the top bar needs one redraw a second.
     let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -56,10 +53,10 @@ async fn event_loop(
                 Some(Err(err)) => return Err(err.into()),
                 None => return Ok(()),
             },
-            Some(msg) = rx.recv() => {
-                app.on_engine(msg);
-                while let Ok(msg) = rx.try_recv() {
-                    app.on_engine(msg);
+            Some((tab, msg)) = inbox.recv() => {
+                app.on_engine(tab, msg);
+                while let Ok((tab, msg)) = inbox.try_recv() {
+                    app.on_engine(tab, msg);
                 }
                 app.after_engine();
             }

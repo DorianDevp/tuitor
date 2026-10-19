@@ -2,12 +2,12 @@ use ratatui::layout::Rect;
 
 use super::paint::{Painter, Panel, seg};
 use super::theme::*;
-use crate::app::App;
 use crate::model::StackRow;
+use crate::tab::Tab;
 
-pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
-    let snapshot = app.viewed();
-    let rows = app.stack_rows();
+pub fn draw(p: &mut Painter<'_>, tab: &Tab, area: Rect, focus: bool) {
+    let snapshot = tab.viewed();
+    let rows = tab.stack_rows();
     let sub = snapshot.map(|s| vec![seg(format!("thread {}", s.thread_id), fg(DIM))]).unwrap_or_default();
     let right = snapshot.map(|s| vec![seg(format!("{} frames", s.frames.len()), fg(DIM))]).unwrap_or_default();
     let keys = if focus { vec![("v", "library"), ("⏎", "show")] } else { vec![] };
@@ -19,10 +19,10 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
         return;
     };
     let height = usize::from(inner.height);
-    let offset = app.ui.stack.window(height, rows.len());
+    let offset = tab.ui.stack.window(height, rows.len());
     for (i, row) in rows.iter().enumerate().skip(offset).take(height) {
         let y = inner.y + (i - offset) as u16;
-        let selected = i == app.ui.stack.pos;
+        let selected = i == tab.ui.stack.pos;
         if selected {
             p.band(inner.x, y, inner.width, if focus { SEL2 } else { SEL });
         }

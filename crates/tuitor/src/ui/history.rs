@@ -7,14 +7,14 @@ use tuitor_core::snapshot::Snapshot;
 use super::paint::{Painter, Panel, seg, truncate};
 use super::theme::*;
 use super::watch::number;
-use crate::app::App;
+use crate::tab::Tab;
 
 const MAX_CELL: u16 = 16;
 
 /// Columns: watches first, then top-level variables of the viewed stop.
-fn columns(app: &App) -> Vec<String> {
-    let mut cols: Vec<String> = app.engine.watches().to_vec();
-    if let Some(snapshot) = app.viewed() {
+fn columns(tab: &Tab) -> Vec<String> {
+    let mut cols: Vec<String> = tab.engine.watches().to_vec();
+    if let Some(snapshot) = tab.viewed() {
         for scope in snapshot.scopes.iter().filter(|s| s.default_open) {
             for var in scope.vars.iter().flatten() {
                 if !cols.contains(&var.name) {
@@ -34,8 +34,8 @@ fn cell(snapshot: &Snapshot, column: &str) -> Option<String> {
     Some(value.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
-pub fn table(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
-    let session = app.active();
+pub fn table(p: &mut Painter<'_>, tab: &Tab, area: Rect, focus: bool) {
+    let session = tab.active();
     let history: &[Snapshot] = session.map(|s| s.history.as_slice()).unwrap_or_default();
     let sub = vec![seg("value of every variable at every stop", fg(DIM))];
     let right = vec![seg(format!("{} stops", history.len()), fg(DIM))];
@@ -53,8 +53,8 @@ pub fn table(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
         );
         return;
     }
-    let cols = columns(app);
-    let viewed = app.viewed().map_or(history.len() as u32, |s| s.number);
+    let cols = columns(tab);
+    let viewed = tab.viewed().map_or(history.len() as u32, |s| s.number);
     let latest = history.len() as u32;
 
     // Fixed columns.
@@ -73,7 +73,7 @@ pub fn table(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
             (longest.max(c.chars().count()) as u16 + 2).min(MAX_CELL)
         })
         .collect();
-    let selected_col = app.ui.history_col.min(cols.len().saturating_sub(1));
+    let selected_col = tab.ui.history_col.min(cols.len().saturating_sub(1));
     let room = inner.right().saturating_sub(x_vars + 4);
     let mut first = 0;
     while first < selected_col && widths[first..=selected_col].iter().sum::<u16>() > room {
@@ -171,14 +171,14 @@ pub fn table(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
 }
 
 /// The selected column across all stops: a bar chart for numbers and the list of changes.
-pub fn value(p: &mut Painter<'_>, app: &App, area: Rect) {
-    let cols = columns(app);
-    let Some(name) = cols.get(app.ui.history_col.min(cols.len().saturating_sub(1))) else {
+pub fn value(p: &mut Painter<'_>, tab: &Tab, area: Rect) {
+    let cols = columns(tab);
+    let Some(name) = cols.get(tab.ui.history_col.min(cols.len().saturating_sub(1))) else {
         p.panel(area, &Panel { title: "VALUE", ..Panel::default() });
         return;
     };
-    let history: &[Snapshot] = app.active().map(|s| s.history.as_slice()).unwrap_or_default();
-    let viewed = app.viewed().map_or(0, |s| s.number);
+    let history: &[Snapshot] = tab.active().map(|s| s.history.as_slice()).unwrap_or_default();
+    let viewed = tab.viewed().map_or(0, |s| s.number);
     let sub = vec![seg(name.clone(), bold(WHITE))];
     p.panel(
         area,

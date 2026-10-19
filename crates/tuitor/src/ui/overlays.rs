@@ -176,7 +176,7 @@ pub fn finder(p: &mut Painter<'_>, app: &App, finder: &Finder, screen: Rect) {
     if let Some(choice) = finder.choice() {
         let (path, line) = match choice {
             Choice::File { path, line } => (path, line.unwrap_or(1)),
-            Choice::Breakpoint(id) => match app.engine.breakpoints().get(id) {
+            Choice::Breakpoint(id) => match app.tab().engine.breakpoints().get(id) {
                 Some(bp) => (bp.path.clone(), bp.line),
                 None => return,
             },
@@ -199,7 +199,8 @@ pub fn finder(p: &mut Painter<'_>, app: &App, finder: &Finder, screen: Rect) {
 }
 
 fn preview(p: &mut Painter<'_>, app: &App, path: &std::path::Path, line: u32, area: Rect) {
-    let rel = path.strip_prefix(app.engine.workspace()).unwrap_or(path);
+    let engine = &app.tab().engine;
+    let rel = path.strip_prefix(engine.workspace()).unwrap_or(path);
     p.text(
         area.x,
         area.y,
@@ -219,7 +220,7 @@ fn preview(p: &mut Painter<'_>, app: &App, path: &std::path::Path, line: u32, ar
         if n == line {
             p.band(area.x, y, area.width, SEL2);
         }
-        if app.engine.breakpoints().at(&canonical, n).is_some() {
+        if engine.breakpoints().at(&canonical, n).is_some() {
             p.text(area.x, y, "●", bold(RED_DIM), area.right());
         }
         p.text(area.x + 1, y, &format!("{n:>4} "), fg(if n == line { FG } else { FAINT }), area.right());

@@ -4,6 +4,7 @@ use std::time::Duration;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use tuitor_core::breakpoints::Breakpoint;
+use tuitor_core::config::home_relative;
 use tuitor_core::session::SessionState;
 use tuitor_core::snapshot::Change;
 
@@ -12,18 +13,20 @@ use super::paint::{Painter, Panel, seg, truncate, truncate_left};
 use super::syntax::{Lang, highlight};
 use super::theme::*;
 use crate::app::App;
+use crate::tab::Tab;
 
 const GUTTER: u16 = 8;
 const INLINE_VALUE_WIDTH: usize = 28;
 
 pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
-    let path = app.source_path();
-    let frame = app.selected_frame();
-    let top_frame = app.viewed().and_then(|s| s.top());
-    let rel = path.as_deref().map(|p| p.strip_prefix(app.engine.workspace()).unwrap_or(p).display().to_string());
+    let tab = app.tab();
+    let path = tab.source_path();
+    let frame = tab.selected_frame();
+    let top_frame = tab.viewed().and_then(|s| s.top());
+    let rel = path.as_deref().map(|p| p.strip_prefix(tab.engine.workspace()).unwrap_or(p).display().to_string());
 
     let mut right = Vec::new();
-    if app.ui.source.browse.is_some() {
+    if tab.ui.source.browse.is_some() {
         right.push(seg("browsing", fg(DIM)));
     } else if let Some(frame) = frame {
         right.push(seg(truncate(&frame.name, 40).into_owned(), fg(DIM)));
@@ -60,27 +63,27 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
 
     let lines = u32::try_from(file.lines.len()).unwrap_or(u32::MAX);
     let height = u32::from(inner.height);
-    let in_history = app.in_history();
+    let in_history = tab.in_history();
     // The execution line, if the shown frame is in this file.
     let exec = frame.filter(|f| f.path.as_deref() == Some(path.as_path())).map(|f| f.line);
     let exec_is_top = frame.zip(top_frame).is_some_and(|(a, b)| a.id == b.id);
-    let cursor = app.ui.source.cursor.clamp(1, lines.max(1));
+    let cursor = tab.ui.source.cursor.clamp(1, lines.max(1));
 
-    let recenter = app.ui.source.recenter.replace(false);
-    let top = window_top(app.ui.source.top.get(), cursor, height, lines, recenter);
-    app.ui.source.top.set(top);
+    let recenter = tab.ui.source.recenter.replace(false);
+    let top = window_top(tab.ui.source.top.get(), cursor, height, lines, recenter);
+    tab.ui.source.top.set(top);
 
     let canonical = tuitor_canonical(&path);
     let breakpoints: HashMap<u32, &Breakpoint> =
-        app.engine.breakpoints().in_file(&canonical).map(|b| (b.line, b)).collect();
-    let hit: Vec<u32> = app.viewed().map(|s| s.hit_breakpoints.clone()).unwrap_or_default();
-    let inline = if exec_is_top && app.ui.source.browse.is_none() {
-        inline_values(app, &file.lines, top, exec)
+        tab.engine.breakpoints().in_file(&canonical).map(|b| (b.line, b)).collect();
+    let hit: Vec<u32> = tab.viewed().map(|s| s.hit_breakpoints.clone()).unwrap_or_default();
+    let inline = if exec_is_top && tab.ui.source.browse.is_none() {
+        inline_values(tab, &file.lines, top, exec)
     } else {
         HashMap::new()
     };
     let lang = Lang::from_path(&path);
-    let browsing = app.ui.source.browse.is_some() || focus;
+    let browsing = tab.ui.source.browse.is_some() || focus;
 
     for row in 0..height {
         let n = top + row;
@@ -210,10 +213,10 @@ fn fit_inline(values: &[InlineValue], room: u16) -> Option<Vec<super::paint::Seg
 }
 
 /// Values next to the last line (up to the execution line) where each variable appears.
-fn inline_values(app: &App, lines: &[String], top: u32, exec: Option<u32>) -> HashMap<u32, Vec<InlineValue>> {
+fn inline_values(tab: &Tab, lines: &[String], top: u32, exec: Option<u32>) -> HashMap<u32, Vec<InlineValue>> {
     let mut out: HashMap<u32, Vec<InlineValue>> = HashMap::new();
-    let (Some(snapshot), Some(exec)) = (app.viewed(), exec) else { return out };
-    let changes = app.changes();
+    let (Some(snapshot), Some(exec)) = (tab.viewed(), exec) else { return out };
+    let changes = tab.changes();
     let first = top.max(exec.saturating_sub(40)).max(1);
     for scope in snapshot.scopes.iter().filter(|s| s.default_open) {
         for var in scope.vars.iter().flatten() {
@@ -249,9 +252,14 @@ fn one_line(value: &str) -> String {
 }
 
 fn empty(p: &mut Painter<'_>, app: &App, inner: Rect) {
-    let configs = app.configs.len().min(6);
-    // The message, a gap, the configurations with a line above and a gap below, then two hints.
-    let hints_height = if configs == 0 { 4 } else { 6 + configs as u16 };
+    let tab = app.tab();
+    let configs: Vec<String> = match &tab.project {
+        Some(project) => project.configurations.iter().map(|c| format!("{}  ({})", c.name(), c.adapter())).collect(),
+        None => app.recent_projects.iter().map(|dir| home_relative(dir)).collect(),
+    };
+    let listed = configs.len().min(6);
+    // The message, a gap, the list with a line above and a gap below, then two hints.
+    let hints_height = if listed == 0 { 4 } else { 6 + listed as u16 };
     let logo = [Size::Full, Size::Small].into_iter().find(|size| {
         let (w, h) = size.cells();
         w + 2 * logo::PAD <= inner.width && 1 + h + 1 + hints_height <= inner.height
@@ -275,30 +283,39 @@ fn empty(p: &mut Painter<'_>, app: &App, inner: Rect) {
         let x2 = p.text(x, y, key, bold(KEY), inner.right());
         p.text(x2.max(x + 4), y, text, fg(DIM), inner.right());
     };
-    let message = match app.active() {
-        Some(s) if s.is_alive() => "Nothing is stopped yet.",
-        Some(_) => "The session ended.",
-        None => "No debug session.",
+    let message = match (tab.active(), &tab.project) {
+        (Some(s), _) if s.is_alive() => "Nothing is stopped yet.",
+        (Some(_), _) => "The session ended.",
+        (None, Some(_)) => "No debug session.",
+        (None, None) => "No project in this tab.",
     };
     p.text(x, y, message, bold(FG), inner.right());
     y += 2;
-    if !app.configs.is_empty() {
-        line(p, y, "S", "start a launch configuration:");
+    if listed > 0 {
+        match tab.project {
+            Some(_) => line(p, y, "S", "start a launch configuration:"),
+            None => {
+                p.text(x, y, "Opened recently:", fg(DIM), inner.right());
+            }
+        }
         y += 1;
-        for config in app.configs.iter().take(configs) {
-            p.text(x + 4, y, &format!("{}  ({})", config.name, config.adapter), fg(FAINT), inner.right());
+        for item in configs.iter().take(listed) {
+            p.text(x + 4, y, item, fg(FAINT), inner.right());
             y += 1;
         }
         y += 1;
     }
-    line(p, y, "f", "find a file, then b toggles a breakpoint on the cursor line");
+    match tab.project {
+        Some(_) => line(p, y, "f", "find a file, then b toggles a breakpoint on the cursor line"),
+        None => line(p, y, "O", "open a project in this tab"),
+    }
     line(p, y + 1, "/", "command line · ? lists every command and its key");
 }
 
 /// Time for the waves, or `None` to hold them still: they never move while a
 /// program is stopped or something is open over them.
 fn waves_clock(app: &App) -> Option<Duration> {
-    let stopped = app.engine.sessions().iter().any(|s| s.state == SessionState::Stopped);
+    let stopped = app.tab().engine.sessions().iter().any(|s| s.state == SessionState::Stopped);
     let clock = app.ui.clock.filter(|_| !stopped && app.ui.overlay.is_none());
     if clock.is_some() {
         app.ui.animate(logo::FRAME);

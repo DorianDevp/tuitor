@@ -5,8 +5,8 @@
 //! # comments and blank lines are ignored
 //! /bp toggle src/main.rs:12      any command line
 //! @key g c                       press keys
-//! @wait stop                     until a new stop is recorded
-//! @wait running | exited         until the active session is in that state
+//! @wait stop                     until a new stop is recorded, in any tab
+//! @wait running | exited         until the active tab's session is in that state
 //! @sleep 300                     milliseconds
 //! @clock 700                     animations at 700 ms (by default they hold still)
 //! @dump overview.ans             save the screen
@@ -22,20 +22,19 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier};
-use tokio::sync::mpsc::UnboundedReceiver;
-use tuitor_core::EngineMsg;
 use tuitor_core::config::LaunchConfig;
 use tuitor_core::session::SessionState;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
+use crate::runner::Inbox;
 use crate::ui;
 
 const WAIT: Duration = Duration::from_secs(20);
 
 pub async fn run(
     mut app: App,
-    mut rx: UnboundedReceiver<EngineMsg>,
+    mut rx: Inbox,
     config: Option<LaunchConfig>,
     script: &Path,
     (width, height): (u16, u16),
@@ -44,7 +43,9 @@ pub async fn run(
     let text = std::fs::read_to_string(script).with_context(|| format!("reading {}", script.display()))?;
     let base = script.parent().unwrap_or(Path::new("."));
     let mut terminal = Terminal::new(TestBackend::new(width, height))?;
-    crate::runner::start(&mut app, config);
+    if let Some(config) = config {
+        app.start(config);
+    }
     // `@wait stop` means a stop after the last action, even if it already arrived.
     let mut mark = stops(&app);
 
@@ -91,16 +92,17 @@ pub async fn run(
         }
         terminal.draw(|frame| ui::draw(frame, &app))?;
     }
-    app.engine.shutdown().await;
+    app.shutdown().await;
     Ok(())
 }
 
+/// Stops recorded in all tabs.
 fn stops(app: &App) -> usize {
-    app.engine.sessions().iter().map(|s| s.history.len()).sum()
+    app.tabs.iter().flat_map(|(_, tab)| tab.engine.sessions()).map(|s| s.history.len()).sum()
 }
 
-async fn wait(app: &mut App, rx: &mut UnboundedReceiver<EngineMsg>, what: &str, before: usize) -> Result<()> {
-    let state = |app: &App| app.active().map(|s| s.state);
+async fn wait(app: &mut App, rx: &mut Inbox, what: &str, before: usize) -> Result<()> {
+    let state = |app: &App| app.tab().active().map(|s| s.state);
     let done = |app: &App| match what {
         "stop" => stops(app) > before,
         "running" => state(app) == Some(SessionState::Running),
@@ -114,8 +116,8 @@ async fn wait(app: &mut App, rx: &mut UnboundedReceiver<EngineMsg>, what: &str, 
     while !done(app) {
         let left = deadline.saturating_duration_since(Instant::now());
         match tokio::time::timeout(left, rx.recv()).await {
-            Ok(Some(msg)) => {
-                app.on_engine(msg);
+            Ok(Some((tab, msg))) => {
+                app.on_engine(tab, msg);
                 drain(app, rx);
             }
             _ => bail!("timed out waiting for {what}"),
@@ -126,19 +128,20 @@ async fn wait(app: &mut App, rx: &mut UnboundedReceiver<EngineMsg>, what: &str, 
     Ok(())
 }
 
-async fn pump_for(app: &mut App, rx: &mut UnboundedReceiver<EngineMsg>, duration: Duration) {
+async fn pump_for(app: &mut App, rx: &mut Inbox, duration: Duration) {
     let deadline = Instant::now() + duration;
-    while let Ok(Some(msg)) = tokio::time::timeout(deadline.saturating_duration_since(Instant::now()), rx.recv()).await
+    while let Ok(Some((tab, msg))) =
+        tokio::time::timeout(deadline.saturating_duration_since(Instant::now()), rx.recv()).await
     {
-        app.on_engine(msg);
+        app.on_engine(tab, msg);
         drain(app, rx);
     }
     app.after_engine();
 }
 
-fn drain(app: &mut App, rx: &mut UnboundedReceiver<EngineMsg>) {
-    while let Ok(msg) = rx.try_recv() {
-        app.on_engine(msg);
+fn drain(app: &mut App, rx: &mut Inbox) {
+    while let Ok((tab, msg)) = rx.try_recv() {
+        app.on_engine(tab, msg);
     }
     app.after_engine();
 }
