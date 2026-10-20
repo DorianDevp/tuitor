@@ -1,0 +1,28 @@
+# The PHP example (TRACE=1, after php-trace.tsc): OVERVIEW with two watches and $line
+# expanded at the third stop at the breakpoint, FLOW there, and HISTORY of seven stops.
+@wait stop
+/bp toggle orders.php:68
+/continue
+@wait stop
+/watch add $total
+/watch add $line->qty * $line->price
+/continue
+@wait stop
+/continue
+@wait stop
+@key tab j l
+@dump overview.ans
+/view flow
+@dump flow.ans
+/view overview
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+/view history
+@key [ [
+@dump history.ans
+# No breakpoint is left for the next scene, which sets its own.
+/bp clear

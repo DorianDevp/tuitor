@@ -1,0 +1,9 @@
+# A first run of the PHP example, traced (TRACE=1), that stops at the breakpoint once: FLOW
+# goes by it and by its trace in the next run.
+@wait stop
+/bp toggle orders.php:68
+/continue
+@wait stop
+/bp clear
+/continue
+@sleep 1500

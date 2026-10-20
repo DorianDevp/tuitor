@@ -1,0 +1,28 @@
+# The Angular example (HEADLESS=1) with the PHP example in a second tab: OVERVIEW at the
+# breakpoint in app.ts, CODE after a step into orders.ts and back, and DOCTOR.
+@sleep 3000
+/bp toggle src/app/app.ts:67
+/restart
+@wait stop
+/continue
+@wait stop
+/tab next
+/session start Listen for Xdebug
+@wait stop
+/bp toggle orders.php:68
+/continue
+@wait stop
+/tab prev
+@key tab j l
+@dump tabs.ans
+/step in
+@wait stop
+/step out
+@wait stop
+/view code
+/follow
+@dump code.ans
+/view overview
+@key !
+@sleep 3000
+@dump doctor.ans
