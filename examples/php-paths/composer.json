@@ -1,0 +1,7 @@
+{
+    "name": "tuitor/php-paths-example",
+    "description": "Two controllers through one service and helper, for PATHS and COMPARE.",
+    "type": "project",
+    "autoload": { "psr-4": { "App\\": "src/" } },
+    "require": { "php": ">=8.2" }
+}
