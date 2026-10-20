@@ -251,15 +251,19 @@ CONFIG to adjust what a default cannot know:
 
 ### Commands
 
-Every key runs a command line. `/` opens the command line, which matches commands as you
-type, completes them with `tab`, shows the argument each takes and lists the recent
-command lines; `?` lists every command with its key.
+Every key runs a command line. `/` opens the command line (`:` too, and in SOURCE only
+`:`), which matches commands as you type, completes them with `tab`, shows the argument
+each takes and lists the recent command lines; a number alone goes to that line of SOURCE
+(`:42`). `?` lists every command with its key.
 
 ![The command line with /bp typed: the matching commands, their arguments and keys, and the recent command lines](assets/screenshots/palette.png)
 
 - `f` finds files and breakpoints (`name:line`).
-- `ctrl-f` searches the file in SOURCE as you type, ignoring case unless the search has a
-  capital letter; `ctrl-n` and `ctrl-p` go to the next and previous match.
+- `/` in SOURCE, as in vim, and `ctrl-f` anywhere search the file in SOURCE as you type,
+  ignoring case unless the search has a capital letter; `ctrl-n` and `ctrl-p` go to the
+  next and previous match.
+- `shift-down` and `shift-up` scroll SOURCE a page, as `ctrl-f` and `ctrl-b` do in vim,
+  keeping the cursor on the screen.
 - `enter` on a line of OUTPUT or EVENTS that names a file and a line opens it in CODE:
   PHP's errors and stack traces, Node's stack frames, Rust's panics, Go and C locations.
   A path of a program in a container goes through the session's `pathMappings`.
@@ -286,21 +290,22 @@ named (`tuitor doctor php gdb`), needs is missing.
 |---|---|---|---|
 | `c` `n` `s` `o` | continue, step over, in, out | `b` | toggle a breakpoint on the SOURCE line |
 | `p` `X` `R` | pause, stop, restart | `f` | find files and breakpoints |
-| `S` | start the configuration selected in CONFIG | `ctrl-f` | search SOURCE |
+| `S` | start the configuration selected in CONFIG | `ctrl-f`, in SOURCE `/` | search SOURCE |
 | `[` `]` `}` | older stop, newer, live | `w` `x` | watch, evaluate |
 | `g o` `g c` `g h` `g f` `g p` | OVERVIEW, CODE, HISTORY, FLOW, PROJECT | `E` | open in your editor |
 | `tab` `z` | next pane, zoom the pane | `y` | copy the selection (OSC 52) |
 | `j` `k` `h` `l`, arrows | move, collapse, expand | `.` | SOURCE follows execution again |
+| `shift-down` `shift-up` | scroll SOURCE a page | `:42` | go to line 42 of SOURCE |
 | `<` `>` | previous, next tab | `O` `T` `ctrl-w` | open a project, new tab, close tab |
 | `g s` `g S` | next, previous session of the tab | `!` | doctor |
-| `q` `esc` | back out of a popup, zoom, history | `/` `?` | command line, all commands |
+| `q` `esc` | back out of a popup, zoom, history | `/` `:` `?` | command line, all commands |
 | `Q` `ctrl-c` | quit | `enter` | expand, open, start |
 
 In a pane: BREAKPOINTS `a` this session or all, `e` condition, `h` hit count, `l` log,
 `space` on/off, `d` delete; CONFIG `a` add, `m` map a path, `M` mappings from compose, `u`
 unset, `d` delete, `i` install the adapter; STACK and FLOW `v` library frames or files;
-WATCH `d` delete; OUTPUT `C` clear; SOURCE `ctrl-n` `ctrl-p` next and previous match, `q`
-clears the search.
+WATCH `d` delete; OUTPUT `C` clear; SOURCE `/` search, `ctrl-n` `ctrl-p` next and previous
+match, `q` clears the search.
 
 ## Configuration
 

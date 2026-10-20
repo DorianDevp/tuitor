@@ -618,6 +618,11 @@ impl Engine {
                 match result {
                     // Cut off by the end of the session, which said why it ended.
                     Err(tuitor_dap::Error::Closed) if !self.session_ref(sid).is_ok_and(Session::is_alive) => {}
+                    // An adapter that could not launch or attach may stay up with nothing to
+                    // do (vscode-php-debug when its port is taken): the session is over.
+                    Err(err) if command == Launch::COMMAND || command == Attach::COMMAND => {
+                        self.fail(sid, format!("{command}: {}", short_error(&err)));
+                    }
                     Err(err) => self.notice(Some(sid), Level::Error, format!("{command}: {}", short_error(&err))),
                     // The session is over; js-debug then closes the connection without `terminated`.
                     Ok(()) if command == Disconnect::COMMAND => {
@@ -674,10 +679,11 @@ impl Engine {
         session.launch_sent = true;
         let configure_now = session.configure_pending;
 
-        let done = move |result: DapResult<dap::Empty>| match result {
-            Ok(_) => Msg::Done { sid, command: "launch", result: Ok(()) },
-            Err(err) => Msg::Done { sid, command: "launch", result: Err(err) },
+        let command = match request {
+            RequestKind::Launch => Launch::COMMAND,
+            RequestKind::Attach => Attach::COMMAND,
         };
+        let done = move |result: DapResult<dap::Empty>| Msg::Done { sid, command, result: result.map(drop) };
         match request {
             RequestKind::Launch => self.call::<Launch>(sid, &client, args, done),
             RequestKind::Attach => self.call::<Attach>(sid, &client, args, done),
@@ -1262,6 +1268,7 @@ impl Engine {
         if let Ok(session) = self.session_mut(sid) {
             session.state = SessionState::Exited;
         }
+        self.breakpoints.unbind_session(sid);
         self.release(sid);
         self.end_children(sid);
         self.log_event(sid, "failed", text.clone());

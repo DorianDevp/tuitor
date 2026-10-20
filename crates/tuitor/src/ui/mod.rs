@@ -532,7 +532,8 @@ fn status(p: &mut Painter<'_>, app: &App, area: Rect) {
         return;
     }
     if let Some(Overlay::Search(prompt)) = &app.ui.overlay {
-        let x = p.text(1, y, "search ", fg(FAINT), area.right());
+        // As vim shows a search being typed.
+        let x = p.text(1, y, "/", bold(AMBER), area.right());
         let x = p.text(x, y, &prompt.input, bold(WHITE), area.right());
         let x = p.text(x, y, "█", fg(AMBER), area.right());
         let said = app.ui.status.as_ref().filter(|_| !prompt.input.is_empty());
