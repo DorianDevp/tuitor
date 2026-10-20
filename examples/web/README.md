@@ -16,8 +16,8 @@ Chrome.
 HEADLESS=1 ./run.sh    # without one, e.g. over ssh
 ```
 
-`run.sh` checks those (and offers to install js-debug), builds tuitor, and
-starts it on the configuration `orders` in `.vscode/launch.json` (`orders
+`run.sh` checks those, builds tuitor, has it offer to install js-debug
+(`tuitor install`) when it is missing, and starts it on the configuration `orders` in `.vscode/launch.json` (`orders
 (headless)` with `HEADLESS=1`). js-debug opens the page straight from disk
 (`file://`), so no web server is needed, in a Chromium with a fresh profile
 that quitting tuitor closes. `TUITOR=/path/to/tuitor ./run.sh` uses that

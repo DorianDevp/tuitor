@@ -13,8 +13,8 @@ Needs PHP with Xdebug 3, Node.js and vscode-php-debug; see
 PHP=/path/to/php ./run.sh   # with another php, one that has Xdebug
 ```
 
-`run.sh` checks those (and offers to install vscode-php-debug), builds tuitor,
-starts it on the configuration `Listen for Xdebug` in `.vscode/launch.json`,
+`run.sh` checks those, builds tuitor, has it offer to install
+vscode-php-debug (`tuitor install`) when it is missing, starts it on the configuration `Listen for Xdebug` in `.vscode/launch.json`,
 which listens on port 9003 and stops on the first line, and runs `orders.php`
 once tuitor listens. PHP's output goes to `run.log` (`tail -f run.log` follows
 it), which starts with the command that runs PHP again from another terminal.

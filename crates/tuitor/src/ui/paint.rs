@@ -98,6 +98,26 @@ pub fn wrap(text: &str, max: usize) -> Vec<String> {
     lines
 }
 
+/// [`wrap`], with a word longer than a line cut into lines of its own: a path shows whole.
+pub fn wrap_hard(text: &str, max: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    for line in wrap(text, max) {
+        if line.width() <= max {
+            lines.push(line);
+            continue;
+        }
+        let mut part = String::new();
+        for c in line.chars() {
+            if part.width() + c.width().unwrap_or(0) > max.max(1) {
+                lines.push(std::mem::take(&mut part));
+            }
+            part.push(c);
+        }
+        lines.push(part);
+    }
+    lines
+}
+
 pub struct Painter<'b> {
     pub buf: &'b mut Buffer,
 }

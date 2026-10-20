@@ -11,8 +11,8 @@ Needs Node.js and js-debug; see
 ./run.sh
 ```
 
-`run.sh` checks those (and offers to install js-debug), builds tuitor, and
-starts it on the configuration `orders` in `.vscode/launch.json`, which stops
+`run.sh` checks those, builds tuitor, has it offer to install js-debug
+(`tuitor install`) when it is missing, and starts it on the configuration `orders` in `.vscode/launch.json`, which stops
 on the first line. `TUITOR=/path/to/tuitor ./run.sh` uses that binary instead
 of building tuitor from this repository, and arguments go to tuitor
 (`./run.sh --script demo.tsc`).

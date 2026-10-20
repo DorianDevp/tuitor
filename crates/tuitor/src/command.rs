@@ -125,6 +125,7 @@ pub enum Action {
     ConfigDelete,
     ClearOutput,
     Doctor(Option<String>),
+    Install(Option<String>),
     Palette(Option<String>),
     Help,
     Quit,
@@ -564,6 +565,13 @@ pub static COMMANDS: &[Spec] = &[
         help: "check what debugging needs: adapters, Xdebug, ports, browsers",
         group: Group::App,
         parse: |a| Ok(Action::Doctor(text(a))),
+    },
+    Spec {
+        name: "install",
+        arg: Arg::Optional("‹adapter [version]›"),
+        help: "install an adapter from its official release, after asking (CONFIG: the selected one's)",
+        group: Group::App,
+        parse: |a| Ok(Action::Install(text(a))),
     },
     Spec {
         name: "palette",

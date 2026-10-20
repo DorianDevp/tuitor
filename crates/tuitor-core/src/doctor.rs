@@ -14,6 +14,7 @@ use crate::config::{
     AdapterSpec, Adapters, LaunchConfig, Missing, RequestKind, TransportKind, Variables, adapters_dir,
 };
 use crate::config::{home_relative, resolve_program};
+use crate::install::Package;
 use crate::process::{Ask, ask};
 use crate::project::{Configuration, Project, Source, browser_on_path, starts_browser};
 
@@ -42,6 +43,8 @@ pub enum Fix {
     Shell(String),
     /// A tuitor command line, as typed after `/`.
     Command(String),
+    /// `tuitor install`, which asks first.
+    Install(Package),
     /// What to do, in words.
     Text(String),
 }
@@ -328,7 +331,6 @@ fn gdb(program: &Path) -> Finding {
 
 /// What is missing, and what installs it.
 fn not_installed(spec: &AdapterSpec, missing: &Missing) -> Finding {
-    let readme = || Some(Fix::Text("README, \"Installing adapters\"".into()));
     match missing {
         Missing::Program(program) if program == "node" => {
             let text = format!("Node.js is not on PATH; {} runs on it", script_package(spec));
@@ -347,12 +349,11 @@ fn not_installed(spec: &AdapterSpec, missing: &Missing) -> Finding {
             Finding::new(Status::Problem, text, Some(Fix::Shell(distro(&GO))))
         }
         Missing::Program(program) if program == "dlv" => {
-            let fix = Fix::Shell("go install github.com/go-delve/delve/cmd/dlv@latest".into());
-            Finding::new(Status::Problem, "`dlv` is not on PATH", Some(fix))
+            Finding::new(Status::Problem, "`dlv` is not on PATH", Some(Fix::Install(Package::Delve)))
         }
         Missing::Program(program) if Path::new(program).starts_with(adapters_dir()) => {
             let text = format!("{} is not installed: {missing}", package(Path::new(program)));
-            Finding::new(Status::Problem, text, readme())
+            Finding::new(Status::Problem, text, install(Path::new(program)))
         }
         Missing::OffPath { dir, .. } => {
             let fix = Fix::Shell(format!("export PATH=\"$PATH:{}\"", dir.display()));
@@ -360,9 +361,18 @@ fn not_installed(spec: &AdapterSpec, missing: &Missing) -> Finding {
         }
         Missing::Script(script) if script.starts_with(adapters_dir()) => {
             let text = format!("{} is not installed: {missing}", package(script));
-            Finding::new(Status::Problem, text, readme())
+            Finding::new(Status::Problem, text, install(script))
         }
         Missing::Program(_) | Missing::Script(_) => Finding::new(Status::Problem, missing.to_string(), None),
+    }
+}
+
+/// What installs the adapter file `file` under `<adapters>`: the package of its directory,
+/// or README for one tuitor does not know.
+fn install(file: &Path) -> Option<Fix> {
+    match Package::parse(&package(file)) {
+        Some(package) => Some(Fix::Install(package)),
+        None => Some(Fix::Text("README, \"Installing adapters\"".into())),
     }
 }
 
@@ -517,6 +527,11 @@ fn noted(finding: Finding, why: &str) -> Finding {
     }
 }
 
+/// What the PHP at `php` (a program on PATH, or a path) says of Xdebug.
+pub fn php_xdebug(php: &str) -> Finding {
+    xdebug(php, false)
+}
+
 /// Xdebug in the PHP on PATH, for the adapters section: what PHP lacks here is a note, as
 /// the PHP to debug may as well run in a container.
 fn local_xdebug(options: &Options) -> Finding {
@@ -639,18 +654,18 @@ fn program(launch: &LaunchConfig, dir: &Path) -> Option<Finding> {
 // ---- distributions ------------------------------------------------------------------------
 
 /// A package's names in the distributions tuitor can name a command for.
-struct Packages {
+pub(crate) struct Packages {
     arch: &'static str,
     debian: &'static str,
     fedora: &'static str,
 }
 
-const NODE: Packages = Packages { arch: "nodejs", debian: "nodejs", fedora: "nodejs" };
-const GDB: Packages = Packages { arch: "gdb", debian: "gdb", fedora: "gdb" };
-const LLDB: Packages = Packages { arch: "lldb", debian: "lldb", fedora: "lldb" };
-const GO: Packages = Packages { arch: "go", debian: "golang-go", fedora: "golang" };
-const CHROMIUM: Packages = Packages { arch: "chromium", debian: "chromium", fedora: "chromium" };
-const XDEBUG: Packages = Packages { arch: "xdebug", debian: "php-xdebug", fedora: "php-xdebug" };
+pub(crate) const NODE: Packages = Packages { arch: "nodejs", debian: "nodejs", fedora: "nodejs" };
+pub(crate) const GDB: Packages = Packages { arch: "gdb", debian: "gdb", fedora: "gdb" };
+pub(crate) const LLDB: Packages = Packages { arch: "lldb", debian: "lldb", fedora: "lldb" };
+pub(crate) const GO: Packages = Packages { arch: "go", debian: "golang-go", fedora: "golang" };
+pub(crate) const CHROMIUM: Packages = Packages { arch: "chromium", debian: "chromium", fedora: "chromium" };
+pub(crate) const XDEBUG: Packages = Packages { arch: "xdebug", debian: "php-xdebug", fedora: "php-xdebug" };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Family {
@@ -661,7 +676,7 @@ enum Family {
 
 /// The command that installs `packages` from this distribution, or each distribution's
 /// command when it is not one of those. Without `sudo`, which is the user's to add.
-fn distro(packages: &Packages) -> String {
+pub(crate) fn distro(packages: &Packages) -> String {
     let release = std::fs::read_to_string("/etc/os-release").unwrap_or_default();
     match family(&release) {
         Some(Family::Arch) => format!("pacman -S {}", packages.arch),

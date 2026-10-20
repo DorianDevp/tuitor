@@ -7,6 +7,7 @@ pub mod config;
 pub mod doctor;
 mod engine;
 pub mod flow;
+pub mod install;
 mod jsonc;
 pub mod log;
 pub mod persist;

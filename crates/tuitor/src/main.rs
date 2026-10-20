@@ -4,6 +4,7 @@ mod command;
 mod doctor;
 mod editor;
 mod flow;
+mod installer;
 mod keymap;
 mod model;
 mod outline;
@@ -17,6 +18,7 @@ mod sources;
 mod tab;
 mod ui;
 
+use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -26,6 +28,7 @@ use serde_json::{Map, Value};
 use tokio::sync::mpsc;
 use tuitor_core::config::{Adapters, LaunchConfig, RequestKind, TransportKind, home_relative};
 use tuitor_core::doctor::{Options, ProjectInput};
+use tuitor_core::install::{self, Output, Package, Plan};
 use tuitor_core::project::{Project, Source};
 use tuitor_core::store::Store;
 
@@ -96,6 +99,20 @@ enum Command {
         #[arg(long, value_name = "PATH")]
         php: Option<String>,
     },
+    /// Install an adapter from its official release (vscode-php-debug, js-debug, CodeLLDB) into
+    /// tuitor's adapter directory, or Delve with `go install`; asks first. For gdb, LLDB and
+    /// Xdebug it names your distribution's package.
+    Install {
+        /// An adapter type (php, pwa-node, pwa-chrome, lldb, go…) or a name (vscode-php-debug,
+        /// js-debug, codelldb, delve, gdb, lldb-dap, xdebug).
+        adapter: String,
+        /// The release to install, instead of the one README names (Delve: the latest).
+        #[arg(long)]
+        version: Option<String>,
+        /// Install without asking.
+        #[arg(long, short)]
+        yes: bool,
+    },
 }
 
 fn main() -> Result<ExitCode> {
@@ -126,6 +143,9 @@ fn main() -> Result<ExitCode> {
             let report = tuitor_core::doctor::check(&adapters, &projects, &options);
             print!("{}", doctor::print(&report));
             return Ok(if report.blocking() == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE });
+        }
+        Some(Command::Install { adapter, version, yes }) => {
+            return install_cli(&adapters, adapter, version.as_deref(), *yes, &workspace);
         }
         Some(Command::Exec { adapter, program, args }) => Some(exec_config(adapter, program, args, &workspace)?),
         Some(Command::Listen { port, maps }) => Some(listen_config(*port, maps, &workspace)?),
@@ -255,6 +275,69 @@ fn print_configs(projects: &[Project], adapters: &Adapters, store: &Store) -> Re
         println!("\n`tuitor doctor` says what is missing and what installs it.");
     }
     Ok(())
+}
+
+/// `tuitor install`: says what it downloads from where, or runs, asks, installs, and checks
+/// the result as starting a session does.
+fn install_cli(adapters: &Adapters, name: &str, version: Option<&str>, yes: bool, cwd: &Path) -> Result<ExitCode> {
+    let package = Package::parse(name).with_context(|| {
+        let names: Vec<&str> = Package::ALL.iter().map(|p| p.name()).collect();
+        format!("nothing called `{name}` to install (known: {}, or an adapter type)", names.join(", "))
+    })?;
+    let plan = install::plan(package, version)?;
+    match &plan {
+        Plan::Distro { command, .. } => {
+            println!("{package} comes with your distribution; tuitor does not install it, as that takes root:");
+            println!("    {command}");
+            let found = installer::found(package, adapters, cwd);
+            for line in &found {
+                println!("{line}");
+            }
+            // There already, it needs nothing.
+            let there = !found.is_empty() && found.iter().all(|line| line.starts_with('✓'));
+            return Ok(if there { ExitCode::SUCCESS } else { ExitCode::FAILURE });
+        }
+        Plan::Release(release) => {
+            println!("{package} {}, released by its authors on GitHub:", release.version);
+            println!("    {}", release.url);
+            let replacing = if release.dir.exists() { ", in place of what is there" } else { "" };
+            println!("into {}{replacing}", home_relative(&release.dir));
+            if let Some(tool) = release.missing_tools().first() {
+                bail!("installing it needs `{tool}`, which is not on PATH");
+            }
+        }
+        Plan::Go(go) => {
+            println!("Delve, built by Go as its installation guide says:");
+            println!("    {}", go.command());
+        }
+    }
+    if !yes && !confirm("Install it? [y/N] ")? {
+        println!("Nothing was installed.");
+        return Ok(ExitCode::FAILURE);
+    }
+    let mut step = |text: String| println!("==> {text}");
+    match &plan {
+        Plan::Release(release) => release.install(Output::Terminal, &mut step)?,
+        Plan::Go(go) => drop(go.install(Output::Terminal, &mut step)?),
+        Plan::Distro { .. } => {}
+    }
+    let found = installer::found(package, adapters, cwd);
+    for line in &found {
+        println!("{line}");
+    }
+    Ok(if found.iter().all(|line| line.starts_with('✓')) { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+}
+
+/// Asks a yes/no question on the terminal; anything but yes is no.
+fn confirm(question: &str) -> Result<bool> {
+    if !std::io::stdin().is_terminal() {
+        bail!("there is no terminal to ask on; --yes installs without asking");
+    }
+    print!("{question}");
+    std::io::stdout().flush()?;
+    let mut answer = String::new();
+    std::io::stdin().lock().read_line(&mut answer)?;
+    Ok(matches!(answer.trim(), "y" | "Y" | "yes"))
 }
 
 fn parse_size(size: &str) -> Result<(u16, u16)> {

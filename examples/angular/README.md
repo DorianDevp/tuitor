@@ -24,9 +24,9 @@ Chrome.
 HEADLESS=1 ./run.sh    # without one, e.g. over ssh
 ```
 
-`run.sh` checks those (and offers to install js-debug), installs Angular into
-`node_modules` the first time and after `package-lock.json` changed (`npm ci`),
-builds tuitor, starts `ng serve` on http://localhost:4200 (its output goes to
+`run.sh` checks those, installs Angular into `node_modules` the first time
+and after `package-lock.json` changed (`npm ci`), builds tuitor, has it offer
+to install js-debug (`tuitor install`) when it is missing, starts `ng serve` on http://localhost:4200 (its output goes to
 `ng-serve.log`), and starts tuitor on the configuration `ng serve` in
 `.vscode/launch.json` (`ng serve (headless)` with `HEADLESS=1`). Quitting
 tuitor closes Chromium, and `ng serve` stops after it.

@@ -21,27 +21,12 @@ die() {
 }
 
 # 1. Prerequisites.
-step "checking Node.js, npm and js-debug"
+step "checking Node.js and npm"
 command -v node >/dev/null || die "Node.js is not installed; it runs the example and js-debug." \
     "Install it: https://nodejs.org/en/download or your distribution's nodejs; $install_help."
 command -v npm >/dev/null || die "npm is not installed; it installs TypeScript for the build." \
     "It comes with Node.js from https://nodejs.org/en/download; some distributions package it" \
     "separately (pacman -S npm, apt-get install npm)."
-if [[ ! -f $adapter/js-debug/src/dapDebugServer.js ]]; then
-    url="https://github.com/microsoft/vscode-js-debug/releases/download/v$js_debug_version/js-debug-dap-v$js_debug_version.tar.gz"
-    echo "js-debug is not installed in $adapter."
-    echo "README.md (\"Installing adapters\") installs it there from its GitHub release:"
-    echo "    $url"
-    read -r -p "Download and unpack it now? [y/N] " answer || answer=
-    [[ $answer == [yY]* ]] || die "js-debug is not installed; nothing was changed." \
-        "To install it yourself, $install_help; then run ./run.sh again."
-    command -v curl >/dev/null || die "Installing it needs curl."
-    step "installing js-debug $js_debug_version"
-    # The commands from README.md, "Installing adapters".
-    rm -rf "$adapter" && mkdir -p "$adapter"
-    curl -fL -o "$adapter/js-debug-dap.tar.gz" "$url"
-    tar -xzf "$adapter/js-debug-dap.tar.gz" -C "$adapter" && rm "$adapter/js-debug-dap.tar.gz"
-fi
 if [[ -n ${TUITOR:-} ]]; then
     tuitor=$(command -v "$TUITOR") || die "TUITOR=$TUITOR is not an executable."
 else
@@ -65,6 +50,14 @@ if [[ -z ${TUITOR:-} ]]; then
     step "building tuitor (cargo build -p tuitor)"
     cargo build -p tuitor --manifest-path "$repo/Cargo.toml"
     tuitor="${CARGO_TARGET_DIR:-$repo/target}/debug/tuitor"
+fi
+
+# js-debug, which tuitor installs from its GitHub release as README.md ("Installing
+# adapters") does, once you say so.
+if [[ ! -f $adapter/js-debug/src/dapDebugServer.js ]]; then
+    step "installing js-debug $js_debug_version"
+    "$tuitor" install js-debug --version "$js_debug_version" ||
+        die "js-debug is not installed." "To install it yourself, $install_help; then run ./run.sh again."
 fi
 
 # 4. Debug. However tuitor ends, by Q or by SIGINT, SIGTERM or SIGHUP, it ends js-debug and
