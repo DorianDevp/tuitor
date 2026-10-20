@@ -332,6 +332,22 @@ fn opening(toks: &[Tok], close: usize) -> Option<usize> {
     None
 }
 
+/// Whether a line leaves brackets open, besides the block of a `for`, an `if` and the like:
+/// its statement goes on over the next lines.
+pub fn continues(toks: &[Tok]) -> bool {
+    const BLOCKS: &[&str] = &["for", "if", "else", "switch", "select", "func", "while", "foreach", "match", "loop"];
+    let depth: i32 = toks
+        .iter()
+        .map(|tok| match tok {
+            Tok::Punct('(' | '[' | '{', _) => 1,
+            Tok::Punct(')' | ']' | '}', _) => -1,
+            _ => 0,
+        })
+        .sum();
+    let block = matches!(toks.first(), Some(Tok::Name(word, _)) if BLOCKS.contains(&word.as_str()));
+    depth > i32::from(block)
+}
+
 /// Words followed by `(` that call nothing.
 const NOT_CALLS: &[&str] = &[
     "if",
@@ -511,6 +527,15 @@ mod tests {
         assert!(called_at("const f = make<Order>(1);", "make"));
         assert!(!called_at("$loyalty, 'onOrderTotalled'", "onOrderTotalled"));
         assert!(!called_at("xs.map(lineTotal)", "lineTotal"));
+    }
+
+    #[test]
+    fn a_line_with_brackets_left_open_continues() {
+        let toks = |line: &str| Lexer::new(Language::Go).line(line);
+        assert!(continues(&toks("orders := []Order{")));
+        assert!(!continues(&toks("total := orderTotal(order)")));
+        assert!(!continues(&toks("for _, line := range order.Lines {")));
+        assert!(continues(&toks("if err := check(Order{")));
     }
 
     fn called_at(line: &str, name: &str) -> bool {
