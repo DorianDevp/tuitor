@@ -1,11 +1,14 @@
-# The php-paths example after php-paths.tsc: PATHS to the same line again, now that FLOW
+# The php-paths example after php-paths.tsc: PATHS through the same line again, now that FLOW
 # remembers runs that went through the event dispatcher to the listener, which no language
-# server sees.
+# server sees: the invoice's path straight to the helper marked, the one through the listener
+# marked too, and the cursor on the service, where the two part.
 @wait stop
 /bp clear
 /find Money.php:16
 @key enter
 /paths
 @wait paths
-@key space j space j space j space j k k
+@key m
+@key j j j m
+@key k k k k
 @dump paths.ans

@@ -1,17 +1,22 @@
-# The php-paths example: PATHS to the bulk rebate in the helper Money::lineTotal, three of its
-# four paths marked and taken as breakpoint sets (the test's left out): lavender, cyan and
-# pink, the colours a new project's first sets get. The first request (invoice.print 1002)
-# with lavender active, the second (order.show 1001) with cyan, then COMPARE of the two and
-# TIMELINE in HISTORY. php-paths-flow.tsc follows.
+# The php-paths example: PATHS through the bulk rebate in the helper Money::lineTotal, the
+# invoice's path and the order's marked as breakpoint sets, each with the format the
+# controller calls after the service and the invoice's with the repository before it; the
+# first request (invoice.print 1002) with lavender active, the second (order.show 1001) with cyan,
+# then COMPARE of the two and TIMELINE in HISTORY. php-paths-flow.tsc follows.
 @wait stop
 /find Money.php:16
 @key enter
 /paths
 @wait paths
-@key space j space j space
+@key m
+@key k k space k space
+@key j j j j j j j j m
+@key j j space
 @key enter
 /view overview
-# invoice.print 1002 stops 14 times, the breakpoints only in cyan and pink record.
+# invoice.print 1002 stops 19 times at lavender's breakpoints.
+/continue
+@wait stop
 /continue
 @wait stop
 /continue
@@ -41,7 +46,15 @@
 @wait stop
 /continue
 @wait stop
-# order.show 1001 stops on its first line; cyan stops from here, 14 times.
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+# order.show 1001 stops on its first line; cyan stops from here, 16 times.
 /continue
 @wait stop
 /set active cyan
@@ -74,9 +87,13 @@
 /continue
 @wait stop
 /continue
+@wait stop
+/continue
+@wait stop
+/continue
 @sleep 1000
 /compare lavender cyan
-@key j j j j j j j j
+@key j j j j j j j j j j j
 @dump compare.ans
 /view history
 @key tab j j j h
