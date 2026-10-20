@@ -2,11 +2,13 @@
 //! Amber is where execution is, green is what changed in this step, red is an error.
 //!
 //! Breakpoints are the one exception: each has the colour of its set, which is all a set is
-//! known by. Their shape says what they do, and a hit is a ◉ at full colour on a band, so
-//! that it reads the same whatever the set.
+//! known by, chosen to stay apart from the other sets' and from those three
+//! ([`tuitor_core::palette`]). Their shape says what they do, and a hit is a ◉ at full colour
+//! on a band, so that it reads the same whatever the set.
 
 use ratatui::style::{Color, Modifier, Style};
-use tuitor_core::breakpoints::{SET_COLORS, SetId};
+use tuitor_core::breakpoints::SetId;
+use tuitor_core::palette;
 
 pub const fn rgb(hex: u32) -> Color {
     Color::Rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
@@ -33,14 +35,15 @@ pub const KEY: Color = rgb(0xd0d0d0);
 pub const FOUND: Color = rgb(0x393945);
 pub const FOUND_HERE: Color = rgb(0x6a6a7c);
 
-pub const AMBER: Color = rgb(0xffa31a);
+/// The colours of states, which sets' colours keep away from.
+pub const AMBER: Color = rgb(palette::AMBER);
 pub const AMBER_DIM: Color = rgb(0xa3732a);
 pub const AMBER_BG: Color = rgb(0x2e1f08);
-pub const GREEN: Color = rgb(0x3ddc84);
+pub const GREEN: Color = rgb(palette::GREEN);
 pub const GREEN_DIM: Color = rgb(0x74b892);
-pub const RED: Color = rgb(0xff5252);
+pub const RED: Color = rgb(palette::RED);
 pub const RED_DIM: Color = rgb(0xc46262);
-pub const YELLOW_DIM: Color = rgb(0xd3bb6e);
+pub const YELLOW_DIM: Color = rgb(palette::WARNING);
 
 pub const SYN_KEYWORD: Color = rgb(0x96abc6);
 pub const SYN_STRING: Color = rgb(0xbfb38a);
@@ -49,29 +52,11 @@ pub const SYN_TYPE: Color = rgb(0xa6c2b6);
 pub const SYN_PUNCT: Color = rgb(0x8e8e8e);
 pub const SYN_VAR: Color = rgb(0xe2e2e2);
 
-/// The colours of breakpoint sets, and the names commands know them by, in the order new
-/// sets take them. From the logo's stripes, kept apart from the three bright meanings: its
-/// coral and orange would read as an error and as execution, so they are left out, rose
-/// is a pink lighter than the red of errors, and teal leans to cyan, away from the green
-/// of changes. Sky, which the logo lacks, fills the gap between teal and orchid; gold, the
-/// nearest to amber, comes last.
-pub const SETS: [(&str, Color); SET_COLORS as usize] = [
-    ("rose", rgb(0xf0909e)),
-    ("teal", rgb(0x4cc2bd)),
-    ("orchid", rgb(0xcf86eb)),
-    ("sky", rgb(0x7ea9ee)),
-    ("gold", rgb(0xdcc15c)),
-];
-
 /// A set's colour: whole for the active set, whose breakpoints stop the program, and half
 /// toward the background for the others, which only record.
 pub fn set_color(set: SetId, active: bool) -> Color {
-    let color = SETS.get(usize::from(set)).map_or(DIM, |(_, color)| *color);
+    let color = rgb(set.rgb());
     if active { color } else { mix(color, BG, 0.45) }
-}
-
-pub fn set_name(set: SetId) -> &'static str {
-    SETS.get(usize::from(set)).map_or("?", |(name, _)| name)
 }
 
 /// Muted colour per session tag so sessions are distinguishable but quiet.

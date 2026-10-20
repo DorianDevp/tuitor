@@ -1,4 +1,5 @@
 use ratatui::layout::Rect;
+use tuitor_core::breakpoints::Breakpoint;
 use tuitor_core::config::project_relative;
 
 use super::breakpoints::marks;
@@ -8,6 +9,7 @@ use super::theme::*;
 use crate::app::App;
 use crate::overlay::{Choice, Finder, Palette};
 use crate::picker::Picker;
+use crate::sets::{self, SetPick};
 
 fn highlighted(text: &str, matched: &[u32], base: ratatui::style::Style) -> Vec<Seg<'static>> {
     text.chars()
@@ -279,6 +281,76 @@ pub fn picker(p: &mut Painter<'_>, app: &App, picker: &Picker, screen: Rect) {
     }
 
     let actions = [("⏎", "open"), ("tab", "complete the path"), ("↑/↓", "select"), ("esc", "close")];
+    let mut x = inner.x + 1;
+    for (key, label) in actions {
+        x = p.text(x, inner.bottom() - 1, key, bold(KEY), inner.right());
+        x = p.text(x, inner.bottom() - 1, &format!(" {label}   "), fg(FAINT), inner.right());
+    }
+}
+
+/// `/set pick`: a row per set, in the order they were made, with its colour, its name, what
+/// it does and its breakpoints, to make one active. Every set is at full colour here, so that
+/// the colours compare; the one active is marked so.
+pub fn sets(p: &mut Painter<'_>, app: &App, pick: &SetPick, screen: Rect) {
+    let Some(tab) = app.tabs.get(pick.tab) else { return };
+    let bps = tab.engine.breakpoints();
+    p.dim(screen);
+    let width = screen.width.saturating_sub(8).min(110);
+    let room = screen.height.saturating_sub(super::HEADER + 4);
+    let height = (bps.sets().len() as u16 + 4).clamp(6.min(room), room);
+    let rect = Rect::new((screen.width - width) / 2, super::HEADER + 1, width, height);
+    p.fill(rect, BG);
+    let count = format!("{} sets", bps.sets().len());
+    p.panel(
+        rect,
+        &Panel {
+            title: "SETS",
+            sub: vec![seg("known by colour · the breakpoints of the active one stop the program", fg(DIM))],
+            right: vec![seg(count, fg(FAINT))],
+            keys: vec![],
+            focus: true,
+        },
+    );
+    let inner = super::paint::inner(rect);
+    let rows = usize::from(inner.height.saturating_sub(2));
+    let offset = pick.selected.saturating_sub(rows.saturating_sub(1));
+    let (x_name, x_role, x_count) = (inner.x + 7, inner.x + 25, inner.x + 40);
+    let x_files = x_count + 16;
+    for (i, set) in bps.sets().iter().enumerate().skip(offset).take(rows) {
+        let y = inner.y + (i - offset) as u16;
+        let selected = i == pick.selected;
+        if selected {
+            p.band(inner.x, y, inner.width, SEL2);
+            p.text(inner.x + 1, y, "›", bold(AMBER), inner.right());
+        }
+        let color = set_color(*set, true);
+        p.text(inner.x + 3, y, "██", fg(color), inner.right());
+        let active = *set == bps.active_set();
+        p.text(x_name, y, &sets::name(bps, *set), if selected { bold(WHITE) } else { fg(FG) }, x_role - 1);
+        let (role, style) = if active { ("stops", bold(color)) } else { ("records only", fg(FAINT)) };
+        p.text(x_role, y, role, style, x_count - 1);
+        let members: Vec<&Breakpoint> = bps.members(*set).collect();
+        let count = match members.len() {
+            0 => "no breakpoint".to_owned(),
+            1 => "1 breakpoint".to_owned(),
+            n => format!("{n} breakpoints"),
+        };
+        p.text(x_count, y, &count, fg(DIM), x_files - 1);
+        // Its breakpoints by file: "OrderService.php:23, 31 · Money.php:16".
+        let mut files: Vec<(String, Vec<String>)> = Vec::new();
+        for bp in &members {
+            let file = bp.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            match files.iter_mut().find(|(f, _)| *f == file) {
+                Some((_, lines)) => lines.push(bp.line.to_string()),
+                None => files.push((file, vec![bp.line.to_string()])),
+            }
+        }
+        let places: Vec<String> = files.iter().map(|(file, lines)| format!("{file}:{}", lines.join(", "))).collect();
+        let places = places.join(" · ");
+        let places = truncate(&places, usize::from(inner.right().saturating_sub(x_files + 1)));
+        p.text(x_files, y, &places, fg(FAINT), inner.right());
+    }
+    let actions = [("⏎", "make active"), ("↑/↓", "select"), ("esc", "close")];
     let mut x = inner.x + 1;
     for (key, label) in actions {
         x = p.text(x, inner.bottom() - 1, key, bold(KEY), inner.right());

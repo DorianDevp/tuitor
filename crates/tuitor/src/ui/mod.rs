@@ -93,6 +93,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
             }
         }
         Some(Overlay::Paths(paths)) => callpaths::draw(&mut p, app, paths, area),
+        Some(Overlay::Sets(pick)) => overlays::sets(&mut p, app, pick, area),
         // On the status line, over SOURCE and its highlights.
         Some(Overlay::Search(_)) => {}
         None => {}

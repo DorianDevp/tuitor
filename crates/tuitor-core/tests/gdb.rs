@@ -164,7 +164,7 @@ async fn breakpoints_of_another_set_record_and_go_on_with_gdb() {
         Engine::new(EngineOptions { adapters: Adapters::default(), workspace: dir.clone(), state_file: None });
     let rose = engine.breakpoints().active_set();
     engine.toggle_breakpoint(&source, 11); // `let result = total(&prices);`
-    let teal = engine.new_set().expect("set");
+    let teal = engine.new_set();
     engine.toggle_breakpoint(&source, BREAK_LINE);
     engine.activate_set(rose).expect("activate");
 
@@ -247,7 +247,7 @@ async fn sets_that_share_breakpoints_compare_across_two_runs_with_gdb() {
     for line in [13, 8, 4] {
         engine.toggle_breakpoint(&source, line);
     }
-    let teal = engine.new_set().expect("set");
+    let teal = engine.new_set();
     for line in [18, 8, 4] {
         engine.put_in_set(&source, line, teal).expect("put in teal");
     }

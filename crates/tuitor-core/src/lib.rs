@@ -12,6 +12,7 @@ pub mod flow;
 pub mod install;
 mod jsonc;
 pub mod log;
+pub mod palette;
 pub mod persist;
 pub mod process;
 pub mod project;

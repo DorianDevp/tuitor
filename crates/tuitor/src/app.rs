@@ -435,12 +435,26 @@ impl App {
                 } else if key.is("down") || key.is("j") || key.is("ctrl-n") {
                     paths.select(1);
                 } else if key.is("space") {
-                    if let Err(message) = paths.toggle() {
-                        let command = Some("/paths".into());
-                        self.ui.status = Some(Status { key: None, command, message, level: Level::Warn });
-                    }
+                    paths.toggle();
                 } else if key.is("enter") {
                     self.take_paths();
+                } else if key.is("q") {
+                    self.ui.overlay = None;
+                }
+            }
+            Overlay::Sets(pick) => {
+                let len = self.tabs.get(pick.tab).map_or(0, |tab| tab.engine.breakpoints().sets().len());
+                if key.is("up") || key.is("k") || key.is("ctrl-p") {
+                    pick.select(-1, len);
+                } else if key.is("down") || key.is("j") || key.is("ctrl-n") {
+                    pick.select(1, len);
+                } else if key.is("enter") {
+                    let (message, level) = match self.set_picked() {
+                        Ok(message) => (message, Level::Info),
+                        Err(Refusal { level, message }) => (message, level),
+                    };
+                    let command = Some("/set pick".into());
+                    self.ui.status = Some(Status { key: None, command, message, level });
                 } else if key.is("q") {
                     self.ui.overlay = None;
                 }
@@ -687,8 +701,8 @@ impl App {
             Action::SetNew(places) => self.set_new(places),
             Action::SetNext => self.set_cycle(1),
             Action::SetPrev => self.set_cycle(-1),
-            Action::SetActive(Some(name)) => self.set_active(crate::sets::parse_set(&name)?),
-            Action::SetActive(None) => self.prompt(spec),
+            Action::SetActive(arg) => self.set_active_named(arg),
+            Action::SetPick => self.set_pick(),
             Action::SetToggle(arg) => self.set_membership(Membership::Toggle, arg),
             Action::SetAdd(arg) => self.set_membership(Membership::Add, arg),
             Action::SetRemove(arg) => self.set_membership(Membership::Remove, arg),
@@ -881,10 +895,9 @@ impl App {
         let line = self.tab().ui.source.cursor.max(1);
         let place = format!("{}:{line}", path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default());
         let observed = self.tab().flows.observed();
-        let sets = callpaths::free_sets(&self.tab().engine);
         let tab = self.tabs.active_id();
         let query = self.tab_mut().code.paths(path, line, observed)?;
-        self.ui.overlay = Some(Overlay::Paths(Paths::new(tab, place, query, sets)));
+        self.ui.overlay = Some(Overlay::Paths(Paths::new(tab, place, query, &self.tab().engine)));
         Ok(String::new())
     }
 
@@ -906,7 +919,7 @@ impl App {
                     let had = if existing == 0 { String::new() } else { format!(", {existing} there already") };
                     format!(
                         "{} for the path{}, {added} breakpoint{} new{had} · {}",
-                        sets::names(&taken.sets),
+                        sets::names(tab.engine.breakpoints(), &taken.sets),
                         s(taken.sets.len()),
                         s(added),
                         sets::roles(&tab.engine)
@@ -1195,7 +1208,7 @@ impl App {
         Ok(match engine.toggle_breakpoint(&path, line) {
             // Into the active set; which one that is matters once there are more.
             Toggle::Added(id) if engine.breakpoints().sets().len() > 1 => {
-                let set = crate::ui::theme::set_name(engine.breakpoints().active_set());
+                let set = sets::name(engine.breakpoints(), engine.breakpoints().active_set());
                 format!("added #{id} at {name}:{line} to {set}")
             }
             Toggle::Added(id) => format!("added #{id} at {name}:{line}"),

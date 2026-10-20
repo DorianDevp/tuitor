@@ -15,7 +15,9 @@ use crate::flow::Run;
 pub struct Persisted {
     #[serde(default)]
     pub breakpoints: Vec<Breakpoint>,
-    /// The breakpoint sets, by colour; a file from before there were sets has none.
+    /// The breakpoint sets, by colour (`"#rrggbb"`), in the order they were made; a file from
+    /// before there were sets has none, and one from before their colours were chosen has the
+    /// place of each colour among the five there were then.
     #[serde(default)]
     pub sets: Vec<SetId>,
     #[serde(default)]
@@ -134,11 +136,15 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("tuitor-persist-{}", std::process::id()));
         let file = dir.join("state.json");
         assert!(load(&file).expect("missing is fine").breakpoints.is_empty());
+        let (rose, lavender) = (SetId::from_rgb(0xf0909e), SetId::from_rgb(0xada3ff));
+        let sets = vec![rose, lavender];
         let state =
-            Persisted { watches: vec!["$total".into()], sets: vec![0, 3], active_set: Some(3), ..Persisted::default() };
+            Persisted { watches: vec!["$total".into()], sets, active_set: Some(lavender), ..Persisted::default() };
         save(&file, &state).expect("save");
+        assert!(std::fs::read_to_string(&file).expect("read").contains(r##""active_set": "#ada3ff""##));
         let loaded = load(&file).expect("load");
-        assert_eq!((loaded.watches, loaded.sets, loaded.active_set), (vec!["$total".to_owned()], vec![0, 3], Some(3)));
+        let expected = (vec!["$total".to_owned()], vec![rose, lavender], Some(lavender));
+        assert_eq!((loaded.watches, loaded.sets, loaded.active_set), expected);
         // A file from before there were sets.
         std::fs::write(&file, r#"{"breakpoints":[{"id":1,"path":"/a.rs","line":3}],"watches":[]}"#).expect("old");
         let old = load(&file).expect("old");

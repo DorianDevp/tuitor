@@ -96,6 +96,7 @@ pub enum Action {
     SetNext,
     SetPrev,
     SetActive(Option<String>),
+    SetPick,
     SetToggle(Option<String>),
     SetAdd(Option<String>),
     SetRemove(Option<String>),
@@ -368,10 +369,17 @@ pub static COMMANDS: &[Spec] = &[
     },
     Spec {
         name: "set active",
-        arg: Arg::Required("‹rose|teal|orchid|sky|gold›"),
-        help: "make the set of this colour active, also while the program runs",
+        arg: Arg::Optional("‹set›"),
+        help: "make the set of this colour active (teal, pale-sky, #4cc2bd), also while the program runs",
         group: Group::Breakpoints,
         parse: |a| Ok(Action::SetActive(text(a))),
+    },
+    Spec {
+        name: "set pick",
+        arg: Arg::None,
+        help: "list the sets, each with its breakpoints, to make one active",
+        group: Group::Breakpoints,
+        parse: simple!(Action::SetPick),
     },
     Spec {
         name: "set toggle",
