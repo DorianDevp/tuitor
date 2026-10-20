@@ -1,0 +1,11 @@
+# The php-paths example after php-paths.tsc: PATHS to the same line again, now that FLOW
+# remembers runs that went through the event dispatcher to the listener, which no language
+# server sees.
+@wait stop
+/bp clear
+/find Money.php:16
+@key enter
+/paths
+@wait paths
+@key j j j j space k k
+@dump paths.ans
