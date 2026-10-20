@@ -225,6 +225,21 @@ impl Engine {
         &self.breakpoints
     }
 
+    /// The adapters of live sessions that a breakpoint in `path` goes to and that count no hits,
+    /// as their capabilities say (`supportsHitConditionalBreakpoints`).
+    pub fn uncounted(&self, path: &Path) -> Vec<&str> {
+        let mut names: Vec<&str> = self
+            .sessions
+            .iter()
+            .filter(|s| s.is_alive() && s.configured && s.handles(path))
+            .filter(|s| !s.capabilities.supports_hit_conditional_breakpoints)
+            .map(|s| s.adapter.name.as_str())
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        names
+    }
+
     pub fn watches(&self) -> &[String] {
         &self.watches
     }
@@ -685,6 +700,7 @@ impl Engine {
         let spec = session.adapter.clone();
 
         let files: Vec<PathBuf> = self.breakpoints.files().into_iter().filter(|p| spec.handles(p)).collect();
+        self.warn_uncounted(sid, &files);
         let mut unanswered = files.len();
         for path in files {
             self.send_breakpoints(sid, &client, path);
@@ -695,6 +711,24 @@ impl Engine {
         if unanswered == 0 {
             self.send_configuration_done(sid);
         }
+    }
+
+    /// Says that the session's adapter counts no hits when breakpoints it gets have a hit
+    /// condition: there they stop at every hit.
+    fn warn_uncounted(&mut self, sid: SessionId, files: &[PathBuf]) {
+        let Ok(session) = self.session_ref(sid) else { return };
+        if session.capabilities.supports_hit_conditional_breakpoints {
+            return;
+        }
+        let counted = files.iter().flat_map(|file| self.breakpoints.in_file(file));
+        let ids: Vec<String> =
+            counted.filter(|b| b.enabled && b.hit_condition.is_some()).map(|b| format!("#{}", b.id)).collect();
+        if ids.is_empty() {
+            return;
+        }
+        let stop = if ids.len() == 1 { "stops" } else { "stop" };
+        let text = format!("{} counts no hits, so {} {stop} at every hit", session.adapter.name, ids.join(", "));
+        self.notice(Some(sid), Level::Warn, text);
     }
 
     /// Counts an answer to a request sent by `configure`; after the last one the program may start.
@@ -1146,7 +1180,8 @@ impl Engine {
     }
 
     fn send_breakpoints(&self, sid: SessionId, client: &Client, path: PathBuf) {
-        let (ids, breakpoints) = self.breakpoints.for_adapter(&path);
+        let hits = self.session(sid).is_some_and(|s| s.capabilities.supports_hit_conditional_breakpoints);
+        let (ids, breakpoints) = self.breakpoints.for_adapter(&path, hits);
         let source = Source {
             name: path.file_name().map(|n| n.to_string_lossy().into_owned()),
             path: Some(path.display().to_string()),

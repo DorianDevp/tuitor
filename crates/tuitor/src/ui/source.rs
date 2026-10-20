@@ -301,7 +301,7 @@ fn marker(bp: &Breakpoint, hit: bool) -> (&'static str, ratatui::style::Color) {
         ("◌", RED_DIM)
     } else if bp.is_logpoint() {
         ("◆", YELLOW_DIM)
-    } else if bp.condition.is_some() {
+    } else if bp.condition.is_some() || bp.hit_condition.is_some() {
         ("●", YELLOW_DIM)
     } else if hit {
         ("●", RED)
