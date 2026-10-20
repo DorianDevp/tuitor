@@ -101,6 +101,10 @@ pub enum Action {
     Down,
     PageUp,
     PageDown,
+    /// A page of SOURCE further on (or back), the cursor kept on it, like vim's ^f and ^b.
+    ScrollDown,
+    ScrollUp,
+    Line(Option<u32>),
     Top,
     Bottom,
     Left,
@@ -418,6 +422,27 @@ pub static COMMANDS: &[Spec] = &[
         parse: simple!(Action::PageDown),
     },
     Spec {
+        name: "scroll down",
+        arg: Arg::None,
+        help: "scroll SOURCE a page down, as ^f in vim (elsewhere: a page down)",
+        group: Group::Navigate,
+        parse: simple!(Action::ScrollDown),
+    },
+    Spec {
+        name: "scroll up",
+        arg: Arg::None,
+        help: "scroll SOURCE a page up, as ^b in vim (elsewhere: a page up)",
+        group: Group::Navigate,
+        parse: simple!(Action::ScrollUp),
+    },
+    Spec {
+        name: "line",
+        arg: Arg::Required("‹n›"),
+        help: "go to line n in SOURCE; a number alone does the same (:42)",
+        group: Group::Navigate,
+        parse: |a| a.map(line_number).transpose().map(Action::Line),
+    },
+    Spec {
         name: "top",
         arg: Arg::None,
         help: "go to the first row",
@@ -661,12 +686,22 @@ pub fn split(line: &str) -> Option<(&'static Spec, Option<&str>)> {
 }
 
 pub fn parse(line: &str) -> Result<Invocation, String> {
+    // A number alone goes to that line, as `:42` does in vim.
+    if let (Ok(number), Some(spec)) = (line_number(line), COMMANDS.iter().find(|spec| spec.name == "line")) {
+        return Ok(Invocation { spec, action: Action::Line(Some(number)) });
+    }
     let (spec, arg) = split(line).ok_or_else(|| {
         let shown = line.trim().trim_start_matches('/');
         format!("unknown command `{shown}`")
     })?;
     let action = (spec.parse)(arg)?;
     Ok(Invocation { spec, action })
+}
+
+/// A line number as typed, with the palette's slash or vim's colon before it.
+pub fn line_number(text: &str) -> Result<u32, String> {
+    let number = text.trim().trim_start_matches(['/', ':']).trim();
+    number.parse().ok().filter(|n| *n > 0).ok_or_else(|| format!("expected a line number, got `{number}`"))
 }
 
 #[cfg(test)]
@@ -679,6 +714,17 @@ mod tests {
         assert_eq!(inv.spec.name, "bp condition");
         assert_eq!(inv.action, Action::BpCondition(Some("$i > 2".into())));
         assert_eq!(parse("next").expect("next").action, Action::Next);
+    }
+
+    #[test]
+    fn a_number_alone_goes_to_that_line() {
+        for typed in ["42", "/42", ":42", " 42 ", "line 42", "/line 42"] {
+            let inv = parse(typed).expect(typed);
+            assert_eq!((inv.spec.name, inv.action), ("line", Action::Line(Some(42))), "{typed}");
+        }
+        assert_eq!(parse("line").expect("line").action, Action::Line(None));
+        assert!(parse("line x").is_err());
+        assert!(parse("0").is_err());
     }
 
     #[test]

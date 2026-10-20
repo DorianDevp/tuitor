@@ -4,8 +4,9 @@
 # file is merged over these defaults and `""` unbinds a key.
 #
 # Keys: a character, or enter esc tab backtab space backspace up down left right
-# pageup pagedown home end, optionally with ctrl- / alt-. Keys separated by a
-# space form a sequence ("g c"). [pane.<name>] tables only apply while that pane
+# pageup pagedown home end, optionally with ctrl- / alt-, and the arrows, pageup,
+# pagedown, home and end also with shift-. Keys separated by a space form a
+# sequence ("g c"). [pane.<name>] tables only apply while that pane
 # has focus and win over [global].
 
 [global]
@@ -35,6 +36,7 @@ esc = "close"
 Q = "quit"
 ctrl-c = "quit"
 "/" = "palette"
+":" = "palette"
 "?" = "help"
 "!" = "doctor"
 "<" = "tab prev"
@@ -66,6 +68,8 @@ ctrl-d = "page down"
 ctrl-u = "page up"
 pagedown = "page down"
 pageup = "page up"
+shift-down = "scroll down"
+shift-up = "scroll up"
 "g g" = "top"
 G = "bottom"
 home = "top"
@@ -73,6 +77,8 @@ end = "bottom"
 enter = "open"
 
 [pane.source]
+# As in vim: / searches, and the command line is on :, where a number goes to that line.
+"/" = "search"
 ctrl-n = "search next"
 ctrl-p = "search prev"
 

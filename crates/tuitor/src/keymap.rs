@@ -14,6 +14,8 @@ pub struct Key {
     code: KeyCodeOrd,
     ctrl: bool,
     alt: bool,
+    /// Only for the keys in `SHIFTED`; a character has it in itself.
+    shift: bool,
 }
 
 /// `KeyCode` is not `Ord`; this wraps the variants bindings can use.
@@ -42,6 +44,11 @@ enum Named {
     Delete,
 }
 
+/// Keys that `shift-` can go with: a shifted character is another character, and the
+/// terminal reports shift-tab as `backtab`.
+const SHIFTED: &[Named] =
+    &[Named::Up, Named::Down, Named::Left, Named::Right, Named::PageUp, Named::PageDown, Named::Home, Named::End];
+
 const NAMES: &[(&str, Named)] = &[
     ("enter", Named::Enter),
     ("esc", Named::Esc),
@@ -63,6 +70,7 @@ impl Key {
     pub fn from_event(event: KeyEvent) -> Option<Key> {
         let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
         let alt = event.modifiers.contains(KeyModifiers::ALT);
+        let shift = event.modifiers.contains(KeyModifiers::SHIFT);
         let code = match event.code {
             // Shift is already in the character ('G'), so it is not tracked separately.
             KeyCode::Char(' ') => KeyCodeOrd::Char(' '),
@@ -84,12 +92,13 @@ impl Key {
             KeyCode::F(n) => KeyCodeOrd::F(n),
             _ => return None,
         };
-        Some(Key { code, ctrl, alt })
+        let shift = shift && matches!(code, KeyCodeOrd::Named(named) if SHIFTED.contains(&named));
+        Some(Key { code, ctrl, alt, shift })
     }
 
     pub fn parse(text: &str) -> Result<Key> {
         let mut rest = text;
-        let (mut ctrl, mut alt) = (false, false);
+        let (mut ctrl, mut alt, mut shift) = (false, false, false);
         loop {
             if let Some(r) = rest
                 .strip_prefix("ctrl-")
@@ -103,6 +112,9 @@ impl Key {
                 rest.strip_prefix("alt-").or_else(|| rest.strip_prefix("m-")).filter(|r| !r.is_empty())
             {
                 alt = true;
+                rest = r;
+            } else if let Some(r) = rest.strip_prefix("shift-").filter(|r| !r.is_empty()) {
+                shift = true;
                 rest = r;
             } else {
                 break;
@@ -121,7 +133,12 @@ impl Key {
                 }
             }
         };
-        Ok(Key { code, ctrl, alt })
+        if shift && !matches!(code, KeyCodeOrd::Named(named) if SHIFTED.contains(&named)) {
+            bail!(
+                "`{text}`: shift- goes with arrows, pageup, pagedown, home and end; a shifted character is typed as itself (`G`)"
+            );
+        }
+        Ok(Key { code, ctrl, alt, shift })
     }
 
     /// Printable characters typed into an input field.
@@ -144,6 +161,9 @@ impl fmt::Display for Key {
         }
         if self.alt {
             f.write_str("M-")?;
+        }
+        if self.shift {
+            f.write_str("S-")?;
         }
         match self.code {
             KeyCodeOrd::Char(' ') => f.write_str("space"),
@@ -225,13 +245,14 @@ impl Keymap {
         if prefix { Lookup::Prefix } else { Lookup::None }
     }
 
-    /// Shortest key sequence bound to exactly this command line.
+    /// Shortest key sequence bound to exactly this command line in `pane`: a global key
+    /// the pane binds to something else does not count.
     pub fn key_for(&self, pane: &str, command: &str) -> Option<String> {
-        self.panes
-            .get(pane)
-            .into_iter()
-            .chain(std::iter::once(&self.global))
+        let own = self.panes.get(pane);
+        let global = self.global.iter().filter(|(keys, _)| !own.is_some_and(|t| t.contains_key(*keys)));
+        own.into_iter()
             .flat_map(|t| t.iter())
+            .chain(global)
             .filter(|(_, c)| c.as_str() == command)
             .min_by_key(|(k, _)| (k.len(), label(k).len()))
             .map(|(k, _)| label(k))
@@ -300,5 +321,33 @@ mod tests {
         assert_eq!(Key::parse("space").expect("space").to_string(), "space");
         assert_eq!(Key::parse("enter").expect("enter").to_string(), "⏎");
         assert!(Key::parse("hyper-x").is_err());
+    }
+
+    #[test]
+    fn shift_counts_with_arrows_and_paging_keys_only() {
+        let event = |code, modifiers| Key::from_event(KeyEvent::new(code, modifiers));
+        let shift_down = Key::parse("shift-down").expect("shift-down");
+        assert_eq!(event(KeyCode::Down, KeyModifiers::SHIFT), Some(shift_down));
+        assert_ne!(shift_down, Key::parse("down").expect("down"));
+        assert_eq!(shift_down.to_string(), "S-down");
+        // Shift-tab arrives as backtab, and a shifted character is another one.
+        assert_eq!(event(KeyCode::BackTab, KeyModifiers::SHIFT), Key::parse("backtab").ok());
+        assert_eq!(event(KeyCode::Char('G'), KeyModifiers::SHIFT), Key::parse("G").ok());
+        assert_eq!(event(KeyCode::Backspace, KeyModifiers::SHIFT), Key::parse("backspace").ok());
+        assert!(Key::parse("shift-g").is_err());
+        assert!(Key::parse("shift-enter").is_err());
+    }
+
+    #[test]
+    fn source_searches_on_slash_as_in_vim() {
+        let map = Keymap::defaults();
+        assert!(matches!(map.lookup("source", &keys("/")), Lookup::Command("search")));
+        assert!(matches!(map.lookup("source", &keys(":")), Lookup::Command("palette")));
+        assert!(matches!(map.lookup("locals", &keys("/")), Lookup::Command("palette")));
+        assert!(matches!(map.lookup("source", &keys("shift-down")), Lookup::Command("scroll down")));
+        // The hints name the key that does it in the pane: not `/`, which SOURCE takes.
+        assert_eq!(map.key_for("source", "palette").as_deref(), Some(":"));
+        assert_eq!(map.key_for("locals", "palette").as_deref(), Some("/"));
+        assert_eq!(map.key_for("source", "search").as_deref(), Some("/"));
     }
 }

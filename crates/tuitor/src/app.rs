@@ -111,6 +111,9 @@ impl Ui {
     }
 }
 
+/// Rows `page down` and `page up` move by.
+const PAGE: isize = 15;
+
 pub struct App {
     pub tabs: Tabs<Tab>,
     pub keymap: Keymap,
@@ -703,8 +706,14 @@ impl App {
             Action::Close => self.close(),
             Action::Up => self.nav(-1),
             Action::Down => self.nav(1),
-            Action::PageUp => self.nav(-15),
-            Action::PageDown => self.nav(15),
+            Action::PageUp => self.nav(-PAGE),
+            Action::PageDown => self.nav(PAGE),
+            Action::ScrollDown => self.scroll(true),
+            Action::ScrollUp => self.scroll(false),
+            Action::Line(line) => {
+                let Some(line) = line else { return self.prompt(spec) };
+                self.go_to_line(line)
+            }
             Action::Top => self.nav(isize::MIN / 2),
             Action::Bottom => self.nav(isize::MAX / 2),
             Action::Left => self.horizontal(-1),
@@ -1365,6 +1374,36 @@ impl App {
             return Ok("following execution".into());
         }
         Ok(String::new())
+    }
+
+    /// `/scroll down`, `/scroll up`: SOURCE a page on or back (see `SourceState::scroll`);
+    /// elsewhere a page down or up.
+    fn scroll(&mut self, forward: bool) -> Outcome {
+        if self.focus() != Pane::Source {
+            return self.nav(if forward { PAGE } else { -PAGE });
+        }
+        let len = self.source_len();
+        let tab = self.tab_mut();
+        if tab.ui.source.browse.is_none() {
+            tab.ui.source.browse = tab.source_path();
+        }
+        tab.ui.source.scroll(forward, len);
+        Ok(String::new())
+    }
+
+    /// `/line`: the cursor of SOURCE on a line of its file, or the last one.
+    fn go_to_line(&mut self, line: u32) -> Outcome {
+        self.show_source();
+        let len = self.source_len();
+        if len == 0 {
+            return Err("no file in SOURCE; f finds one".into());
+        }
+        let tab = self.tab_mut();
+        if tab.ui.source.browse.is_none() {
+            tab.ui.source.browse = tab.source_path();
+        }
+        tab.ui.source.go_to(line.min(len));
+        Ok(if line > len { format!("the file ends at line {len}") } else { String::new() })
     }
 
     fn nav(&mut self, delta: isize) -> Outcome {

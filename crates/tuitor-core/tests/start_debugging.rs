@@ -46,7 +46,8 @@ async fn write_message(writer: &mut tokio::net::tcp::OwnedWriteHalf, message: Va
 
 /// Answers every request with success. Once launched, the parent asks for a child, or for
 /// a terminal when the configuration wants the program in one, and ends when told to
-/// disconnect, like js-debug.
+/// disconnect, like js-debug. A configuration with `busy` fails to launch, and the adapter
+/// stays connected, like vscode-php-debug when its port is taken.
 async fn serve(conn: usize, stream: TcpStream, received: UnboundedSender<Received>) {
     let (read, mut write) = stream.into_split();
     let mut reader = BufReader::new(read);
@@ -69,11 +70,22 @@ async fn serve(conn: usize, stream: TcpStream, received: UnboundedSender<Receive
             }
             _ => json!({}),
         };
-        let response = json!({
-            "seq": next(), "type": "response", "request_seq": message["seq"],
-            "success": true, "command": command, "body": body,
-        });
+        let busy = command == "launch" && message["arguments"]["busy"] == true;
+        let response = if busy {
+            json!({
+                "seq": next(), "type": "response", "request_seq": message["seq"],
+                "success": false, "command": command, "message": "listen EADDRINUSE: address already in use :::9003",
+            })
+        } else {
+            json!({
+                "seq": next(), "type": "response", "request_seq": message["seq"],
+                "success": true, "command": command, "body": body,
+            })
+        };
         write_message(&mut write, response).await;
+        if busy {
+            continue;
+        }
         match (conn, command.as_str()) {
             (_, "initialize") => {
                 write_message(&mut write, json!({ "seq": next(), "type": "event", "event": "initialized" })).await;
@@ -242,4 +254,30 @@ async fn a_restarted_session_keeps_its_name() {
     // Sessions that run side by side are told apart.
     let third = engine.start(config).expect("start");
     assert_eq!(name(&engine, third), format!("{}#2", name(&engine, second)));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_launch_ends_the_session_though_the_adapter_stays() {
+    let (address, mut adapter) = fake_adapter().await;
+    let (dir, _, adapters) = workspace("failed-launch", &address);
+    let (mut engine, mut rx) =
+        Engine::new(EngineOptions { adapters, workspace: dir.path().to_path_buf(), state_file: None });
+    let Value::Object(busy) = json!({ "busy": true }) else { unreachable!() };
+    let config = LaunchConfig::adhoc("orders", "fake", RequestKind::Launch, busy);
+    let first = engine.start(config.clone()).expect("start");
+    let mut log = Vec::new();
+
+    let ended = |e: &Engine, sid| e.session(sid).is_some_and(|s| s.state == SessionState::Exited);
+    pump(&mut engine, &mut rx, &mut adapter, &mut log, |e, _| ended(e, first)).await;
+    let notices = engine.take_notices();
+    let last = notices.last().expect("a notice");
+    assert_eq!(last.level, Level::Error);
+    assert!(last.text.contains("launch: listen EADDRINUSE"), "{notices:?}");
+    assert!(engine.sessions().iter().all(|s| !s.is_alive()));
+
+    // Starting it again is not a second session beside a dead one: the name is free.
+    let second = engine.start(config).expect("start");
+    assert_eq!(engine.session(second).map(|s| s.name.clone()), engine.session(first).map(|s| s.name.clone()));
+    pump(&mut engine, &mut rx, &mut adapter, &mut log, |e, _| ended(e, second)).await;
+    assert!(engine.sessions().iter().all(|s| !s.is_alive()));
 }

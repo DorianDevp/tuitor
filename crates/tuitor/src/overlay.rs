@@ -62,6 +62,13 @@ impl Palette {
     pub fn refresh(&mut self, keymap: &Keymap) {
         let typed = self.input.trim_start_matches('/');
         self.selected = 0;
+        // A number alone goes to that line.
+        if command::line_number(typed).is_ok()
+            && let Some(spec) = COMMANDS.iter().find(|spec| spec.name == "line")
+        {
+            self.items = vec![PaletteItem { spec, key: keymap.any_key_for(spec.name), matched: Vec::new() }];
+            return;
+        }
         if let Some((spec, _)) = command::split(typed).filter(|_| typed.contains(' ') || command::find(typed).is_some())
         {
             self.items = vec![PaletteItem { spec, key: keymap.any_key_for(spec.name), matched: Vec::new() }];
@@ -104,6 +111,9 @@ impl Palette {
 
     /// The line to run, or `None` when an argument is still needed (the input is then prepared).
     pub fn accept(&mut self) -> Option<String> {
+        if command::line_number(&self.input).is_ok() {
+            return Some(self.input.clone());
+        }
         if let Some((spec, arg)) = command::split(&self.input) {
             if arg.is_none() && matches!(spec.arg, Arg::Required(_)) {
                 self.input = format!("/{} ", spec.name);
@@ -246,6 +256,15 @@ pub fn workspace_files(root: &Path) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn palette_takes_a_number_for_a_line() {
+        let keymap = Keymap::defaults();
+        let mut palette = Palette::new("42".into(), Vec::new());
+        palette.refresh(&keymap);
+        assert_eq!(palette.items.iter().map(|i| i.spec.name).collect::<Vec<_>>(), ["line"]);
+        assert_eq!(palette.accept().as_deref(), Some("42"));
+    }
 
     #[test]
     fn palette_completes_and_asks_for_arguments() {

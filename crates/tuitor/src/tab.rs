@@ -177,6 +177,33 @@ pub struct SourceState {
     pub recenter: Cell<bool>,
 }
 
+impl SourceState {
+    /// A page further on (`forward`) or back over a file of `lines` lines, as vim's ^f and ^b:
+    /// two lines of the page before stay on the screen, and so does the cursor. With no
+    /// further to go, the cursor goes to the last line, or the first.
+    pub fn scroll(&mut self, forward: bool, lines: u32) {
+        let (top, rows) = (self.top.get().max(1), self.rows.get().max(1));
+        let step = rows.saturating_sub(2).max(1);
+        let last_top = lines.saturating_sub(rows) + 1;
+        let new_top = if forward { (top + step).min(last_top) } else { top.saturating_sub(step).max(1) };
+        self.top.set(new_top);
+        self.cursor = match (new_top == top, forward) {
+            (true, true) => lines.max(1),
+            (true, false) => 1,
+            (false, _) => self.cursor.clamp(new_top, new_top + rows - 1),
+        };
+    }
+
+    /// Puts the cursor on `line`, in the middle of the screen when it is off it.
+    pub fn go_to(&mut self, line: u32) {
+        self.cursor = line;
+        let top = self.top.get();
+        if line < top || line >= top + self.rows.get().max(1) {
+            self.recenter.set(true);
+        }
+    }
+}
+
 /// How a tab is looked at: its view, focus, cursors and the stop being shown.
 pub struct TabUi {
     pub view: View,
@@ -289,6 +316,51 @@ impl Tab {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// SOURCE with `rows` rows from line `top`, the cursor on `cursor`.
+    fn source(top: u32, rows: u32, cursor: u32) -> SourceState {
+        let state = SourceState { cursor, ..SourceState::default() };
+        state.top.set(top);
+        state.rows.set(rows);
+        state
+    }
+
+    #[test]
+    fn scrolling_moves_a_page_less_two_lines_and_keeps_the_cursor_on_it() {
+        // 20 rows over 100 lines: the next page starts 18 lines on.
+        let mut s = source(1, 20, 5);
+        s.scroll(true, 100);
+        assert_eq!((s.top.get(), s.cursor), (19, 19));
+        // A cursor still on the new page stays where it is.
+        let mut s = source(1, 20, 25);
+        s.scroll(true, 100);
+        assert_eq!((s.top.get(), s.cursor), (19, 25));
+        s.scroll(false, 100);
+        assert_eq!((s.top.get(), s.cursor), (1, 20));
+        // The last page ends at the last line; then the cursor goes there.
+        let mut s = source(75, 20, 80);
+        s.scroll(true, 100);
+        assert_eq!((s.top.get(), s.cursor), (81, 81));
+        s.scroll(true, 100);
+        assert_eq!((s.top.get(), s.cursor), (81, 100));
+        // And back at the top, to the first line.
+        let mut s = source(1, 20, 12);
+        s.scroll(false, 100);
+        assert_eq!((s.top.get(), s.cursor), (1, 1));
+        // A file shorter than the screen does not scroll.
+        let mut s = source(1, 20, 3);
+        s.scroll(true, 10);
+        assert_eq!((s.top.get(), s.cursor), (1, 10));
+    }
+
+    #[test]
+    fn going_to_a_line_off_the_screen_centres_it() {
+        let mut s = source(1, 20, 5);
+        s.go_to(12);
+        assert_eq!((s.cursor, s.recenter.get()), (12, false));
+        s.go_to(60);
+        assert_eq!((s.cursor, s.recenter.get()), (60, true));
+    }
 
     #[test]
     fn ids_stay_with_their_tab() {

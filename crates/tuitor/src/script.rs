@@ -176,10 +176,16 @@ fn drain(app: &mut App, rx: &mut Inbox) {
 }
 
 fn key_event(text: &str) -> Result<KeyEvent> {
-    let (mods, rest) = match text.strip_prefix("ctrl-") {
-        Some(rest) => (KeyModifiers::CONTROL, rest),
-        None => (KeyModifiers::NONE, text),
-    };
+    let (mut mods, mut rest) = (KeyModifiers::NONE, text);
+    loop {
+        if let Some(r) = rest.strip_prefix("ctrl-").filter(|r| !r.is_empty()) {
+            (mods, rest) = (mods | KeyModifiers::CONTROL, r);
+        } else if let Some(r) = rest.strip_prefix("shift-").filter(|r| !r.is_empty()) {
+            (mods, rest) = (mods | KeyModifiers::SHIFT, r);
+        } else {
+            break;
+        }
+    }
     let code = match rest {
         "enter" => KeyCode::Enter,
         "esc" => KeyCode::Esc,
