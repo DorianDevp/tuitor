@@ -106,15 +106,12 @@ impl Delta {
     }
 }
 
-/// What a stop read, as names and values: the watches, as `watch ‹expression›`, then the
-/// variables of the top frame's arguments and locals, at every level read, as
-/// `name.field.field`.
+/// What a stop read, as names and values: the watches that could be evaluated there, as
+/// `watch ‹expression›`, then the variables of the top frame's arguments and locals, at
+/// every level read, as `name.field.field`.
 pub fn state(snapshot: &Snapshot) -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = snapshot
-        .watches
-        .iter()
-        .map(|w| (format!("watch {}", w.expr), w.value.clone().unwrap_or_else(|err| format!("error: {err}"))))
-        .collect();
+    let watches = snapshot.watches.iter().filter_map(|w| Some((format!("watch {}", w.expr), w.value.clone().ok()?)));
+    let mut out: Vec<(String, String)> = watches.collect();
     let scopes = snapshot.scopes(0).unwrap_or_default().iter().filter(|s| s.default_open);
     for vars in scopes.filter_map(|s| s.vars.as_deref()) {
         flatten("", vars, &mut out);
@@ -281,7 +278,10 @@ mod tests {
         let mut order = var("$order", "Order");
         order.children = Some(vec![var("status", "Pending"), var("id", "1001")]);
         let mut a = stop(1, 1, 0, vec![var("$total", "8900"), order.clone(), var("$i", "0")]);
-        a.watches = vec![WatchValue { expr: "$total * 2".into(), value: Ok("17800".into()) }];
+        a.watches = vec![
+            WatchValue { expr: "$total * 2".into(), value: Ok("17800".into()) },
+            WatchValue { expr: "$nope".into(), value: Err("undefined".into()) },
+        ];
         order.children = Some(vec![var("status", "Assigned"), var("id", "1001")]);
         let b = stop(1, 1, 0, vec![var("$total", "8900"), order, var("$owner", "null")]);
         let deltas = differences(&a, &b);

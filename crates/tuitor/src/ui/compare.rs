@@ -31,7 +31,7 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
     let sessions = tab.engine.sessions();
     let side = |path: &Path<'_>| {
         vec![
-            seg("◉ ", bold(set_color(path.set, true))),
+            seg("● ", bold(set_color(path.set, true))),
             seg(format!("{} {}", set_name(path.set), path.run.label(sessions)), fg(FG)),
         ]
     };
