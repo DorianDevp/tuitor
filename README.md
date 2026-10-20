@@ -168,7 +168,7 @@ pick a value, `h` and `l` show the stop of its change before or after the one on
 what it was and became, and `enter` opens that stop in OVERVIEW. TIMELINE shows changes,
 not whether they are wrong.
 
-![TIMELINE in the php-paths example: the invoice request's stops in lavender, the order request's in cyan, ↷ where breakpoints of pink recorded and the program went on; h went to the change of $total at stop #28, 8900 → 36830](assets/screenshots/timeline.png)
+![TIMELINE in the php-paths example: the invoice request's stops in lavender, the order request's in cyan, ↷ where the repository's breakpoint, in lavender alone, recorded and the program went on; h went to the change of $rows at stop #9, array(2) → array(3)](assets/screenshots/timeline.png)
 
 ### FLOW
 
@@ -260,7 +260,7 @@ also while the program runs, and `g a` lists the sets to pick one; `M` puts the 
 selected, or on the SOURCE line, in the active set or takes it out, `D` in BREAKPOINTS deletes a
 set, and `b` adds to the active set.
 
-![OVERVIEW in the php-paths example at a breakpoint in OrderService of lavender, the active set, which cyan shares (the small cyan dot); in BREAKPOINTS those only in cyan or pink record only, and each breakpoint has a dot for every set it is in](assets/screenshots/sets.png)
+![OVERVIEW in the php-paths example at a breakpoint in OrderService of lavender, the active set, which cyan shares (the small cyan dot); in BREAKPOINTS those only in cyan, OrderController's, record only, and each breakpoint has a dot for every set it is in](assets/screenshots/sets.png)
 
 A breakpoint has the colour of the active set when it is in it, else of the first set it
 joined: full when it stops the program, dimmer when it only records, with a smaller `•` in
@@ -280,7 +280,7 @@ with what it read. `/compare lavender cyan` names the sets and `/compare cyan@3 
 two of FLOW's runs; `[` and `]` take a side from an older or newer run, and `enter` opens the
 breakpoint in CODE or a side's stop in HISTORY.
 
-![COMPARE in the php-paths example: lavender in the invoice request against cyan in the order request, which share the breakpoints in OrderService and Money; each controller's hits are on one side alone, and VALUES lists the six values that differ at the first hit of OrderService.php:23](assets/screenshots/compare.png)
+![COMPARE in the php-paths example: lavender in the invoice request against cyan in the order request, which share the breakpoints in OrderService and Money; each controller's hits and the repository's are on one side alone, and VALUES lists the six values that differ at the first hit of OrderService.php:23](assets/screenshots/compare.png)
 
 ### Paths through a line
 
@@ -305,7 +305,7 @@ two marks share is one breakpoint in both sets, where COMPARE lines the paths up
 what its limits cut short and what no server sees in the language: a container's, a router's or
 an event's calls, Angular's template bindings, calls through interfaces.
 
-![PATHS through the helper Money::lineTotal in the php-paths example: a tree per controller and the test, each controller's call into the repository and the format after the service, the service's two ways to the helper, one through the event dispatcher to a listener that a FLOW run showed (⇢), and the lines of the stage under the cursor](assets/screenshots/paths.png)
+![PATHS through the helper Money::lineTotal in the php-paths example: a tree per controller and the test, each controller's call into the repository and the format after the service, the service's two ways to the helper (⋔), one through the event dispatcher to a listener that a FLOW run showed (⇢); the invoice's path straight to the helper marked lavender, the one through the listener cyan, and below the service's lines in cyan](assets/screenshots/paths.png)
 
 tuitor runs intelephense (PHP), typescript-language-server (TypeScript, JavaScript, Angular),
 rust-analyzer (Rust) and gopls (Go), from `PATH` or as the `[lsp]` table of
