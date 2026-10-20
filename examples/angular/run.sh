@@ -15,8 +15,6 @@ config="ng serve"
 if [[ -n ${HEADLESS:-} ]]; then
     config="ng serve (headless)"
 fi
-tuitor_pid=
-serve_pid=
 
 step() { echo "==> $*"; }
 
@@ -26,46 +24,6 @@ die() {
     for line in "$@"; do echo "    $line" >&2; done
     exit 1
 }
-
-# Every process below $1: js-debug and the Chromium it started, or what ng serve started.
-descendants() {
-    local child
-    for child in $(pgrep -P "$1"); do
-        echo "$child"
-        descendants "$child"
-    done
-}
-
-# Stops $1 and everything below it. The children are listed first, since a process whose
-# parent was killed can no longer be found from it.
-stop_tree() {
-    local pids
-    pids=$(descendants "$1")
-    # shellcheck disable=SC2086 # one pid per word
-    kill $pids "$1" 2>/dev/null || true
-    wait "$1" 2>/dev/null || true
-}
-
-cleanup() {
-    # Interrupted while tuitor runs: stop it, js-debug and Chromium.
-    if [[ -n $tuitor_pid ]] && kill -0 "$tuitor_pid" 2>/dev/null; then
-        stop_tree "$tuitor_pid"
-    fi
-    # ng serve runs until this script ends, however it ends.
-    if [[ -n $serve_pid ]] && kill -0 "$serve_pid" 2>/dev/null; then
-        stop_tree "$serve_pid"
-    fi
-    # tuitor puts the terminal back when it quits; killed, it leaves it raw and on the
-    # alternate screen.
-    if [[ -t 0 && $(stty -a) == *-icanon* ]]; then
-        printf '\e[?1049l\e[?25h'
-        stty sane
-    fi
-}
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-trap 'exit 129' HUP
 
 # 1. Prerequisites.
 step "checking Chromium, Node.js, npm, curl and js-debug"
@@ -130,11 +88,17 @@ if [[ -z ${TUITOR:-} ]]; then
     tuitor="${CARGO_TARGET_DIR:-$repo/target}/debug/tuitor"
 fi
 
-# 4. ng serve, in the background until this script ends; tuitor does not run VS Code's
-# preLaunchTask. It reads nothing, so that every key goes to tuitor.
+# 4. ng serve, in the background; tuitor does not run VS Code's preLaunchTask. It reads
+# nothing, so that every key goes to tuitor. A watcher stops it, with the SIGINT of ctrl-c,
+# once this script has ended: after the exec below, once tuitor has.
 step "starting ng serve on port $port (its output goes to $log)"
 (cd "$here" && exec node_modules/.bin/ng serve --port "$port") </dev/null >"$log" 2>&1 &
 serve_pid=$!
+script_pid=$$ # tuitor's, after the exec below
+(
+    while kill -0 "$script_pid" 2>/dev/null; do sleep 0.5; done
+    kill -INT "$serve_pid" 2>/dev/null
+) </dev/null >/dev/null 2>&1 &
 until curl -s -o /dev/null "$url"; do
     if ! kill -0 "$serve_pid" 2>/dev/null; then
         tail -n 20 "$log" >&2
@@ -143,9 +107,7 @@ until curl -s -o /dev/null "$url"; do
     sleep 0.3
 done
 
-# 5. Debug. tuitor runs in the background so that a signal to this script reaches the trap
-# at once; <&0 keeps the terminal as its input.
+# 5. Debug. However tuitor ends, by Q or by SIGINT, SIGTERM or SIGHUP, it ends js-debug and
+# Chromium and puts the terminal back; the watcher then stops ng serve.
 step "starting tuitor on configuration \"$config\" (Q quits, closes Chromium and stops ng serve)"
-"$tuitor" -C "$here" "$config" "$@" <&0 &
-tuitor_pid=$!
-wait "$tuitor_pid"
+exec "$tuitor" -C "$here" "$config" "$@"

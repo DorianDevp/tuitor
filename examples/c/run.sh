@@ -7,7 +7,6 @@ set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 install_help="see \"Installing adapters\" in $repo/README.md"
-tuitor_pid=
 
 step() { echo "==> $*"; }
 
@@ -17,25 +16,6 @@ die() {
     for line in "$@"; do echo "    $line" >&2; done
     exit 1
 }
-
-cleanup() {
-    # Interrupted while tuitor runs: stop the gdb it started (gdb ends the program), then tuitor.
-    if [[ -n $tuitor_pid ]] && kill -0 "$tuitor_pid" 2>/dev/null; then
-        pkill -P "$tuitor_pid" || true
-        kill "$tuitor_pid" 2>/dev/null || true
-        wait "$tuitor_pid" 2>/dev/null || true
-    fi
-    # tuitor puts the terminal back when it quits; killed, it leaves it raw and on the
-    # alternate screen.
-    if [[ -t 0 && $(stty -a) == *-icanon* ]]; then
-        printf '\e[?1049l\e[?25h'
-        stty sane
-    fi
-}
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-trap 'exit 129' HUP
 
 # 1. Prerequisites.
 step "checking cc, make and gdb"
@@ -76,9 +56,7 @@ if [[ -z ${TUITOR:-} ]]; then
     tuitor="${CARGO_TARGET_DIR:-$repo/target}/debug/tuitor"
 fi
 
-# 4. Debug. tuitor runs in the background so that a signal to this script reaches the trap
-# at once; <&0 keeps the terminal as its input.
+# 4. Debug. However tuitor ends, by Q or by SIGINT, SIGTERM or SIGHUP, it ends gdb and the
+# program and puts the terminal back.
 step "starting tuitor on configuration \"orders\" (Q quits)"
-"$tuitor" -C "$here" orders "$@" <&0 &
-tuitor_pid=$!
-wait "$tuitor_pid"
+exec "$tuitor" -C "$here" orders "$@"

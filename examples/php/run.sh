@@ -13,8 +13,6 @@ install_help="see \"Installing adapters\" in $repo/README.md"
 log="$here/run.log"
 adapter="${XDG_DATA_HOME:-$HOME/.local/share}/tuitor/adapters/vscode-php-debug"
 php_debug_version=1.40.2 # the release README.md installs
-tuitor_pid=
-helper_pid=
 
 step() { echo "==> $*"; }
 
@@ -24,29 +22,6 @@ die() {
     for line in "$@"; do echo "    $line" >&2; done
     exit 1
 }
-
-cleanup() {
-    # PHP, or the helper still waiting to start it.
-    if [[ -n $helper_pid ]]; then
-        kill "$helper_pid" 2>/dev/null || true
-    fi
-    # Interrupted while tuitor runs: stop the adapter it started (node), then tuitor.
-    if [[ -n $tuitor_pid ]] && kill -0 "$tuitor_pid" 2>/dev/null; then
-        pkill -P "$tuitor_pid" || true
-        kill "$tuitor_pid" 2>/dev/null || true
-        wait "$tuitor_pid" 2>/dev/null || true
-    fi
-    # tuitor puts the terminal back when it quits; killed, it leaves it raw and on the
-    # alternate screen.
-    if [[ -t 0 && $(stty -a) == *-icanon* ]]; then
-        printf '\e[?1049l\e[?25h'
-        stty sane
-    fi
-}
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-trap 'exit 129' HUP
 
 # 1. Prerequisites.
 step "checking PHP with Xdebug, Node.js and vscode-php-debug"
@@ -119,10 +94,11 @@ if [[ -z ${TUITOR:-} ]]; then
     tuitor="${CARGO_TARGET_DIR:-$repo/target}/debug/tuitor"
 fi
 
-# 4. Debug. PHP connects to tuitor, so a helper starts it once tuitor listens. ss sees that
-# without connecting: vscode-php-debug would take a test connection for Xdebug's.
-# With TRACE=1 Xdebug also writes the run's function trace, in the format tuitor reads, to
-# traces/, where FLOW looks ("xdebugTraceDir" in .vscode/launch.json).
+# 4. Debug. PHP connects to tuitor, so a helper starts it once tuitor listens (ss sees that
+# without connecting: vscode-php-debug would take a test connection for Xdebug's), or gives
+# up once tuitor has ended. With TRACE=1 Xdebug also writes the run's function trace, in the
+# format tuitor reads, to traces/, where FLOW looks ("xdebugTraceDir" in
+# .vscode/launch.json).
 mode=debug
 php_args=()
 if [[ ${TRACE:-} == 1 ]]; then
@@ -134,18 +110,19 @@ again="XDEBUG_MODE=$mode XDEBUG_SESSION=1 XDEBUG_TRIGGER=1 XDEBUG_CONFIG=client_
 step "starting tuitor on configuration \"Listen for Xdebug\" (Q quits)"
 echo "    PHP runs once tuitor listens on port $port; its output goes to $log."
 echo "    To run PHP again while tuitor listens, in another terminal: $again"
+script_pid=$$ # tuitor's, after the exec below
 (
     echo "To run PHP again while tuitor listens: $again"
     echo "Waiting for tuitor to listen on port $port."
-    until [[ -n $(ss -Hltn "sport = :$port") ]]; do sleep 0.2; done
+    until [[ -n $(ss -Hltn "sport = :$port") ]]; do
+        kill -0 "$script_pid" 2>/dev/null || exit 0
+        sleep 0.2
+    done
     echo "Running PHP."
     # XDEBUG_SESSION starts the debugger, XDEBUG_TRIGGER the trace.
     export XDEBUG_MODE=$mode XDEBUG_SESSION=1 XDEBUG_TRIGGER=1 XDEBUG_CONFIG="client_port=$port"
     exec "$php" "${php_args[@]}" "$here/orders.php"
 ) >"$log" 2>&1 &
-helper_pid=$!
-# tuitor runs in the background too, so that a signal to this script reaches the trap at
-# once; <&0 keeps the terminal as its input.
-"$tuitor" -C "$here" "Listen for Xdebug" "$@" <&0 &
-tuitor_pid=$!
-wait "$tuitor_pid"
+# However tuitor ends, by Q or by SIGINT, SIGTERM or SIGHUP, it ends vscode-php-debug, which
+# stops PHP, and puts the terminal back.
+exec "$tuitor" -C "$here" "Listen for Xdebug" "$@"
