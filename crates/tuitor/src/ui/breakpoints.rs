@@ -163,23 +163,23 @@ pub fn glyph(bp: &Breakpoint, active: SetId, hit: bool) -> (&'static str, Color)
     (shape, set_color(bp.shown_set(active), hit || (bp.enabled && bp.in_set(active))))
 }
 
-/// [`glyph`], and `⁺` after it, in the colour of another set the breakpoint is in, when it
-/// is in more than the one it is shown in.
+/// [`glyph`], and a smaller `•` after it in the colour of another set the breakpoint is in,
+/// when it is in more than the one it is shown in.
 pub fn marks(bp: &Breakpoint, active: SetId, hit: bool) -> Vec<Seg<'static>> {
     let (shape, color) = glyph(bp, active, hit);
     let shown = bp.shown_set(active);
     let other = bp.sets.iter().copied().find(|s| *s != shown);
     let mut segs = vec![seg(shape, bold(color))];
-    segs.extend(other.map(|set| seg("⁺", fg(set_color(set, false)))));
+    segs.extend(other.map(|set| seg("•", fg(set_color(set, true)))));
     segs
 }
 
 /// `glyph` for a stop, in the colour of the first of the sets its breakpoint was in, the
-/// one it is shown in, with `⁺` in the colour of the next when there are more.
+/// one it is shown in, with `•` in the colour of the next when there are more.
 pub fn stop_marks(sets: &[SetId], glyph: &'static str) -> Vec<Seg<'static>> {
     let Some((first, rest)) = sets.split_first() else { return Vec::new() };
     let mut segs = vec![seg(glyph, bold(set_color(*first, true)))];
-    segs.extend(rest.first().map(|set| seg("⁺", fg(set_color(*set, false)))));
+    segs.extend(rest.first().map(|set| seg("•", fg(set_color(*set, true)))));
     segs
 }
 
