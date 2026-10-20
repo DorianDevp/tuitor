@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tuitor_core::config::{Adapters, LaunchConfig, RequestKind};
 use tuitor_core::log::OutputKind;
-use tuitor_core::session::{Session, SessionId, SourceText};
+use tuitor_core::session::{Session, SessionId, SessionState, SourceText};
 use tuitor_core::snapshot::{Change, diff};
 use tuitor_core::{Engine, EngineMsg, EngineOptions, Step};
 
@@ -209,6 +209,18 @@ async fn breakpoints_of_another_set_record_and_go_on() {
     engine.resume(cid, Step::Continue).expect("continue");
     pump(&mut engine, &mut rx, |e| stopped(e) && lines(e).len() == 7).await;
     assert_eq!(lines(&engine)[5..], [(39, true), (77, false)]);
+
+    // `pause` while a hit of the other set is being read keeps the program there. js-debug
+    // takes a few hundred milliseconds to read a stop, which leaves time to ask.
+    engine.resume(cid, Step::Continue).expect("continue");
+    let reading = |e: &Engine| {
+        let running = e.session(cid).is_some_and(|s| s.state == SessionState::Running);
+        running && e.events().iter().last().is_some_and(|event| event.name == "stopped")
+    };
+    pump(&mut engine, &mut rx, reading).await;
+    engine.pause(cid).expect("pause");
+    pump(&mut engine, &mut rx, |e| stopped(e) && lines(e).len() == 8).await;
+    assert_eq!(lines(&engine)[7], (39, false));
 
     engine.clear_breakpoints();
     engine.resume(cid, Step::Continue).expect("continue");

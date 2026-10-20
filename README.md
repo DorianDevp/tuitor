@@ -157,11 +157,11 @@ the cursor and the full snapshot of the stop.
 Below the table, TIMELINE has a row for each value that changed, a watch or a variable of
 the top frame, with a mark at each stop where it changed, in the colour of the breakpoint
 set the stop was at, and the stops along the top: `●` where the program waited, `↷` where
-it went on, `·` where no breakpoint stopped it. A variable is compared with its value at
-the last stop in the same function, a watch with its last value. `j` and `k` pick a value,
-`h` and `l` show the stop of its change before or after the one on view, with what it was
-and became, and `enter` opens that stop in OVERVIEW. TIMELINE shows changes, not whether
-they are wrong.
+it went on, `·` where no breakpoint stopped it. A value is compared with what it was at the
+last stop in the same function, since watches too are read in the top frame. `j` and `k`
+pick a value, `h` and `l` show the stop of its change before or after the one on view, with
+what it was and became, and `enter` opens that stop in OVERVIEW. TIMELINE shows changes,
+not whether they are wrong.
 
 ### FLOW
 

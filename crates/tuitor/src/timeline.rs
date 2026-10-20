@@ -31,9 +31,10 @@ pub struct Change {
 }
 
 /// The values that changed at least once over `history`: the watches, then the top-level
-/// variables in the order they first appear. A variable is compared with its value at the
-/// last stop in the same function, so that another function's variable of the same name, or
-/// a stop where it is out of scope, is no change; a watch, with its last value anywhere.
+/// variables in the order they first appear. A value is compared with what it was at the
+/// last stop in the same function, so that another function's variable of the same name, a
+/// stop where it is out of scope, or a watch that reads another variable in another function
+/// (watches are evaluated in the top frame), is no change.
 pub fn tracks(history: &[Snapshot], watches: &[String]) -> Vec<Track> {
     let mut names: Vec<String> = watches.to_vec();
     for snapshot in history {
@@ -62,7 +63,7 @@ fn changes(history: &[Snapshot], name: &str, watch: bool) -> Vec<Change> {
         // A watch that could not be evaluated there has no value there.
         let value = if watch { snapshot.watch(name).and_then(|v| v.clone().ok()) } else { cell(snapshot, name) };
         let Some(now) = value.map(|v| v.split_whitespace().collect::<Vec<_>>().join(" ")) else { continue };
-        let function = if watch { "" } else { snapshot.top().map_or("", |f| f.name.as_str()) };
+        let function = snapshot.top().map_or("", |f| f.name.as_str());
         if let Some(was) = last.insert(function, now.clone())
             && was != now
         {
@@ -162,15 +163,21 @@ mod tests {
     }
 
     #[test]
-    fn a_watch_changes_against_its_last_value_anywhere_it_was_evaluated_and_comes_first() {
-        let mut history = [stop(1, "a", &[("x", "1")]), stop(2, "b", &[("x", "1")]), stop(3, "a", &[("x", "2")])];
-        for (snapshot, value) in history.iter_mut().zip([Ok("10"), Err("not defined"), Ok("12")]) {
+    fn a_watch_changes_where_it_was_evaluated_in_the_same_function_and_comes_first() {
+        let mut history = [
+            stop(1, "a", &[("x", "1")]),
+            stop(2, "b", &[("x", "1")]),
+            stop(3, "a", &[("x", "2")]),
+            stop(4, "a", &[("x", "2")]),
+        ];
+        let values = [Ok("10"), Ok("99"), Err("not defined"), Ok("12")];
+        for (snapshot, value) in history.iter_mut().zip(values) {
             let value = value.map(str::to_owned).map_err(str::to_owned);
             snapshot.watches = vec![WatchValue { expr: "total".into(), value }];
         }
         let tracks = tracks(&history, &["total".to_owned()]);
         assert_eq!(tracks.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["total", "x"]);
-        assert_eq!(numbers(&tracks[0]), [3]);
+        assert_eq!(numbers(&tracks[0]), [4], "b's value and the error are no change");
         assert_eq!((tracks[1].next(1, true).map(|c| c.number), tracks[1].next(3, false)), (Some(3), None));
         assert!(tracks[1].at(3).is_some() && tracks[1].at(2).is_none());
     }
