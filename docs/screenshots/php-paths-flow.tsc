@@ -7,5 +7,5 @@
 @key enter
 /paths
 @wait paths
-@key j j j j space k k
+@key space j space j space j space j k k
 @dump paths.ans

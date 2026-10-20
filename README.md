@@ -168,7 +168,7 @@ pick a value, `h` and `l` show the stop of its change before or after the one on
 what it was and became, and `enter` opens that stop in OVERVIEW. TIMELINE shows changes,
 not whether they are wrong.
 
-![TIMELINE in the php-paths example: the invoice request's stops in rose, the order request's in teal, ↷ where breakpoints of orchid recorded and the program went on; h went to the change of $total at stop #28, 8900 → 36830](assets/screenshots/timeline.png)
+![TIMELINE in the php-paths example: the invoice request's stops in lavender, the order request's in cyan, ↷ where breakpoints of pink recorded and the program went on; h went to the change of $total at stop #28, 8900 → 36830](assets/screenshots/timeline.png)
 
 ### FLOW
 
@@ -250,15 +250,17 @@ is opened. The commands and the defaults are in [docs/configuration.md](docs/con
 
 ### Breakpoint sets
 
-Every breakpoint is in one set or more, and a set has no name but a colour: rose, teal,
-orchid, sky or gold. The breakpoints of the active set stop the program. A breakpoint only in
+Every breakpoint is in one set or more, and a set has no name but a colour, chosen when it is
+made to stay apart from the other sets' and from amber, green and red, so that there can be any
+number of sets. The breakpoints of the active set stop the program. A breakpoint only in
 other sets records the stop, with the stack, the top frame's variables and the watches, and
 the program goes on by itself. Sets share breakpoints: two ways into one service can each have
 a set, both with the service's breakpoints. `N` makes a set and `A` makes the next one active,
-also while the program runs; `M` puts the breakpoint selected, or on the SOURCE line, in the
-active set or takes it out, `D` in BREAKPOINTS deletes a set, and `b` adds to the active set.
+also while the program runs, and `g a` lists the sets to pick one; `M` puts the breakpoint
+selected, or on the SOURCE line, in the active set or takes it out, `D` in BREAKPOINTS deletes a
+set, and `b` adds to the active set.
 
-![OVERVIEW in the php-paths example at a breakpoint in OrderService of rose, the active set, which teal shares (the small teal dot); in BREAKPOINTS those only in teal or orchid record only, and each breakpoint has a dot for every set it is in](assets/screenshots/sets.png)
+![OVERVIEW in the php-paths example at a breakpoint in OrderService of lavender, the active set, which cyan shares (the small cyan dot); in BREAKPOINTS those only in cyan or pink record only, and each breakpoint has a dot for every set it is in](assets/screenshots/sets.png)
 
 A breakpoint has the colour of the active set when it is in it, else of the first set it
 joined: full when it stops the program, dimmer when it only records, with a smaller `•` in
@@ -274,11 +276,11 @@ COMPARE (`g d`, `/compare`) lines up what two sets recorded, each in a run of it
 one set in one request and another in the next. A hit of a breakpoint the sets share lines up
 with the same hit on the other side, and its row counts the values that differ, appear or
 disappear; VALUES lists them for the hit under the cursor. A hit only one side has is listed
-with what it read. `/compare rose teal` names the sets and `/compare rose@3 rose@5` one set in
+with what it read. `/compare lavender cyan` names the sets and `/compare cyan@3 cyan@5` one set in
 two of FLOW's runs; `[` and `]` take a side from an older or newer run, and `enter` opens the
 breakpoint in CODE or a side's stop in HISTORY.
 
-![COMPARE in the php-paths example: rose in the invoice request against teal in the order request, which share the breakpoints in OrderService and Money; each controller's hits are on one side alone, and VALUES lists the six values that differ at the first hit of OrderService.php:23](assets/screenshots/compare.png)
+![COMPARE in the php-paths example: lavender in the invoice request against cyan in the order request, which share the breakpoints in OrderService and Money; each controller's hits are on one side alone, and VALUES lists the six values that differ at the first hit of OrderService.php:23](assets/screenshots/compare.png)
 
 ### Paths to a line
 
@@ -288,8 +290,9 @@ level, or a function no code calls, which a framework or an event does. PATHS li
 the lines on each worth a breakpoint: the entry of each function, its call into the next one,
 the last writes and calls into the project before that call, and the line asked about. Calls
 no server can see, such as an event dispatcher's, come from the stacks of the runs FLOW
-remembers and show as `⇢`. `enter` makes each path marked a set of its own, so that a line two
-paths share is one breakpoint in both sets, where COMPARE lines the paths up.
+remembers and show as `⇢`. `space` marks a path, in the colour of its set to be, and `enter`
+makes each path marked a set of its own, so that a line two paths share is one breakpoint in
+both sets, where COMPARE lines the paths up.
 
 ![PATHS to the helper Money::lineTotal in the php-paths example: both controllers through OrderService, both again through the event dispatcher to a listener, a call FLOW saw at run time (⇢), and the test, unmarked](assets/screenshots/paths.png)
 
@@ -342,7 +345,7 @@ named (`tuitor doctor php gdb`), needs is missing.
 | key | action | key | action |
 |---|---|---|---|
 | `c` `n` `s` `o` | continue, step over, in, out | `b` | toggle a breakpoint on the SOURCE line |
-| `N` `A` | new breakpoint set, next set active | `M` | breakpoint in or out of the active set |
+| `N` `A` `g a` | new breakpoint set, next set active, list of sets | `M` | breakpoint in or out of the active set |
 | `P` | paths to the SOURCE line, with their breakpoints | | |
 | `p` `X` `R` | pause, stop, restart | `f` | find files and breakpoints |
 | `S` | start the configuration selected in CONFIG | `ctrl-f`, in SOURCE `/` | search SOURCE |
