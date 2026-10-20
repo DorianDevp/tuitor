@@ -115,11 +115,12 @@ fn symbol_status(app: &App, flow: Option<&Flow>, path: &Path, symbol: &Symbol) -
     (glyph(status), note)
 }
 
-/// Whether a function name from a stack or a trace stands for `symbol`.
+/// Whether a function name from a stack or a trace stands for `symbol`. A class may have
+/// been renamed with leading underscores by a bundler: esbuild makes Angular's `App` `_App`.
 pub fn same(function: &str, symbol: &Symbol) -> bool {
     short_name(function) == symbol.name
         && match (owner_name(function), &symbol.container) {
-            (Some(owner), Some(container)) => owner == *container,
+            (Some(owner), Some(container)) => owner.trim_start_matches('_') == container.trim_start_matches('_'),
             _ => true,
         }
 }
@@ -203,5 +204,8 @@ mod tests {
         assert!(same("add", &add));
         assert!(!same("App\\Domain\\Ledger->add", &add));
         assert!(!same("App\\Domain\\Money->sub", &add));
+        let render = Symbol { name: "render".into(), container: Some("App".into()), line: 49, end: 62 };
+        assert!(same("_App.render", &render), "as js-debug names it in Angular's bundle");
+        assert!(!same("_Shop.render", &render));
     }
 }
