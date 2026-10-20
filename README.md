@@ -283,11 +283,11 @@ sets are in rose.
 
 A breakpoint has the colour of the active set when it is in it, else of the first set it
 joined, in SOURCE, BREAKPOINTS, FLOW, OUTLINE, HISTORY and the context line: full when it
-stops the program, dimmer when it only records. A `⁺` after it, in another set's colour,
-says it is in more sets, and BREAKPOINTS has a dot for each set it is in. The shape is what
-it does: `●` stops, `◐` has a condition or a hit count, `◆` logs, `○` is disabled, `◌` was
-not taken by the adapter, and `◉` is the one the stop on view hit. HISTORY marks the stops
-the program went on from with `↷`.
+stops the program, dimmer when it only records. A smaller `•` after it, in another set's
+colour, says it is in more sets, and BREAKPOINTS has a dot for each set it is in. The shape
+is what it does: `●` stops, `◐` has a condition or a hit count, `◆` logs, `○` is disabled,
+`◌` was not taken by the adapter, and `◉` is the one the stop on view hit. HISTORY marks the
+stops the program went on from with `↷`.
 
 A breakpoint of another set costs what reading a stop costs. tuitor asks for the variables
 of a stop together, a level at a time. Measured per hit on the C, PHP and JavaScript
