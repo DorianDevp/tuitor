@@ -172,6 +172,12 @@ impl Tab {
         if viewed.silent { earlier.next() } else { earlier.find(|s| !s.silent) }
     }
 
+    /// The values TIMELINE shows, with the stops each changed at.
+    pub fn timeline_tracks(&self) -> Vec<crate::timeline::Track> {
+        let history = self.active().map(|s| s.history.as_slice()).unwrap_or_default();
+        crate::timeline::tracks(history, self.engine.watches())
+    }
+
     /// What changed in the selected frame since the previous stop.
     pub fn changes(&self) -> HashMap<VarPath, Change> {
         match self.viewed() {
@@ -449,7 +455,7 @@ impl App {
                 let source = self.sources.borrow_mut().get(&tab.source_path()?)?;
                 source.outline().get(tab.ui.outline.pos).map(|s| s.name.clone())
             }
-            Pane::Events | Pane::History | Pane::Compare => None,
+            Pane::Events | Pane::History | Pane::Compare | Pane::Timeline => None,
         }
     }
 }

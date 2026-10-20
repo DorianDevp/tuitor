@@ -50,6 +50,7 @@ pub enum Pane {
     Flow,
     Outline,
     Compare,
+    Timeline,
 }
 
 impl Pane {
@@ -67,6 +68,7 @@ impl Pane {
             Pane::Flow => "flow",
             Pane::Outline => "outline",
             Pane::Compare => "compare",
+            Pane::Timeline => "timeline",
         }
     }
 }
@@ -76,7 +78,7 @@ pub fn panes(view: View) -> &'static [Pane] {
     match view {
         View::Overview => &[Source, Locals, Stack, Watch, Breakpoints, Output, Events],
         View::Code => &[Source, Stack, Breakpoints, Flow, Outline],
-        View::History => &[History, Locals],
+        View::History => &[History, Timeline, Locals],
         View::Flow => &[Flow],
         View::Project => &[Breakpoints, Config],
         View::Compare => &[Compare],
@@ -1476,6 +1478,10 @@ impl App {
                 let len = self.tab().compared().map_or(0, |c| c.entries.len());
                 self.tab_mut().ui.compare.move_by(delta, len);
             }
+            Pane::Timeline => {
+                let len = self.tab().timeline_tracks().len();
+                self.tab_mut().ui.timeline.move_by(delta, len);
+            }
             Pane::Config => {
                 let tab = self.tab_mut();
                 let rows = tab.config_rows();
@@ -1525,6 +1531,20 @@ impl App {
             }
             // The breakpoint, then each side.
             Pane::Compare => tab.ui.compare_col = tab.ui.compare_col.saturating_add_signed(delta).min(2),
+            // The value's change before or after the stop on view, which shows that stop.
+            Pane::Timeline => {
+                let (Some(sid), Some(viewed)) = (tab.ui.session, tab.viewed().map(|s| s.number)) else {
+                    return Ok(String::new());
+                };
+                let tracks = tab.timeline_tracks();
+                let track = tracks.get(tab.ui.timeline.pos).ok_or("no value changed yet")?;
+                let change = track.next(viewed, delta > 0).ok_or_else(|| {
+                    format!("{} did not change {} #{viewed}", track.name, if delta > 0 { "after" } else { "before" })
+                })?;
+                let message = format!("#{} {}: {} → {}", change.number, track.name, change.was, change.now);
+                tab.view_stop(sid, change.number);
+                return Ok(message);
+            }
             _ => {}
         }
         Ok(String::new())
@@ -1567,7 +1587,7 @@ impl App {
                 }
                 Some(BpRow::Exception { .. }) | None => Err("nothing selected".into()),
             },
-            Pane::History => {
+            Pane::History | Pane::Timeline => {
                 let tab = self.tab_mut();
                 tab.ui.view = View::Overview;
                 tab.jump_to_execution();

@@ -1,5 +1,5 @@
 //! HISTORY: one row per stop, one column per variable, so you can see in which
-//! step a value changed.
+//! step a value changed; below it the TIMELINE of those changes over every stop.
 
 use ratatui::layout::Rect;
 use tuitor_core::snapshot::Snapshot;
@@ -8,6 +8,7 @@ use super::paint::{Painter, Panel, Seg, seg, truncate};
 use super::theme::*;
 use super::watch::number;
 use crate::tab::Tab;
+use crate::timeline::{Track, cell, tracks};
 
 const MAX_CELL: u16 = 16;
 
@@ -24,14 +25,6 @@ fn columns(tab: &Tab) -> Vec<String> {
         }
     }
     cols
-}
-
-fn cell(snapshot: &Snapshot, column: &str) -> Option<String> {
-    let value = match snapshot.watch(column) {
-        Some(result) => result.clone().unwrap_or_else(|_| "err".into()),
-        None => snapshot.local_value(column)?.to_owned(),
-    };
-    Some(value.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
 pub fn table(p: &mut Painter<'_>, tab: &Tab, area: Rect, focus: bool) {
@@ -249,6 +242,103 @@ pub fn value(p: &mut Painter<'_>, tab: &Tab, area: Rect) {
         }
         last = Some(v);
     }
+}
+
+/// Rows TIMELINE takes for `tracks` values: the stops, a row each, the change under the
+/// cursor, and its frame.
+pub fn timeline_height(tab: &Tab) -> u16 {
+    let history: &[Snapshot] = tab.active().map(|s| s.history.as_slice()).unwrap_or_default();
+    let values = tracks(history, tab.engine.watches()).len().max(1);
+    u16::try_from(values).unwrap_or(u16::MAX).saturating_add(4)
+}
+
+/// TIMELINE: a row for each value that changed, with a mark at every stop it changed at in
+/// the colour of that stop's breakpoint set, and the stops along the top: `●` where the
+/// program waited, `↷` where it went on, `·` where no breakpoint stopped it. The stop on view
+/// is the lighter column, and below is what changed there.
+pub fn timeline(p: &mut Painter<'_>, tab: &Tab, area: Rect, focus: bool) {
+    let history: &[Snapshot] = tab.active().map(|s| s.history.as_slice()).unwrap_or_default();
+    let tracks = tracks(history, tab.engine.watches());
+    let count: usize = tracks.iter().map(|t| t.changes.len()).sum();
+    let sub = vec![seg("what changed, where and when", fg(DIM))];
+    let right = vec![seg(format!("{count} changes of {} values", tracks.len()), fg(DIM))];
+    let keys = if focus { vec![("j/k", "value"), ("h/l", "change"), ("⏎", "open")] } else { vec![] };
+    p.panel(area, &Panel { title: "TIMELINE", sub, right, keys, focus });
+    let inner = super::paint::inner(area);
+    if tracks.is_empty() || inner.height < 3 {
+        let text = "no value has changed from one stop to the next yet";
+        p.text(inner.x + 2, inner.y, text, fg(FAINT), inner.right());
+        return;
+    }
+    let x0 = inner.x + 2 + 16;
+    let width = usize::from(inner.right().saturating_sub(x0 + 1)).max(1);
+    // Up to four columns a stop while they fit, else several stops a column.
+    let (per, bucket) = match history.len() {
+        n if n <= width => ((width / n.max(1)).min(4), 1),
+        n => (1, n.div_ceil(width)),
+    };
+    let column = |number: u32| x0 + u16::try_from((number as usize).saturating_sub(1) / bucket * per).unwrap_or(0);
+    let viewed = tab.viewed().map(|s| s.number);
+    let cursor = tab.ui.timeline.pos.min(tracks.len() - 1);
+    let height = usize::from(inner.height - 2);
+    let offset = tab.ui.timeline.window(height, tracks.len());
+
+    if let Some(number) = viewed {
+        for y in inner.y..inner.bottom() - 1 {
+            p.band(column(number), y, 1, SEL2);
+        }
+    }
+    p.text(inner.x + 2, inner.y, "stops", fg(FAINT), x0);
+    for snapshot in history {
+        let (glyph, color) = match (snapshot.set, snapshot.silent) {
+            (Some(set), false) => ("●", set_color(set, true)),
+            (Some(set), true) => ("↷", set_color(set, true)),
+            (None, _) => ("·", FAINT),
+        };
+        p.text(column(snapshot.number), inner.y, glyph, fg(color), inner.right());
+    }
+    for (i, track) in tracks.iter().enumerate().skip(offset).take(height) {
+        let y = inner.y + 1 + (i - offset) as u16;
+        let selected = i == cursor;
+        if selected && focus {
+            p.band(inner.x, y, x0 - inner.x - 1, SEL2);
+        }
+        p.text(inner.x + 2, y, &track.name, fg(if selected { WHITE } else { DIM }), x0 - 1);
+        for change in &track.changes {
+            let set = history.get(change.number as usize - 1).and_then(|s| s.set);
+            let color = set.map_or(DIM, |set| set_color(set, true));
+            let style = if Some(change.number) == viewed { bold(color) } else { fg(color) };
+            p.text(column(change.number), y, "◆", style, inner.right());
+        }
+    }
+    let at = viewed.and_then(|n| history.get(n as usize - 1));
+    if let Some(snapshot) = at {
+        p.segs(inner.x + 2, inner.bottom() - 1, &change_line(snapshot, &tracks[cursor]), inner.right());
+    }
+}
+
+/// "#5 · 10:42:07.412 · ● orders.php:68 · $total 8900 → 13800": the value under the cursor at
+/// the stop on view.
+fn change_line(snapshot: &Snapshot, track: &Track) -> Vec<Seg<'static>> {
+    let mut segs = vec![
+        seg(format!("#{} ", snapshot.number), bold(WHITE)),
+        seg(snapshot.time.format("%H:%M:%S%.3f  ").to_string(), fg(FAINT)),
+    ];
+    if let Some(set) = snapshot.set {
+        segs.push(seg(if snapshot.silent { "↷ " } else { "● " }, fg(set_color(set, true))));
+    }
+    segs.push(seg(snapshot.top().map(|f| f.location()).unwrap_or_default(), fg(FG)));
+    segs.push(seg("   ", fg(FAINT)));
+    match track.at(snapshot.number) {
+        Some(change) => segs.extend([
+            seg(format!("{} ", track.name), fg(FG)),
+            seg(truncate(&change.was, 30).into_owned(), fg(DIM)),
+            seg(" → ", fg(FAINT)),
+            seg(truncate(&change.now, 30).into_owned(), bold(GREEN)),
+        ]),
+        None => segs.push(seg(format!("{} did not change here; h and l go to its changes", track.name), fg(FAINT))),
+    }
+    segs
 }
 
 /// Why the program stopped: a breakpoint by its set's colour, `●` where it waited and `↷`

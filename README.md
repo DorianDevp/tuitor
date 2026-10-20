@@ -154,6 +154,15 @@ the cursor and the full snapshot of the stop.
 
 ![HISTORY of seven stops of the PHP example: $total and a watch per stop, a bar chart of $total, and the snapshot of stop #5](assets/screenshots/history.png)
 
+Below the table, TIMELINE has a row for each value that changed, a watch or a variable of
+the top frame, with a mark at each stop where it changed, in the colour of the breakpoint
+set the stop was at, and the stops along the top: `●` where the program waited, `↷` where
+it went on, `·` where no breakpoint stopped it. A variable is compared with its value at
+the last stop in the same function, a watch with its last value. `j` and `k` pick a value,
+`h` and `l` show the stop of its change before or after the one on view, with what it was
+and became, and `enter` opens that stop in OVERVIEW. TIMELINE shows changes, not whether
+they are wrong.
+
 ### FLOW
 
 FLOW (`g f`) lists the files of a run in the order execution first reached them, with the

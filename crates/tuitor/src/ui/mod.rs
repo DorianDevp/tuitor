@@ -66,7 +66,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
     let tab = app.tab();
     if tab.ui.view == View::History && !tab.ui.zoom {
-        history::value(&mut p, tab, history_value_area(body));
+        history::value(&mut p, tab, history_value_area(tab, body));
     }
     if tab.ui.view == View::Compare && !tab.ui.zoom {
         compare::detail(&mut p, app, compare_detail_area(body));
@@ -112,6 +112,7 @@ fn draw_pane(p: &mut Painter<'_>, app: &App, pane: Pane, area: Rect) {
         Pane::Flow => flow::draw(p, app, area, focus),
         Pane::Outline => outline::draw(p, app, area, focus),
         Pane::Compare => compare::draw(p, app, area, focus),
+        Pane::Timeline => history::timeline(p, tab, area, focus),
     }
 }
 
@@ -162,11 +163,13 @@ fn layout(app: &App, body: Rect) -> Vec<(Pane, Rect)> {
         }
         View::Flow => vec![(Pane::Flow, Rect::new(x, y, w, flow_height(app, h)))],
         View::History => {
-            let table_h = pct(h, 48).max(8);
+            let (table_h, timeline_h) = history_heights(tab, h);
+            let below = table_h + timeline_h;
             let half = w / 2;
             vec![
                 (Pane::History, Rect::new(x, y, w, table_h)),
-                (Pane::Locals, Rect::new(x + half, y + table_h, w - half, h - table_h)),
+                (Pane::Timeline, Rect::new(x, y + table_h, w, timeline_h)),
+                (Pane::Locals, Rect::new(x + half, y + below, w - half, h - below)),
             ]
         }
         View::Project => {
@@ -201,9 +204,18 @@ fn flow_detail_area(app: &App, body: Rect) -> Rect {
     Rect::new(body.x, body.y + top, body.width, body.height - top)
 }
 
-fn history_value_area(body: Rect) -> Rect {
-    let table_h = pct(body.height, 48).max(8);
-    Rect::new(body.x, body.y + table_h, body.width / 2, body.height - table_h)
+/// HISTORY's table and TIMELINE, which takes a row a value up to a third of the rest; VALUE
+/// and LOCALS share what is left.
+fn history_heights(tab: &Tab, height: u16) -> (u16, u16) {
+    let table = pct(height, 40).max(8);
+    let timeline = history::timeline_height(tab).clamp(5, (height - table) / 3 + 2);
+    (table, timeline)
+}
+
+fn history_value_area(tab: &Tab, body: Rect) -> Rect {
+    let (table, timeline) = history_heights(tab, body.height);
+    let below = table + timeline;
+    Rect::new(body.x, body.y + below, body.width / 2, body.height - below)
 }
 
 /// Where the logo starts, after a margin column.
@@ -652,6 +664,7 @@ fn hints(p: &mut Painter<'_>, app: &App, area: Rect) {
         ],
         Pane::Events => &[("open", "go to its file:line")],
         Pane::History => &[("open", "open stop"), ("right", "column")],
+        Pane::Timeline => &[("open", "open stop"), ("left", "change before"), ("right", "change after")],
         Pane::Flow => &[("open", "open in code"), ("bp toggle", "bp on entry"), ("vendor", "library files")],
         Pane::Compare => &[
             ("open", "code or history"),
