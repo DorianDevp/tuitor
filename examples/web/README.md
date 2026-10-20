@@ -1,10 +1,9 @@
 # Web example
 
 `index.html` loads `orders.js`, which totals three orders when the page loads
-and again on **Total again**: a loop whose values change at every stop, nested
-objects (`Order` → `Customer` → `Address`) and a call chain `render()` →
-`orderTotal()` → `lineTotal()`. js-debug opens the page in a Chromium of its
-own, straight from disk (`file://`), so no web server is needed.
+and on **Total again**, debugged through js-debug in a Chromium of its own: a
+loop, nested objects (`Order` → `Customer` → `Address`) and a call chain
+`render()` → `orderTotal()` → `lineTotal()`.
 
 Needs Chromium, Node.js and js-debug; see
 [Installing adapters](../../README.md#installing-adapters).
@@ -13,33 +12,50 @@ Debian put it; elsewhere, set `runtimeExecutable` there to your Chromium or
 Chrome.
 
 ```sh
-./run.sh               # checks those (and offers to install js-debug), builds tuitor, starts tuitor
-HEADLESS=1 ./run.sh    # the same with Chromium without a window, e.g. over ssh
+./run.sh               # Chromium with a window
+HEADLESS=1 ./run.sh    # without one, e.g. over ssh
 ```
 
-Chromium starts with a fresh profile, and quitting tuitor (`Q`) closes it and
-ends the script. `TUITOR=/path/to/tuitor ./run.sh` uses that binary instead of
-building tuitor from this repository, and arguments go to tuitor
-(`./run.sh --script demo.tsc`).
+`run.sh` checks those (and offers to install js-debug), builds tuitor, and
+starts it on the configuration `orders` in `.vscode/launch.json` (`orders
+(headless)` with `HEADLESS=1`). js-debug opens the page straight from disk
+(`file://`), so no web server is needed, in a Chromium with a fresh profile
+that quitting tuitor closes. `TUITOR=/path/to/tuitor ./run.sh` uses that
+binary instead of building tuitor from this repository, and arguments go to
+tuitor (`./run.sh --script demo.tsc`).
 
-By hand: `tuitor orders` in this directory.
+js-debug runs the page in a session of its own, apart from the browser's,
+where it stops and where breakpoints go. tuitor shows the two as one session:
+`orders › index.html` in the header, the configuration and the page. What the
+page logs (`console.log`) shows in OUTPUT.
 
-js-debug runs the page in a session of its own, apart from the browser's:
-stops happen there, and breakpoints go there. tuitor shows the two as one
-session, `orders › index.html` on the context line: the configuration and the
-page.
+## A first session
 
-Put a breakpoint on line 51, `total += lineTotal(line);`: press `f`, type
-`orders.js:51`, press `ctrl-b`, then `esc` to close the finder. Click
-**Total again** in Chromium, and tuitor stops there. Then try:
+Put a breakpoint on line 51, `total += lineTotal(line);`: `f`, type
+`orders.js:51`, `ctrl-b`, then `esc` to close the finder. tuitor remembers it
+for later runs. Click **Total again** in Chromium, and tuitor stops there.
+Then:
 
 - `c` runs one more iteration: `line` and `total` turn green with `▲` and
   their previous value.
-- `tab` moves to LOCALS; `j` to `order`, `l` expands it: `customer` →
-  `address`.
+- `tab` moves to LOCALS; `j` down to `order`, `l` expands it: `customer` →
+  `address`. `j` down to `total`, `w` watches it.
 - `s` steps into `lineTotal()` (STACK shows it above `orderTotal` and
-  `render`, which the button called), `o` steps out.
+  `button#again.render`: `render`, called by the button), `o` steps out.
+- `tab` moves on to STACK; `j` selects `button#again.render`, and LOCALS shows
+  its variables.
+- `g h` shows every variable at every stop: `[` and `]` go back and forth
+  through the stops, `}` back to the live one, `g o` back to OVERVIEW.
+- `g p` shows the breakpoints and CONFIG, with both configurations from
+  `.vscode/launch.json`. `E` opens the line under the SOURCE cursor in your
+  editor (`$VISUAL` or `$EDITOR`).
+- `O` opens another project in a new tab, such as `../js`; `<` and `>` switch
+  tabs.
 - `R` starts Chromium again; the page stops at the breakpoint while it loads.
-- `Q` quits and closes Chromium.
+  `Q` quits and closes Chromium.
 
-What the page logs (`console.log`) shows in OUTPUT.
+## By hand
+
+```sh
+tuitor orders               # or "orders (headless)"
+```
