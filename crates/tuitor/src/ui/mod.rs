@@ -2,6 +2,7 @@
 //! state except the scroll offsets and the animation flag kept in `Cell`s.
 
 mod breakpoints;
+mod compare;
 mod config;
 mod doctor;
 mod flow;
@@ -67,6 +68,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if tab.ui.view == View::History && !tab.ui.zoom {
         history::value(&mut p, tab, history_value_area(body));
     }
+    if tab.ui.view == View::Compare && !tab.ui.zoom {
+        compare::detail(&mut p, app, compare_detail_area(body));
+    }
     if tab.ui.view == View::Flow && !tab.ui.zoom {
         let below = flow_detail_area(app, body);
         let half = pct(below.width, 55);
@@ -107,6 +111,7 @@ fn draw_pane(p: &mut Painter<'_>, app: &App, pane: Pane, area: Rect) {
         Pane::Config => config::draw(p, app, area, focus),
         Pane::Flow => flow::draw(p, app, area, focus),
         Pane::Outline => outline::draw(p, app, area, focus),
+        Pane::Compare => compare::draw(p, app, area, focus),
     }
 }
 
@@ -168,7 +173,18 @@ fn layout(app: &App, body: Rect) -> Vec<(Pane, Rect)> {
             let lw = pct(w, 55);
             vec![(Pane::Breakpoints, Rect::new(x, y, lw, h)), (Pane::Config, Rect::new(x + lw, y, w - lw, h))]
         }
+        View::Compare => vec![(Pane::Compare, Rect::new(x, y, w, compare_height(h)))],
     }
+}
+
+/// COMPARE's hits take a little over half of the body, their values the rest.
+fn compare_height(height: u16) -> u16 {
+    pct(height, 55).max(8)
+}
+
+fn compare_detail_area(body: Rect) -> Rect {
+    let top = compare_height(body.height);
+    Rect::new(body.x, body.y + top, body.width, body.height - top)
 }
 
 /// FLOW gets a line per file, with its axis and legend, and leaves the rest of the
@@ -637,6 +653,12 @@ fn hints(p: &mut Painter<'_>, app: &App, area: Rect) {
         Pane::Events => &[("open", "go to its file:line")],
         Pane::History => &[("open", "open stop"), ("right", "column")],
         Pane::Flow => &[("open", "open in code"), ("bp toggle", "bp on entry"), ("vendor", "library files")],
+        Pane::Compare => &[
+            ("open", "code or history"),
+            ("right", "column"),
+            ("compare older", "older run"),
+            ("compare newer", "newer run"),
+        ],
         Pane::Outline => &[("open", "jump"), ("bp toggle", "bp on entry")],
     };
     let common: &[(&str, &str)] = &[

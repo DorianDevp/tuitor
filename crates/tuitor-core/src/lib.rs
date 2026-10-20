@@ -3,6 +3,7 @@
 
 pub mod breakpoints;
 mod capture;
+pub mod compare;
 pub mod compose;
 pub mod config;
 pub mod doctor;

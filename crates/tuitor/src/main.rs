@@ -1,6 +1,7 @@
 mod app;
 mod clipboard;
 mod command;
+mod compare;
 mod doctor;
 mod editor;
 mod flow;

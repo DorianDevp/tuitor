@@ -14,10 +14,12 @@ pub enum View {
     Flow,
     /// The project's breakpoints and launch configurations.
     Project,
+    /// What two breakpoint sets recorded, side by side.
+    Compare,
 }
 
 impl View {
-    pub const ALL: [View; 5] = [View::Overview, View::Code, View::History, View::Flow, View::Project];
+    pub const ALL: [View; 6] = [View::Overview, View::Code, View::History, View::Flow, View::Project, View::Compare];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -26,6 +28,7 @@ impl View {
             View::History => "history",
             View::Flow => "flow",
             View::Project => "project",
+            View::Compare => "compare",
         }
     }
 
@@ -37,9 +40,10 @@ impl View {
             "history" | "h" => (View::History, None),
             "flow" | "f" => (View::Flow, None),
             "project" | "p" => (View::Project, None),
+            "compare" | "d" => (View::Compare, None),
             "breakpoints" | "bp" | "b" => (View::Project, Some(Pane::Breakpoints)),
             "config" => (View::Project, Some(Pane::Config)),
-            other => return Err(format!("unknown view `{other}` (overview, code, history, flow, project)")),
+            other => return Err(format!("unknown view `{other}` (overview, code, history, flow, project, compare)")),
         })
     }
 }
@@ -94,6 +98,9 @@ pub enum Action {
     SetActive(Option<String>),
     SetMove(Option<String>),
     SetDelete(Option<String>),
+    Compare(Option<String>),
+    CompareOlder,
+    CompareNewer,
     WatchAdd(Option<String>),
     WatchDelete,
     Eval(Option<String>),
@@ -377,6 +384,27 @@ pub static COMMANDS: &[Spec] = &[
         parse: |a| Ok(Action::SetDelete(text(a))),
     },
     Spec {
+        name: "compare",
+        arg: Arg::Optional("‹set[@run]› ‹set[@run]›"),
+        help: "compare what two sets recorded in a run, by breakpoint and hit (one set: with the active set)",
+        group: Group::Breakpoints,
+        parse: |a| Ok(Action::Compare(text(a))),
+    },
+    Spec {
+        name: "compare older",
+        arg: Arg::None,
+        help: "in COMPARE, the side under the cursor (both on the breakpoint) from the run before",
+        group: Group::Breakpoints,
+        parse: simple!(Action::CompareOlder),
+    },
+    Spec {
+        name: "compare newer",
+        arg: Arg::None,
+        help: "in COMPARE, the side under the cursor (both on the breakpoint) from the run after",
+        group: Group::Breakpoints,
+        parse: simple!(Action::CompareNewer),
+    },
+    Spec {
         name: "watch add",
         arg: Arg::Optional("‹expr›"),
         help: "watch an expression at every stop",
@@ -406,7 +434,7 @@ pub static COMMANDS: &[Spec] = &[
     },
     Spec {
         name: "view",
-        arg: Arg::Required("‹overview|code|history|flow|project›"),
+        arg: Arg::Required("‹overview|code|history|flow|project|compare›"),
         help: "switch view (breakpoints and config show PROJECT)",
         group: Group::View,
         parse: |a| View::parse(a.unwrap_or_default()).map(|(view, pane)| Action::View(view, pane)),

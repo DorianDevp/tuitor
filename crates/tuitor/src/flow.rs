@@ -160,6 +160,42 @@ impl FlowState {
     }
 }
 
+/// A run of this tab's sessions, whose stops are still in memory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunRef {
+    pub session: SessionId,
+    /// Its stops, as indices into the session's history.
+    pub stops: Range<usize>,
+    /// The number it is remembered under, in a tab with a project.
+    pub number: Option<u32>,
+}
+
+impl RunRef {
+    /// `run #4`, or the session's name for a run that is not remembered.
+    pub fn label(&self, sessions: &[Session]) -> String {
+        match self.number {
+            Some(number) => format!("run #{number}"),
+            None => sessions.iter().find(|s| s.id == self.session).map_or_else(String::new, |s| s.name.clone()),
+        }
+    }
+}
+
+impl FlowState {
+    /// The runs of `sessions` that have stops, in the order they began.
+    pub fn in_memory(&self, sessions: &[Session]) -> Vec<RunRef> {
+        let mut found = Vec::new();
+        for session in sessions.iter().filter(|s| !s.history.is_empty()) {
+            let starts = self.starts.get(&session.id).map_or(&[0][..], Vec::as_slice);
+            for stops in runs(starts, session.history.len()) {
+                let number = self.numbers.get(&(session.id, stops.start)).copied();
+                found.push((session.history[stops.start].time, RunRef { session: session.id, stops, number }));
+            }
+        }
+        found.sort_by_key(|(began, _)| *began);
+        found.into_iter().map(|(_, run)| run).collect()
+    }
+}
+
 /// Whether stop `index` of `session` is the first of another request: it stopped another
 /// thread than the stop before, and that thread is gone. Threads of one program that are
 /// stopped in turn are all still there.

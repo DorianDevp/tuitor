@@ -250,6 +250,26 @@ A breakpoint of another set costs what reading a stop costs. Measured per hit on
 and JavaScript examples: 6 to 14 ms with gdb, 3 ms with Xdebug and vscode-php-debug, and
 about 400 ms with js-debug, which takes 45 to 90 ms for each `variables` request.
 
+### Comparing sets
+
+COMPARE (`g d`) lines up what two sets recorded, each the stops at its breakpoints in one
+run. A stop lines up with the stop at the same breakpoint that is the same hit of it on the
+other path: the first with the first, the second with the second. For those, the values each
+stop read, the watches and the top frame's variables at every level read, are compared: the
+row counts those that differ, appear and disappear, and VALUES below lists them for the hit
+under the cursor. A hit only one path has is listed with what it read. Hits on both keep the
+order of the first path, and the others follow the last of those before them by time, so two
+sets of one run are in the order things happened.
+
+`/compare` alone compares the active set with the other set that recorded last, each in the
+latest run that has its stops, or with one set, its latest run with the run before.
+`/compare teal` compares the active set with teal, `/compare rose teal` two sets, and
+`/compare rose@3 rose@5` one set in FLOW's runs 3 and 5. In COMPARE, `h` and `l` pick the
+breakpoint or a side, `[` and `]` take that side, or on the breakpoint both, from an older or
+newer run, and `enter` opens the breakpoint in CODE or the side's stop in HISTORY. Only the
+runs of the tuitor that is running can be compared: FLOW remembers earlier ones by their
+stacks, without values.
+
 CONFIG lists the project's launch configurations from two places: `.vscode/launch.json`,
 read as VS Code reads it and never written, and tuitor's own, kept outside the repository
 in `~/.config/tuitor/projects.toml` by project path. `enter` starts one, or edits the field
@@ -320,7 +340,7 @@ named (`tuitor doctor php gdb`), needs is missing.
 | `p` `X` `R` | pause, stop, restart | `f` | find files and breakpoints |
 | `S` | start the configuration selected in CONFIG | `ctrl-f`, in SOURCE `/` | search SOURCE |
 | `[` `]` `}` | older stop, newer, live | `w` `x` | watch, evaluate |
-| `g o` `g c` `g h` `g f` `g p` | OVERVIEW, CODE, HISTORY, FLOW, PROJECT | `E` | open in your editor |
+| `g o` `g c` `g h` `g f` `g p` `g d` | OVERVIEW, CODE, HISTORY, FLOW, PROJECT, COMPARE | `E` | open in your editor |
 | `tab` `z` | next pane, zoom the pane | `y` | copy the selection (OSC 52) |
 | `j` `k` `h` `l`, arrows | move, collapse, expand | `.` | SOURCE follows execution again |
 | `shift-down` `shift-up` | scroll SOURCE a page | `:42` | go to line 42 of SOURCE |
@@ -330,10 +350,10 @@ named (`tuitor doctor php gdb`), needs is missing.
 | `Q` `ctrl-c` | quit | `enter` | expand, open, start |
 
 In a pane: BREAKPOINTS `a` this session or all, `e` condition, `h` hit count, `l` log,
-`space` on/off, `d` delete, `D` delete its set; CONFIG `a` add, `m` map a path, `M` mappings from compose, `u`
-unset, `d` delete, `i` install the adapter; STACK and FLOW `v` library frames or files;
-WATCH `d` delete; OUTPUT `C` clear; SOURCE `/` search, `ctrl-n` `ctrl-p` next and previous
-match, `q` clears the search.
+`space` on/off, `d` delete, `D` delete its set; CONFIG `a` add, `m` map a path, `M`
+mappings from compose, `u` unset, `d` delete, `i` install the adapter; STACK and FLOW `v`
+library frames or files; WATCH `d` delete; OUTPUT `C` clear; SOURCE `/` search, `ctrl-n`
+`ctrl-p` next and previous match, `q` clears the search; COMPARE `[` `]` an older, newer run.
 
 ## Configuration
 
