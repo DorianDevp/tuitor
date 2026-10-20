@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tuitor_core::config::{Adapters, LaunchConfig, RequestKind};
 use tuitor_core::log::OutputKind;
-use tuitor_core::session::{Session, SessionId};
+use tuitor_core::session::{Session, SessionId, SourceText};
 use tuitor_core::snapshot::{Change, diff};
 use tuitor_core::{Engine, EngineMsg, EngineOptions, Step};
 
@@ -113,6 +113,20 @@ async fn node_runs_in_a_child_session() {
     let bp = engine.breakpoints().get(1).expect("breakpoint");
     assert_eq!(bp.bindings.keys().copied().collect::<Vec<_>>(), [cid]);
     assert_eq!(bp.verified(), Some(true));
+
+    // Below the program is Node's own code, which js-debug has itself and gives the text of.
+    let first = engine.session(cid).and_then(Session::latest).expect("snapshot");
+    let internal = first.frames.iter().find(|f| f.source_reference.is_some()).expect("a frame in Node's internals");
+    assert!(internal.path.as_deref().is_none_or(|p| !p.exists()), "{:?} is a file", internal.path);
+    let reference = internal.source_reference.expect("reference");
+    engine.read_source(cid, reference);
+    let source = |e: &Engine| e.session(cid).and_then(|s| s.source(reference)).cloned();
+    pump(&mut engine, &mut rx, |e| !matches!(source(e), None | Some(SourceText::Reading))).await;
+    assert!(
+        matches!(source(&engine), Some(SourceText::Read(text)) if text.contains("function")),
+        "{:?}",
+        source(&engine)
+    );
 
     engine.resume(cid, Step::Continue).expect("continue");
     pump(&mut engine, &mut rx, |e| child_stops(e, parent) >= 2).await;

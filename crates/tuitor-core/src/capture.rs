@@ -218,6 +218,7 @@ fn frame(f: StackFrame) -> Frame {
         name: f.name,
         path,
         source_name: source.name,
+        source_reference: source.source_reference.filter(|r| *r > 0),
         line: u32::try_from(f.line).unwrap_or(0),
         column: u32::try_from(f.column).unwrap_or(0),
         library,

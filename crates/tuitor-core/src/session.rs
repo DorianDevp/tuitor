@@ -23,6 +23,14 @@ pub enum SessionState {
     Exited,
 }
 
+/// The text of a source the adapter has itself, read with the `source` request.
+#[derive(Debug, Clone)]
+pub enum SourceText {
+    Reading,
+    Read(String),
+    Failed(String),
+}
+
 #[derive(Debug, Clone)]
 pub struct ExceptionFilter {
     pub filter: String,
@@ -56,6 +64,9 @@ pub struct Session {
     pub exception_filters: Vec<ExceptionFilter>,
     /// Variable paths the user expanded; re-fetched at every stop.
     pub expanded: BTreeSet<VarPath>,
+    /// Sources the adapter has itself, by their reference. Read once: a reference stands
+    /// for the same text for as long as the session lasts.
+    pub(crate) sources: HashMap<i64, SourceText>,
     /// Scope names already shown once; their expansion is now up to the user.
     pub(crate) seen_scopes: BTreeSet<String>,
     pub(crate) client: Option<Client>,
@@ -95,6 +106,7 @@ impl Session {
             history: Vec::new(),
             exception_filters: Vec::new(),
             expanded: BTreeSet::new(),
+            sources: HashMap::new(),
             seen_scopes: BTreeSet::new(),
             client: None,
             tmp: None,
@@ -144,6 +156,11 @@ impl Session {
     /// The latest snapshot while its variable references are still valid.
     pub fn live(&self) -> Option<&Snapshot> {
         self.latest().filter(|s| s.live && self.is_stopped())
+    }
+
+    /// The text of the adapter's source `reference`, once it was asked for.
+    pub fn source(&self, reference: i64) -> Option<&SourceText> {
+        self.sources.get(&reference)
     }
 
     /// Whether the scopes of frame `frame` of the live stop are on their way.

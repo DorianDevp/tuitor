@@ -18,7 +18,7 @@ use tuitor_core::{Engine, EngineMsg, Level, Step, persist};
 use crate::clipboard;
 use crate::command::{self, Action, Arg, BpScope, Location, View};
 use crate::keymap::{self, Key, Keymap, Lookup};
-use crate::model::{BpRow, ConfigRow, StackRow};
+use crate::model::{BpRow, ConfigRow, Shown, StackRow};
 use crate::overlay::{Finder, Overlay, Palette};
 use crate::picker::Picker;
 use crate::sources::Sources;
@@ -808,14 +808,10 @@ impl App {
     }
 
     fn bp_toggle(&mut self, location: Option<Location>) -> Outcome {
-        let tab = self.tab();
         let (path, line) = match location {
             Some(Location { file: Some(file), line }) => (self.resolve_file(&file)?, line),
-            Some(Location { file: None, line }) => (tab.source_path().ok_or("no file in SOURCE")?, line),
-            None => {
-                let path = tab.source_path().ok_or("no file in SOURCE")?;
-                (path, tab.ui.source.cursor.max(1))
-            }
+            Some(Location { file: None, line }) => (self.breakpoint_file()?, line),
+            None => (self.breakpoint_file()?, self.tab().ui.source.cursor.max(1)),
         };
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         Ok(match self.tab_mut().engine.toggle_breakpoint(&path, line) {
@@ -830,8 +826,12 @@ impl App {
         let (tab, id) = match self.selected_bp() {
             Some(selected) => selected,
             None => {
+                let path = match self.breakpoint_file() {
+                    Ok(path) => path,
+                    Err(_) if self.tab().shown_source().is_none() => return Err("no breakpoint selected".into()),
+                    Err(refusal) => return Err(refusal),
+                };
                 let tab = self.tab_mut();
-                let path = tab.source_path().ok_or("no breakpoint selected")?;
                 let line = tab.ui.source.cursor.max(1);
                 let id = match tab.engine.breakpoints().at(&canonical(&path), line) {
                     Some(bp) => bp.id,
@@ -1122,6 +1122,18 @@ impl App {
         tab.browse(path, line.unwrap_or(1));
     }
 
+    /// The file in SOURCE, to set a breakpoint in. Adapters take breakpoints by path, so a
+    /// source the adapter has itself takes none.
+    fn breakpoint_file(&self) -> Result<PathBuf, Refusal> {
+        match self.tab().shown_source() {
+            Some(Shown::File(path)) => Ok(path),
+            Some(Shown::Adapter { name, .. }) => {
+                Err(Refusal::warn(format!("breakpoints go by file, and {name} is the adapter's own source")))
+            }
+            None => Err("no file in SOURCE".into()),
+        }
+    }
+
     fn resolve_file(&self, file: &str) -> Result<PathBuf, String> {
         let path = Path::new(file);
         let path = if path.is_absolute() { path.to_path_buf() } else { self.tab().engine.workspace().join(path) };
@@ -1129,10 +1141,7 @@ impl App {
     }
 
     fn source_len(&self) -> u32 {
-        self.tab()
-            .source_path()
-            .and_then(|p| self.sources.borrow_mut().get(&p))
-            .map_or(0, |f| u32::try_from(f.lines.len()).unwrap_or(u32::MAX))
+        self.shown_lines().map_or(0, |f| u32::try_from(f.lines.len()).unwrap_or(u32::MAX))
     }
 }
 
@@ -1142,9 +1151,10 @@ impl Tab {
     }
 
     /// Points SOURCE at the selected frame of the viewed stop, with the cursor on its line
-    /// and that line centred, and has the frame's variables read for LOCALS if they were
-    /// not. Every automatic change of the view calls this (a new stop, another recorded
-    /// stop, frame or session, `.`), so it drops whatever the user was browsing.
+    /// and that line centred, and has the frame's variables read for LOCALS, and its source
+    /// if the adapter has it, if they were not. Every automatic change of the view calls
+    /// this (a new stop, another recorded stop, frame or session, `.`), so it drops whatever
+    /// the user was browsing.
     pub fn jump_to_execution(&mut self) {
         self.ui.source.browse = None;
         if let Some(frame) = self.selected_frame() {
@@ -1153,6 +1163,9 @@ impl Tab {
         }
         if let Some((sid, number, frame)) = self.viewed_frame() {
             self.engine.read_frame(sid, number, frame);
+        }
+        if let Some(Shown::Adapter { session, reference, .. }) = self.shown_source() {
+            self.engine.read_source(session, reference);
         }
     }
 

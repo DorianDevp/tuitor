@@ -14,11 +14,11 @@ use tokio::task::JoinHandle;
 use tuitor_dap::protocol::{RequestMessage, ResponseMessage};
 use tuitor_dap::requests::{
     Attach, ConfigurationDone, Continue, Disconnect, Initialize, Launch, Next, Pause, Request, SetBreakpoints,
-    SetExceptionBreakpoints, StepIn, StepOut, Terminate, Threads, Variables,
+    SetExceptionBreakpoints, SourceContent, StepIn, StepOut, Terminate, Threads, Variables,
 };
 use tuitor_dap::types::{
     self as dap, Capabilities, DisconnectArguments, Empty, InitializeArguments, SetBreakpointsArguments,
-    SetExceptionBreakpointsArguments, Source, ThreadArguments, ThreadsResponse, VariablesArguments,
+    SetExceptionBreakpointsArguments, Source, SourceArguments, ThreadArguments, ThreadsResponse, VariablesArguments,
 };
 use tuitor_dap::{AdapterCommand, Client, Event, Incoming, Transport};
 
@@ -27,7 +27,7 @@ use crate::capture::{self, Capture, canonical, short_error};
 use crate::config::{AdapterSpec, Adapters, INSTALL_HELP, LaunchConfig, RequestKind, TransportKind};
 use crate::log::{Bounded, EventLine, OutputKind, OutputLine};
 use crate::persist::{self, Persisted};
-use crate::session::{ExceptionFilter, PendingStop, Session, SessionId, SessionState};
+use crate::session::{ExceptionFilter, PendingStop, Session, SessionId, SessionState, SourceText};
 use crate::snapshot::{ScopeVars, Snapshot, Var, VarPath, WatchValue};
 use crate::tmpdir::TempDir;
 
@@ -92,6 +92,11 @@ enum Msg {
         number: u32,
         expr: String,
         result: DapResult<String>,
+    },
+    Source {
+        sid: SessionId,
+        reference: i64,
+        result: DapResult<dap::SourceResponse>,
     },
     Evaluated {
         sid: SessionId,
@@ -516,6 +521,20 @@ impl Engine {
         });
     }
 
+    /// Asks the adapter for the text of its source `reference`, unless it was asked already;
+    /// [`Session::source`] has it once it is there.
+    pub fn read_source(&mut self, sid: SessionId, reference: i64) {
+        let Ok(session) = self.session_mut(sid) else { return };
+        let Some(client) = session.client.clone() else { return };
+        if session.sources.contains_key(&reference) {
+            return;
+        }
+        session.sources.insert(reference, SourceText::Reading);
+        let source = Source { source_reference: Some(reference), ..Source::default() };
+        let args = SourceArguments { source, source_reference: reference };
+        self.call::<SourceContent>(sid, &client, args, move |result| Msg::Source { sid, reference, result });
+    }
+
     pub fn collapse(&mut self, sid: SessionId, path: &VarPath) {
         if let Ok(session) = self.session_mut(sid) {
             session.expanded.remove(path);
@@ -554,6 +573,15 @@ impl Engine {
                     let value = result.map_err(|e| short_error(&e));
                     snapshot.watches.retain(|w| w.expr != expr);
                     snapshot.watches.push(WatchValue { expr, value });
+                }
+            }
+            Msg::Source { sid, reference, result } => {
+                let text = match result {
+                    Ok(response) => SourceText::Read(response.content),
+                    Err(err) => SourceText::Failed(short_error(&err)),
+                };
+                if let Ok(session) = self.session_mut(sid) {
+                    session.sources.insert(reference, text);
                 }
             }
             Msg::Evaluated { sid, expr, result } => {
