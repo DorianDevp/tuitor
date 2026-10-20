@@ -245,8 +245,7 @@ fn js_function(line: &[Tok], in_class: bool) -> Option<(String, Option<String>)>
     {
         let rest = &line[at + 3..];
         let rest = if rest.first().is_some_and(|t| t.is("async")) { &rest[1..] } else { rest };
-        let arrow = rest.windows(2).any(|w| w == [Tok::Punct('='), Tok::Punct('>')]);
-        if rest.first().is_some_and(|t| t.is("function")) || arrow {
+        if rest.first().is_some_and(|t| t.is("function")) || arrow_function(rest) {
             return Some((named(at + 1)?, None));
         }
     }
@@ -262,6 +261,31 @@ fn js_function(line: &[Tok], in_class: bool) -> Option<(String, Option<String>)>
     let opens_body = line.last() == Some(&Tok::Punct('{'));
     let call = line.get(start + 1) == Some(&Tok::Punct('('));
     (call && opens_body && !CONTROL.contains(&name.as_str())).then_some((name, None))
+}
+
+/// Whether a value is an arrow function, `(…) =>`, `(…): Type =>` or `x =>`, rather than an
+/// expression that passes one on (`order.lines.map((line) => line.sku)`).
+fn arrow_function(value: &[Tok]) -> bool {
+    const ARROW: [Tok; 2] = [Tok::Punct('='), Tok::Punct('>')];
+    let value = skip_generics(value);
+    match value.first() {
+        Some(Tok::Ident(_)) => value[1..].starts_with(&ARROW),
+        Some(Tok::Punct('(')) => {
+            let mut depth = 0usize;
+            let close = value.iter().position(|t| {
+                match t {
+                    Tok::Punct('(') => depth += 1,
+                    Tok::Punct(')') => depth -= 1,
+                    _ => {}
+                }
+                depth == 0
+            });
+            let after = close.map_or(&[][..], |c| &value[c + 1..]);
+            after.starts_with(&ARROW)
+                || (after.first() == Some(&Tok::Punct(':')) && after.windows(2).any(|w| w == ARROW))
+        }
+        _ => false,
+    }
 }
 
 /// The class, interface, trait, enum, impl or struct a line opens.
@@ -471,7 +495,10 @@ function lineTotal(line) {
 const money = (cents) => `${cents}`;
 export const discount = async function (c) {
   return 0;
-};",
+};
+const skus = order.lines.map((line) => line.sku);
+const sku = line => line.sku;
+const total = <T>(a: T): number => 0;",
         );
         let symbols = outline(&code, Lang::Js);
         assert_eq!(
@@ -482,6 +509,8 @@ export const discount = async function (c) {
                 sym("lineTotal", None, 11, 13),
                 sym("money", None, 14, 14),
                 sym("discount", None, 15, 17),
+                sym("sku", None, 19, 19),
+                sym("total", None, 20, 20),
             ]
         );
         assert_eq!(body_start(&code, Lang::Js, &symbols[2]), 12);
