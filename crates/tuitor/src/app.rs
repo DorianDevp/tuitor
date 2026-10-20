@@ -1882,10 +1882,11 @@ impl App {
         }
     }
 
+    /// A file as typed in a command: a path, or the end of the path of one of the project's
+    /// files ([`crate::paths::file`]).
     pub(crate) fn resolve_file(&self, file: &str) -> Result<PathBuf, String> {
-        let path = Path::new(file);
-        let path = if path.is_absolute() { path.to_path_buf() } else { self.tab().engine.workspace().join(path) };
-        if path.is_file() { Ok(path) } else { Err(format!("no such file: {}", path.display())) }
+        let workspace = self.tab().engine.workspace();
+        crate::paths::file(file, workspace, || crate::overlay::workspace_files(workspace))
     }
 
     fn source_len(&self) -> u32 {

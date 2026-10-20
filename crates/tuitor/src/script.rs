@@ -13,6 +13,9 @@
 //! @clock 700                     animations at 700 ms (by default they hold still)
 //! @dump overview.ans             save the screen
 //! ```
+//!
+//! A command that is refused, as `/bp toggle` of a file that is not there, says why on
+//! standard error, and the script goes on.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -25,6 +28,7 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier};
+use tuitor_core::Level;
 use tuitor_core::config::LaunchConfig;
 use tuitor_core::session::SessionState;
 use unicode_width::UnicodeWidthStr;
@@ -114,6 +118,10 @@ async fn run_lines(
         } else {
             mark = stops(app);
             app.execute(line, None);
+            // A command refused changes nothing, and no one reads the status line here.
+            if let Some(status) = app.ui.status.as_ref().filter(|status| status.level != Level::Info) {
+                eprintln!("{}: {}", context(), status.message);
+            }
             open_editor(app).await;
             pump_for(app, rx, Duration::from_millis(50)).await;
         }

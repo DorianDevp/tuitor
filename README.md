@@ -309,6 +309,9 @@ each takes and lists the recent command lines; a number alone goes to that line 
 ![The command line, opened with : in SOURCE, with set typed: the set commands, their arguments and keys, and the recent command lines](assets/screenshots/palette.png)
 
 - `f` finds files and breakpoints (`name:line`).
+- A command's `file:line`, as in `/bp toggle LoyaltyListener.php:16`, names a file from the
+  project's directory or by the end of its path, `Event/LoyaltyListener.php` say, when one
+  file of the project, outside what `.gitignore` leaves out, ends that way.
 - `/` in SOURCE, as in vim, and `ctrl-f` anywhere search the file in SOURCE as you type,
   ignoring case unless the search has a capital letter; `ctrl-n` and `ctrl-p` go to the
   next and previous match.
