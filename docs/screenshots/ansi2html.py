@@ -4,8 +4,9 @@ for a headless browser to take a screenshot of, and prints the page's size in pi
 usage: ansi2html.py SCREEN.ans PAGE.html
 
 Backgrounds and text are two layers, as in a terminal, so that cells of one colour join
-without seams; the block elements tuitor draws with (▀ and the lower eighths ▁ to █) are
-painted as cells of two colours rather than as glyphs, for the same reason.
+without seams; the block elements tuitor draws with (the lower eighths ▁ to █, and the
+octants of the header's logo with the quadrants and halves among them) are painted as cells
+of two colours rather than as glyphs, for the same reason and because fonts lack octants.
 """
 
 import html
@@ -15,6 +16,18 @@ import sys
 FONT, CELL_W, CELL_H, MARGIN = 15, 7.5, 18, 12  # px; an Iosevka cell is half its size wide
 BG, FG = '#0c0c0e', '#d6d6d6'
 SGR = re.compile(r'\x1b\[([0-9;]*)m')
+
+# The cells a block element fills, bit n for octant n + 1, left to right and top to bottom:
+# those Unicode encodes outside the octants, then U+1CD00 on in the order of the rest's bits,
+# as crates/tuitor/src/ui/logo.rs draws them.
+NOT_OCTANTS = {
+    0x00: ' ', 0x01: '\U0001CEA8', 0x02: '\U0001CEAB', 0x03: '\U0001FB82', 0x05: '▘', 0x0A: '▝',
+    0x0F: '▀', 0x14: '\U0001FBE6', 0x28: '\U0001FBE7', 0x3F: '\U0001FB85', 0x40: '\U0001CEA3',
+    0x50: '▖', 0x55: '▌', 0x5A: '▞', 0x5F: '▛', 0x80: '\U0001CEA0', 0xA0: '▗', 0xA5: '▚',
+    0xAA: '▐', 0xAF: '▜', 0xC0: '▂', 0xF0: '▄', 0xF5: '▙', 0xFA: '▟', 0xFC: '▆', 0xFF: '█',
+}
+OCTANTS = {ch: bits for bits, ch in NOT_OCTANTS.items() if bits}
+OCTANTS.update((chr(0x1CD00 + i), bits) for i, bits in enumerate(b for b in range(256) if b not in NOT_OCTANTS))
 
 
 def cells(line):
@@ -44,8 +57,23 @@ def cells(line):
             i += 1
 
 
+def octant(bits, fg, bg):
+    """A cell of a 2 × 4 grid: the left column's rows over the whole cell, the right one's
+    over its right half, so that rounding leaves no gap between them."""
+    def column(side):
+        colours = [fg if bits >> (2 * row + side) & 1 else bg for row in range(4)]
+        stops = ','.join('%s %d%% %d%%' % (c, 25 * row, 25 * row + 25) for row, c in enumerate(colours))
+        return 'linear-gradient(%s)' % stops
+    return 'background:%s right/50%% 100%% no-repeat,%s;display:inline-block;height:%dpx;vertical-align:top' % (
+        column(1), column(0), CELL_H)
+
+
 def style(cell, text):
     ch, fg, bg, bold, italic = cell
+    if ch in OCTANTS:
+        if text:
+            return ' ', 'color:transparent'
+        return ' ', octant(OCTANTS[ch], fg or FG, bg or BG)
     if ch == '▀' or '▁' <= ch <= '█':
         if text:
             return ' ', 'color:transparent'

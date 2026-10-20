@@ -1,0 +1,82 @@
+# The php-paths example: PATHS to the bulk rebate in the helper Money::lineTotal, three of its
+# four paths taken as breakpoint sets (the test's left out), the first request
+# (invoice.print 1002) with rose active, the second (order.show 1001) with teal, then
+# COMPARE of the two and TIMELINE in HISTORY. php-paths-flow.tsc follows.
+@wait stop
+/find Money.php:16
+@key enter
+/paths
+@wait paths
+@key j j j space
+@key enter
+/view overview
+# invoice.print 1002 stops 14 times, the breakpoints only in teal and orchid record.
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+@dump sets.ans
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+# order.show 1001 stops on its first line; teal stops from here, 14 times.
+/continue
+@wait stop
+/set active teal
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@sleep 1000
+/compare rose teal
+@key j j j j j j j j
+@dump compare.ans
+/view history
+@key tab j j j h
+@dump timeline.ans

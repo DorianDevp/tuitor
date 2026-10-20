@@ -1,5 +1,5 @@
 # The Go example: PROJECT with a condition, a hit count, a logpoint and a configuration of
-# tuitor's own, and the command line.
+# tuitor's own, and the command line with the set commands (`:` in SOURCE, where `/` searches).
 @sleep 3000
 /bp toggle main.go:52
 /bp toggle main.go:58
@@ -24,5 +24,5 @@
 @key g g
 @dump project.ans
 /view overview
-@key / b p
+@key : s e t
 @dump palette.ans
