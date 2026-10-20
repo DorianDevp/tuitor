@@ -132,3 +132,69 @@ async fn xdebug_connects_back_and_stops() {
 
     engine.stop(sid).expect("stop");
 }
+
+/// vscode-php-debug names no breakpoint at a stop: the location tells whether it is one of
+/// a set other than the active one, which records and goes on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs TUITOR_PHP and TUITOR_PHP_ADAPTER"]
+async fn breakpoints_of_another_set_record_and_go_on() {
+    let php = std::env::var("TUITOR_PHP").expect("TUITOR_PHP");
+    let adapter_js = std::env::var("TUITOR_PHP_ADAPTER").expect("TUITOR_PHP_ADAPTER");
+
+    let tmp = TestDir::new("php-sets");
+    let dir = tmp.path().to_path_buf();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/orders.php");
+    std::fs::copy(&fixture, dir.join("orders.php")).expect("copy");
+    let script = std::fs::canonicalize(dir.join("orders.php")).expect("script path");
+    let adapters_file = dir.join("adapters.toml");
+    std::fs::write(
+        &adapters_file,
+        format!("[php]\ncommand = \"node\"\nargs = [{adapter_js:?}]\nextensions = [\"php\"]\n"),
+    )
+    .expect("adapters.toml");
+    let adapters = Adapters::load(Some(&adapters_file)).expect("adapters");
+
+    let port = std::net::TcpListener::bind("127.0.0.1:0").expect("port").local_addr().expect("addr").port();
+    let (mut engine, mut rx) = Engine::new(EngineOptions { adapters, workspace: dir.clone(), state_file: None });
+    let rose = engine.breakpoints().active_set();
+    engine.toggle_breakpoint(&script, 14); // `return $total;`
+    let teal = engine.new_set().expect("set");
+    engine.toggle_breakpoint(&script, BREAK_LINE);
+    engine.activate_set(rose).expect("activate");
+
+    let Value::Object(args) = json!({ "port": port, "log": false }) else { unreachable!() };
+    let sid = engine.start(LaunchConfig::adhoc("Listen for Xdebug", "php", RequestKind::Launch, args)).expect("start");
+    pump(&mut engine, &mut rx, |e| e.session(sid).is_some_and(|s| s.state == SessionState::Running)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let mut child = tokio::process::Command::new(&php)
+        .args(["-dxdebug.mode=debug", "-dxdebug.start_with_request=yes", "-dxdebug.client_host=127.0.0.1"])
+        .arg(format!("-dxdebug.client_port={port}"))
+        .arg(&script)
+        .stdout(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn php");
+
+    // Both items that are not cancelled pass line 12; the program waits at line 14.
+    pump(&mut engine, &mut rx, |e| e.session(sid).is_some_and(|s| s.live().is_some())).await;
+    let session = engine.session(sid).expect("session");
+    let stops: Vec<(u32, Option<u8>, bool)> =
+        session.history.iter().map(|s| (s.top().map_or(0, |f| f.line), s.set, s.silent)).collect();
+    assert_eq!(stops, [(BREAK_LINE, Some(teal), true), (BREAK_LINE, Some(teal), true), (14, Some(rose), false)]);
+    assert_eq!(session.history[1].local_value("$total"), Some("89.99"));
+
+    engine.resume(sid, Step::Continue).expect("continue");
+    let status = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            tokio::select! {
+                Some(msg) = rx.recv() => engine.handle(msg),
+                status = child.wait() => break status,
+            }
+        }
+    })
+    .await
+    .expect("php finished")
+    .expect("php status");
+    assert!(status.success());
+    engine.stop(sid).expect("stop");
+}

@@ -10,6 +10,7 @@ use tuitor_core::session::{SessionState, SourceText};
 use tuitor_core::snapshot::{Change, Frame};
 use unicode_width::UnicodeWidthChar;
 
+use super::breakpoints::glyph;
 use super::logo::{self, Size};
 use super::paint::{Painter, Panel, Seg, seg, truncate, truncate_left};
 use super::syntax::{Lang, highlight};
@@ -95,6 +96,7 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
     let breakpoints: HashMap<u32, &Breakpoint> =
         file_path.iter().flat_map(|path| tab.engine.breakpoints().in_file(path)).map(|b| (b.line, b)).collect();
     let hit: Vec<u32> = tab.viewed().map(|s| s.hit_breakpoints.clone()).unwrap_or_default();
+    let active = tab.engine.breakpoints().active_set();
     let inline =
         if tab.ui.source.browse.is_none() { inline_values(tab, &file.lines, top, exec) } else { HashMap::new() };
     let lang = match &shown {
@@ -132,7 +134,7 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
             p.band(x, y, inner.width, bg);
         }
         if let Some(bp) = breakpoints.get(&n) {
-            let (glyph, color) = marker(bp, hit.contains(&bp.id));
+            let (glyph, color) = glyph(bp, active, hit.contains(&bp.id));
             p.text(x, y, glyph, bold(color), inner.right());
         } else if reached.is_some_and(|lines| lines.contains_key(&n)) {
             p.text(x, y, "│", fg(GHOST), inner.right());
@@ -292,22 +294,6 @@ fn window_top(top: u32, cursor: u32, height: u32, lines: u32, recenter: bool) ->
         top = cursor + 1 - height;
     }
     top.min(lines.saturating_sub(height) + 1).max(1)
-}
-
-fn marker(bp: &Breakpoint, hit: bool) -> (&'static str, ratatui::style::Color) {
-    if !bp.enabled {
-        ("○", GHOST)
-    } else if bp.verified() == Some(false) {
-        ("◌", RED_DIM)
-    } else if bp.is_logpoint() {
-        ("◆", YELLOW_DIM)
-    } else if bp.condition.is_some() || bp.hit_condition.is_some() {
-        ("●", YELLOW_DIM)
-    } else if hit {
-        ("●", RED)
-    } else {
-        ("●", RED_DIM)
-    }
 }
 
 struct InlineValue {

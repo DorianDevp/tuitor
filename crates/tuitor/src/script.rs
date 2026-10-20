@@ -5,7 +5,8 @@
 //! # comments and blank lines are ignored
 //! /bp toggle src/main.rs:12      any command line
 //! @key g c                       press keys (an editor `edit` opens runs right away)
-//! @wait stop                     until a new stop is recorded, in any tab
+//! @wait stop                     until the program stops anew, in any tab (not a stop it
+//!                                went on from by itself, at a breakpoint of another set)
 //! @wait running | exited         until the active tab's session is in that state
 //! @sleep 300                     milliseconds
 //! @clock 700                     animations at 700 ms (by default they hold still)
@@ -124,9 +125,10 @@ async fn open_editor(app: &mut App) {
     app.edited(result);
 }
 
-/// Stops recorded in all tabs.
+/// Stops the program waited at, in all tabs.
 fn stops(app: &App) -> usize {
-    app.tabs.iter().flat_map(|(_, tab)| tab.engine.sessions()).map(|s| s.history.len()).sum()
+    let sessions = app.tabs.iter().flat_map(|(_, tab)| tab.engine.sessions());
+    sessions.flat_map(|s| &s.history).filter(|s| !s.silent).count()
 }
 
 async fn wait(app: &mut App, rx: &mut Inbox, what: &str, before: usize) -> Result<()> {

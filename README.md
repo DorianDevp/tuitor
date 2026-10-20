@@ -134,7 +134,8 @@ docker.
 
 OVERVIEW (`g o`, above) shows SOURCE, STACK, LOCALS, WATCH, BREAKPOINTS, OUTPUT and
 EVENTS at once; `z` zooms one pane. Bright colour carries meaning: amber is where
-execution is, green what changed at this stop, red a breakpoint that was hit or an error.
+execution is, green what changed at this stop, red an error. A breakpoint has the colour of
+its set, and the one hit at the stop on view is `◉`.
 
 LOCALS marks a changed value `▲` with the value it had before, and a value that reads the
 same but changed inside, such as an object whose field changed or a pointer whose target
@@ -223,6 +224,32 @@ in `~/.local/state/tuitor/`, outside the repository.
 
 ![PROJECT in the Go example: a condition, a hit count and a logpoint, and a configuration of tuitor's own beside launch.json's](assets/screenshots/project.png)
 
+### Breakpoint sets
+
+Every breakpoint is in a set. Sets have no names, only a colour each: rose, teal, orchid,
+sky and gold. One set is active: its breakpoints stop the program. A breakpoint of another
+set records the stop as every stop is recorded, with the stack, the top frame's variables
+read ahead and the watches, and the program goes on by itself. Every enabled breakpoint stays
+with the adapter, so a new active set takes effect at its next hit, also while the program
+runs. A step that ends on a breakpoint of another set stops there as asked.
+
+`N` makes a set and makes it active, so the breakpoints added next go to it. `A` makes the
+next set active, `/set active teal` a given one. `M` moves the breakpoint on the SOURCE line,
+or the one selected in BREAKPOINTS, to the next set (`/set move orchid` to a given one). `D`
+in BREAKPOINTS deletes the selected breakpoint's set, and asks again before its breakpoints
+go with it; `/set delete teal rose` moves them to rose. Sets are kept with the breakpoints
+in `~/.local/state/tuitor/`; breakpoints from before there were sets are in rose.
+
+A breakpoint has its set's colour in SOURCE, BREAKPOINTS, FLOW, OUTLINE, HISTORY and the
+context line: full for the active set, dimmer for the others. The shape is what it does:
+`●` stops, `◐` has a condition or a hit count, `◆` logs, `○` is disabled, `◌` was not
+taken by the adapter, and `◉` is the one the stop on view hit. HISTORY marks the stops the
+program went on from with `↷`.
+
+A breakpoint of another set costs what reading a stop costs. Measured per hit on the C, PHP
+and JavaScript examples: 6 to 14 ms with gdb, 3 ms with Xdebug and vscode-php-debug, and
+about 400 ms with js-debug, which takes 45 to 90 ms for each `variables` request.
+
 CONFIG lists the project's launch configurations from two places: `.vscode/launch.json`,
 read as VS Code reads it and never written, and tuitor's own, kept outside the repository
 in `~/.config/tuitor/projects.toml` by project path. `enter` starts one, or edits the field
@@ -289,6 +316,7 @@ named (`tuitor doctor php gdb`), needs is missing.
 | key | action | key | action |
 |---|---|---|---|
 | `c` `n` `s` `o` | continue, step over, in, out | `b` | toggle a breakpoint on the SOURCE line |
+| `N` `A` | new breakpoint set, next set active | `M` | move the breakpoint to the next set |
 | `p` `X` `R` | pause, stop, restart | `f` | find files and breakpoints |
 | `S` | start the configuration selected in CONFIG | `ctrl-f`, in SOURCE `/` | search SOURCE |
 | `[` `]` `}` | older stop, newer, live | `w` `x` | watch, evaluate |
@@ -302,7 +330,7 @@ named (`tuitor doctor php gdb`), needs is missing.
 | `Q` `ctrl-c` | quit | `enter` | expand, open, start |
 
 In a pane: BREAKPOINTS `a` this session or all, `e` condition, `h` hit count, `l` log,
-`space` on/off, `d` delete; CONFIG `a` add, `m` map a path, `M` mappings from compose, `u`
+`space` on/off, `d` delete, `D` delete its set; CONFIG `a` add, `m` map a path, `M` mappings from compose, `u`
 unset, `d` delete, `i` install the adapter; STACK and FLOW `v` library frames or files;
 WATCH `d` delete; OUTPUT `C` clear; SOURCE `/` search, `ctrl-n` `ctrl-p` next and previous
 match, `q` clears the search.
@@ -315,7 +343,7 @@ match, `q` clears the search.
 | `~/.config/tuitor/adapters.toml` | adapters: replace a built-in one, or add one |
 | `~/.config/tuitor/projects.toml` | tuitor's own launch configurations, by project path; written by `/config` |
 | `~/.config/tuitor/config.toml` | the editor `E` runs |
-| `~/.local/state/tuitor/` | breakpoints, watches, recent projects and runs; `tuitor.log` |
+| `~/.local/state/tuitor/` | breakpoints and their sets, watches, recent projects and runs; `tuitor.log` |
 | `~/.local/share/tuitor/adapters/` | what `tuitor install` unpacks |
 
 The directories follow `$XDG_CONFIG_HOME`, `$XDG_STATE_HOME` and `$XDG_DATA_HOME` (macOS:

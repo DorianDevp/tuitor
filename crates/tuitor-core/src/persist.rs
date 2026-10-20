@@ -1,4 +1,4 @@
-//! Breakpoints and watches are remembered per workspace, outside the repository
+//! Breakpoints, their sets and watches are remembered per workspace, outside the repository
 //! (`~/.local/state/tuitor/<workspace>.json`), so they never show up in `git status`.
 //! The projects opened recently are listed there too, for the open-project picker, and
 //! the flow of recent runs (`flows/<workspace>.json`), which FLOW predicts from.
@@ -8,13 +8,18 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::breakpoints::Breakpoint;
+use crate::breakpoints::{Breakpoint, SetId};
 use crate::flow::Run;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Persisted {
     #[serde(default)]
     pub breakpoints: Vec<Breakpoint>,
+    /// The breakpoint sets, by colour; a file from before there were sets has none.
+    #[serde(default)]
+    pub sets: Vec<SetId>,
+    #[serde(default)]
+    pub active_set: Option<SetId>,
     #[serde(default)]
     pub watches: Vec<String>,
 }
@@ -129,9 +134,15 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("tuitor-persist-{}", std::process::id()));
         let file = dir.join("state.json");
         assert!(load(&file).expect("missing is fine").breakpoints.is_empty());
-        let state = Persisted { breakpoints: vec![], watches: vec!["$total".into()] };
+        let state =
+            Persisted { watches: vec!["$total".into()], sets: vec![0, 3], active_set: Some(3), ..Persisted::default() };
         save(&file, &state).expect("save");
-        assert_eq!(load(&file).expect("load").watches, ["$total"]);
+        let loaded = load(&file).expect("load");
+        assert_eq!((loaded.watches, loaded.sets, loaded.active_set), (vec!["$total".to_owned()], vec![0, 3], Some(3)));
+        // A file from before there were sets.
+        std::fs::write(&file, r#"{"breakpoints":[{"id":1,"path":"/a.rs","line":3}],"watches":[]}"#).expect("old");
+        let old = load(&file).expect("old");
+        assert_eq!((old.breakpoints[0].set, old.sets.len(), old.active_set), (0, 0, None));
         std::fs::remove_dir_all(dir).ok();
     }
 

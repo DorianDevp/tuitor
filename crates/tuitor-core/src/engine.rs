@@ -4,7 +4,7 @@
 //! across threads, so there are no locks.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow, bail};
 use chrono::Local;
@@ -22,7 +22,7 @@ use tuitor_dap::types::{
 };
 use tuitor_dap::{AdapterCommand, Client, Event, Incoming, Transport};
 
-use crate::breakpoints::{Breakpoint, BreakpointId, Breakpoints, Toggle};
+use crate::breakpoints::{Breakpoint, BreakpointId, Breakpoints, SetId, Toggle};
 use crate::capture::{self, Capture, canonical, short_error};
 use crate::config::{AdapterSpec, Adapters, INSTALL_HELP, LaunchConfig, Missing, RequestKind, TransportKind};
 use crate::install::Package;
@@ -185,7 +185,7 @@ impl Engine {
             state_file: options.state_file,
             sessions: Vec::new(),
             next_session: 1,
-            breakpoints: Breakpoints::from_saved(saved.breakpoints),
+            breakpoints: Breakpoints::from_saved(saved.breakpoints, &saved.sets, saved.active_set),
             watches: saved.watches,
             output: Bounded::new(OUTPUT_LINES),
             events: Bounded::new(EVENT_LINES),
@@ -354,6 +354,7 @@ impl Engine {
         let thread_id = session.stopped_thread.ok_or_else(|| anyhow!("no stopped thread"))?;
         let client = session.client.clone().ok_or_else(|| anyhow!("{} is not connected", session.name))?;
         session.mark_running();
+        session.stepping = step != Step::Continue;
 
         let args = ThreadArguments { thread_id };
         let command = step.name();
@@ -369,6 +370,13 @@ impl Engine {
     }
 
     pub fn pause(&mut self, sid: SessionId) -> Result<()> {
+        // Stopped already, at a breakpoint of another set, and about to go on: it stays.
+        if let Ok(session) = self.session_mut(sid)
+            && session.passing
+        {
+            session.hold = true;
+            return Ok(());
+        }
         let running: Vec<SessionId> =
             self.children(sid).filter(|c| c.is_alive() && !c.is_stopped()).map(|c| c.id).collect();
         let session = self.session_ref(sid)?;
@@ -419,7 +427,7 @@ impl Engine {
 
     pub fn clear_breakpoints(&mut self) {
         let files = self.breakpoints.files();
-        self.breakpoints = Breakpoints::default();
+        self.breakpoints.clear();
         for file in files {
             self.breakpoints_changed(&file);
         }
@@ -436,6 +444,45 @@ impl Engine {
         let enabled = entry.enabled;
         self.send_exception_filters(sid);
         Ok(enabled)
+    }
+
+    // ---- breakpoint sets ----------------------------------------------------------------
+    //
+    // Every enabled breakpoint is with the adapter whatever its set, so none of this sends
+    // anything: which stops wait is decided at each stop.
+
+    /// A set in a colour no set has, made active.
+    pub fn new_set(&mut self) -> Result<SetId> {
+        let set = self.breakpoints.new_set()?;
+        self.save();
+        Ok(set)
+    }
+
+    /// Makes `set` the one whose breakpoints stop the program, from its next hit on, also
+    /// while it runs.
+    pub fn activate_set(&mut self, set: SetId) -> Result<()> {
+        self.breakpoints.activate(set)?;
+        self.save();
+        Ok(())
+    }
+
+    pub fn move_breakpoint(&mut self, id: BreakpointId, set: SetId) -> Result<()> {
+        self.breakpoints.move_to(id, set)?;
+        self.save();
+        Ok(())
+    }
+
+    /// Deletes `set`; its breakpoints go to `to`, or are deleted with it. Returns how many
+    /// breakpoints were deleted.
+    pub fn delete_set(&mut self, set: SetId, to: Option<SetId>) -> Result<usize> {
+        let removed = self.breakpoints.delete_set(set, to)?;
+        let mut files: Vec<PathBuf> = removed.iter().map(|b| b.path.clone()).collect();
+        files.dedup();
+        for file in &files {
+            self.breakpoints_changed(file);
+        }
+        self.save();
+        Ok(removed.len())
     }
 
     // ---- data -------------------------------------------------------------------------
@@ -926,12 +973,34 @@ impl Engine {
                     Some(d) => format!("{} · {d}", body.reason),
                     None => body.reason.clone(),
                 };
+                let Ok(session) = self.session_ref(sid) else { return };
+                // A stop the user did not step to, at breakpoints of other sets only, goes on
+                // once read. One at a breakpoint the adapter does not name (vscode-php-debug
+                // names none) may be such a stop: the capture's location tells.
+                let passing = !session.stepping
+                    && match hits.is_empty() {
+                        false => self.breakpoints.passes(&hits),
+                        true => body.reason == "breakpoint" && self.breakpoints.any_passing(),
+                    };
+                // Another thread passing meanwhile would wait for a reading that this stop
+                // makes stale: it goes on unread.
+                let other = |t: &i64| body.thread_id.is_some_and(|id| id != *t);
+                let unread = session.stopped_thread.filter(|t| session.passing && other(t));
+                if let Some(thread_id) = unread {
+                    self.go_on(sid, thread_id);
+                    self.log_event(sid, "passed", format!("thread {thread_id} unread: another thread stopped"));
+                }
                 let Ok(session) = self.session_mut(sid) else { return };
-                session.state = SessionState::Stopped;
+                session.state = if passing { SessionState::Running } else { SessionState::Stopped };
+                (session.passing, session.hold, session.stepping) = (passing, false, false);
                 session.moved_on();
                 session.stopped_thread = body.thread_id.or(session.stopped_thread);
-                session.pending_stop =
-                    Some(PendingStop { reason: body.reason, description: body.description.or(body.text), hits });
+                session.pending_stop = Some(PendingStop {
+                    reason: body.reason,
+                    description: body.description.or(body.text),
+                    hits,
+                    at: Instant::now(),
+                });
                 self.log_event(sid, "stopped", detail);
                 self.capture(sid);
             }
@@ -1014,6 +1083,10 @@ impl Engine {
         let capture = match result {
             Ok(capture) => capture,
             Err(err) => {
+                // A stop that was to go on by itself must not wait for want of a reading.
+                if session.passing {
+                    self.pass_on(sid);
+                }
                 return self.notice(Some(sid), Level::Warn, format!("reading the stop failed: {}", short_error(&err)));
             }
         };
@@ -1021,6 +1094,7 @@ impl Engine {
             reason: "pause".into(),
             description: None,
             hits: Vec::new(),
+            at: Instant::now(),
         });
 
         // Not every adapter reports hitBreakpointIds; fall back to the stop location.
@@ -1044,8 +1118,17 @@ impl Engine {
             Some(id) => format!("breakpoint #{id}"),
             None => stop.reason.clone(),
         };
+        // Decided now, with the set active now: switching to this stop's set, or `pause`,
+        // while it was read keeps the program here.
+        let passing = self.session_ref(sid).is_ok_and(|s| s.passing && !s.hold);
+        let silent = passing && self.breakpoints.passes(&stop.hits);
+        let set = self.breakpoints.set_of(&stop.hits);
 
         let Ok(session) = self.session_mut(sid) else { return };
+        if session.passing && !silent {
+            session.passing = false;
+            session.state = SessionState::Stopped;
+        }
         // A native adapter debugs many languages; the first stop tells which one.
         if session.tag == "native"
             && let Some(tag) = top.and_then(|f| f.path.as_deref()).and_then(native_tag)
@@ -1068,11 +1151,18 @@ impl Engine {
             reason: stop.reason,
             description: stop.description,
             hit_breakpoints: stop.hits,
+            set,
+            silent,
             frames: capture.frames,
             watches: capture.watches,
-            live: true,
+            live: !silent,
         });
         let name = session.name.clone();
+        if silent {
+            let took = stop.at.elapsed().as_millis();
+            self.log_event(sid, "passed", format!("{reason} at {location} · #{number} · read in {took} ms"));
+            return self.pass_on(sid);
+        }
         if let Some(at) = at {
             self.log_event(sid, "at", at);
         }
@@ -1185,6 +1275,25 @@ impl Engine {
         }
     }
 
+    /// Lets the program go on from a stop at a breakpoint of another set, once it is read.
+    fn pass_on(&mut self, sid: SessionId) {
+        let Ok(session) = self.session_mut(sid) else { return };
+        session.passing = false;
+        if let Some(thread_id) = session.stopped_thread {
+            self.go_on(sid, thread_id);
+        }
+    }
+
+    /// `continue` for one thread, without the session's state changing: it counts as running.
+    fn go_on(&self, sid: SessionId, thread_id: i64) {
+        let Some(client) = self.session(sid).and_then(|s| s.client.clone()) else { return };
+        self.call::<Continue>(sid, &client, ThreadArguments { thread_id }, move |r| Msg::Done {
+            sid,
+            command: "continue",
+            result: r.map(drop),
+        });
+    }
+
     fn send_breakpoints(&self, sid: SessionId, client: &Client, path: PathBuf) {
         let hits = self.session(sid).is_some_and(|s| s.capabilities.supports_hit_conditional_breakpoints);
         let (ids, breakpoints) = self.breakpoints.for_adapter(&path, hits);
@@ -1232,7 +1341,12 @@ impl Engine {
 
     fn save(&mut self) {
         let Some(file) = &self.state_file else { return };
-        let state = Persisted { breakpoints: self.breakpoints.saved().to_vec(), watches: self.watches.clone() };
+        let state = Persisted {
+            breakpoints: self.breakpoints.saved().to_vec(),
+            sets: self.breakpoints.sets().to_vec(),
+            active_set: Some(self.breakpoints.active_set()),
+            watches: self.watches.clone(),
+        };
         if let Err(err) = persist::save(file, &state) {
             let text = format!("{err:#}");
             self.notice(None, Level::Warn, text);

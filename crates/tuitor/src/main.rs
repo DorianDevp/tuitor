@@ -16,6 +16,7 @@ mod places;
 mod runner;
 mod script;
 mod search;
+mod sets;
 mod signals;
 mod sources;
 mod tab;

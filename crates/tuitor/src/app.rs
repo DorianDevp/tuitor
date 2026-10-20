@@ -9,7 +9,7 @@ use std::time::Duration;
 use crossterm::event::KeyEvent;
 use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
-use tuitor_core::breakpoints::{Breakpoint, Toggle};
+use tuitor_core::breakpoints::{Breakpoint, SetId, Toggle};
 use tuitor_core::compose;
 use tuitor_core::config::{Adapters, LaunchConfig, home_relative};
 use tuitor_core::doctor::{Fix, Options, ProjectInput, listen_port};
@@ -102,6 +102,8 @@ pub struct Ui {
     pub animating: Cell<Option<Duration>>,
     /// A tab with a live session that `tab close` was asked for; asking again closes it.
     closing: Option<TabId>,
+    /// A set with breakpoints that `set delete` was asked for; asking again deletes them.
+    pub(crate) deleting: Option<(TabId, SetId)>,
 }
 
 impl Ui {
@@ -188,6 +190,7 @@ impl App {
                 clock: None,
                 animating: Cell::new(None),
                 closing: None,
+                deleting: None,
             },
             sources: Default::default(),
             adapters,
@@ -569,9 +572,12 @@ impl App {
     }
 
     fn apply(&mut self, action: Action, spec: &'static command::Spec) -> Outcome {
-        // Asking to close a tab is answered by the very next command.
+        // Asking to close a tab, or delete a set, is answered by the very next command.
         if action != Action::TabClose {
             self.ui.closing = None;
+        }
+        if !matches!(action, Action::SetDelete(_)) {
+            self.ui.deleting = None;
         }
         match action {
             Action::Continue => self.step(Step::Continue),
@@ -651,6 +657,13 @@ impl App {
                 engine.clear_breakpoints();
                 Ok(format!("deleted {n} breakpoints"))
             }
+            Action::SetNew => self.set_new(),
+            Action::SetNext => self.set_cycle(1),
+            Action::SetPrev => self.set_cycle(-1),
+            Action::SetActive(Some(name)) => self.set_active(crate::sets::parse_set(&name)?),
+            Action::SetActive(None) => self.prompt(spec),
+            Action::SetMove(set) => self.set_move(set),
+            Action::SetDelete(arg) => self.set_delete(arg),
             Action::WatchAdd(expr) => {
                 let tab = self.tab_mut();
                 let expr = match expr {
@@ -913,7 +926,7 @@ impl App {
         Ok(String::new())
     }
 
-    fn engine_of(&mut self, tab: TabId) -> Result<&mut Engine, Refusal> {
+    pub(crate) fn engine_of(&mut self, tab: TabId) -> Result<&mut Engine, Refusal> {
         self.tabs.get_mut(tab).map(|tab| &mut tab.engine).ok_or_else(|| "that tab is closed".into())
     }
 
@@ -1066,21 +1079,15 @@ impl App {
         if len == 0 {
             return Err("nothing recorded yet".into());
         }
-        let current = i64::from(tab.ui.viewing.get(&sid).copied().unwrap_or(len));
+        let current = i64::from(tab.viewed().map_or(len, |s| s.number));
         let target = (current + delta).clamp(1, i64::from(len));
         let target = u32::try_from(target).unwrap_or(len);
         let location = session.snapshot(target).and_then(|s| s.top()).map(|f| f.location()).unwrap_or_default();
-        if target == len {
-            tab.ui.viewing.remove(&sid);
-        } else {
-            tab.ui.viewing.insert(sid, target);
-        }
-        tab.ui.stack.pos = 0;
-        tab.jump_to_execution();
-        Ok(if target == len {
-            format!("#{target} {location} · live")
-        } else {
+        tab.view_stop(sid, target);
+        Ok(if tab.in_history() {
             format!("#{target} {location} · recorded")
+        } else {
+            format!("#{target} {location} · live")
         })
     }
 
@@ -1103,7 +1110,13 @@ impl App {
             None => (self.breakpoint_file()?, tab.ui.source.cursor.max(1)),
         };
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        Ok(match self.tab_mut().engine.toggle_breakpoint(&path, line) {
+        let engine = &mut self.tab_mut().engine;
+        Ok(match engine.toggle_breakpoint(&path, line) {
+            // Into the active set; which one that is matters once there are more.
+            Toggle::Added(id) if engine.breakpoints().sets().len() > 1 => {
+                let set = crate::ui::theme::set_name(engine.breakpoints().active_set());
+                format!("added #{id} at {name}:{line} to {set}")
+            }
             Toggle::Added(id) => format!("added #{id} at {name}:{line}"),
             Toggle::Removed(id) => format!("removed #{id} at {name}:{line}"),
         })
@@ -1469,15 +1482,9 @@ impl App {
                 if len == 0 {
                     return Ok(String::new());
                 }
-                let current = tab.ui.viewing.get(&sid).map_or(len, |n| *n as usize) as isize;
+                let current = tab.viewed().map_or(len, |s| s.number as usize) as isize;
                 let target = (current + delta).clamp(1, len as isize) as usize;
-                if target == len {
-                    tab.ui.viewing.remove(&sid);
-                } else {
-                    tab.ui.viewing.insert(sid, target as u32);
-                }
-                tab.ui.stack.pos = 0;
-                tab.jump_to_execution();
+                tab.view_stop(sid, target as u32);
             }
         }
         Ok(String::new())
@@ -1678,7 +1685,7 @@ impl App {
 
     /// The file in SOURCE, to set a breakpoint in. Adapters take breakpoints by path, so a
     /// source the adapter has itself takes none.
-    fn breakpoint_file(&self) -> Result<PathBuf, Refusal> {
+    pub(crate) fn breakpoint_file(&self) -> Result<PathBuf, Refusal> {
         match self.tab().shown_source() {
             Some(Shown::File(path)) => Ok(path),
             Some(Shown::Adapter { name, .. }) => {
@@ -1823,10 +1830,11 @@ impl Tab {
         let mut newest: Option<SessionId> = None;
         for session in self.engine.sessions() {
             let seen = self.ui.seen_stops.entry(session.id).or_default();
-            if session.history.len() > *seen {
-                *seen = session.history.len();
+            // A stop the program went on from by itself leaves the screen as it is.
+            if session.history[(*seen).min(session.history.len())..].iter().any(|s| !s.silent) {
                 newest = Some(session.id);
             }
+            *seen = session.history.len();
         }
         let active_busy = self.active().is_some_and(|s| s.is_stopped() && s.is_alive());
         if self.ui.session.is_none() || self.active().is_none() {
