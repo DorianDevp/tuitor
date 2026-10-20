@@ -1533,9 +1533,9 @@ impl App {
             Pane::Compare => tab.ui.compare_col = tab.ui.compare_col.saturating_add_signed(delta).min(2),
             // The value's change before or after the stop on view, which shows that stop.
             Pane::Timeline => {
-                let (Some(sid), Some(viewed)) = (tab.ui.session, tab.viewed().map(|s| s.number)) else {
-                    return Ok(String::new());
-                };
+                let Some(sid) = tab.ui.session else { return Ok(String::new()) };
+                // With no stop on view, as before the program first waits, from either end.
+                let viewed = tab.viewed().map_or(if delta > 0 { 0 } else { u32::MAX }, |s| s.number);
                 let tracks = tab.timeline_tracks();
                 let track = tracks.get(tab.ui.timeline.pos).ok_or("no value changed yet")?;
                 let change = track.next(viewed, delta > 0).ok_or_else(|| {
