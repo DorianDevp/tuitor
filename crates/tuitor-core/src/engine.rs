@@ -65,6 +65,8 @@ enum Msg {
     BreakpointsSet {
         sid: SessionId,
         path: PathBuf,
+        /// Which `setBreakpoints` of the file this answers.
+        request: u64,
         ids: Vec<BreakpointId>,
         result: DapResult<dap::SetBreakpointsResponse>,
     },
@@ -639,9 +641,9 @@ impl Engine {
             Msg::Connected { sid, result } => self.on_connected(sid, result),
             Msg::Initialized { sid, result } => self.on_initialized(sid, result),
             Msg::Incoming { sid, incoming } => self.on_incoming(sid, incoming),
-            Msg::BreakpointsSet { sid, path, ids, result } => {
+            Msg::BreakpointsSet { sid, path, request, ids, result } => {
                 match result {
-                    Ok(response) => self.breakpoints.bind(sid, &path, &ids, &response.breakpoints),
+                    Ok(response) => self.breakpoints.bind(sid, &path, request, &ids, &response.breakpoints),
                     Err(err) => self.notice(
                         Some(sid),
                         Level::Warn,
@@ -1318,16 +1320,23 @@ impl Engine {
         });
     }
 
-    fn send_breakpoints(&self, sid: SessionId, client: &Client, path: PathBuf) {
+    fn send_breakpoints(&mut self, sid: SessionId, client: &Client, path: PathBuf) {
         let hits = self.session(sid).is_some_and(|s| s.capabilities.supports_hit_conditional_breakpoints);
         let (ids, breakpoints) = self.breakpoints.for_adapter(&path, hits);
+        let request = self.breakpoints.sending(sid, &path);
         let source = Source {
             name: path.file_name().map(|n| n.to_string_lossy().into_owned()),
             path: Some(path.display().to_string()),
             ..Source::default()
         };
         let args = SetBreakpointsArguments { source, breakpoints };
-        self.call::<SetBreakpoints>(sid, client, args, move |result| Msg::BreakpointsSet { sid, path, ids, result });
+        self.call::<SetBreakpoints>(sid, client, args, move |result| Msg::BreakpointsSet {
+            sid,
+            path,
+            request,
+            ids,
+            result,
+        });
     }
 
     /// Returns whether a request was sent.
