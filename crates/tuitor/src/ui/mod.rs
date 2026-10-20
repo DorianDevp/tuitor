@@ -3,6 +3,7 @@
 
 mod breakpoints;
 mod config;
+mod doctor;
 mod flow;
 mod history;
 mod locals;
@@ -74,6 +75,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Some(Overlay::Palette(palette)) => overlays::palette(&mut p, app, palette, area),
         Some(Overlay::Finder(finder)) => overlays::finder(&mut p, app, finder, area),
         Some(Overlay::Picker(picker)) => overlays::picker(&mut p, app, picker, area),
+        Some(Overlay::Doctor(view)) => doctor::draw(&mut p, app, view, area),
         None => {}
     }
 }
@@ -566,6 +568,7 @@ fn hints(p: &mut Painter<'_>, app: &App, area: Rect) {
             ("config map", "map"),
             ("config unset", "unset"),
             ("config delete", "delete"),
+            ("doctor", "doctor"),
         ],
         Pane::Events => &[],
         Pane::History => &[("open", "open stop"), ("right", "column")],

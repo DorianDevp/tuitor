@@ -67,6 +67,7 @@ async fn event_loop(
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     let started = Instant::now();
     loop {
+        app.poll();
         app.ui.clock = Some(started.elapsed());
         terminal.draw(|frame| ui::draw(frame, app))?;
         if app.quit {

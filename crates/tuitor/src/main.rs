@@ -1,6 +1,7 @@
 mod app;
 mod clipboard;
 mod command;
+mod doctor;
 mod editor;
 mod flow;
 mod keymap;
@@ -23,7 +24,8 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use serde_json::{Map, Value};
 use tokio::sync::mpsc;
-use tuitor_core::config::{Adapters, INSTALL_HELP, LaunchConfig, RequestKind, TransportKind, home_relative};
+use tuitor_core::config::{Adapters, LaunchConfig, RequestKind, TransportKind, home_relative};
+use tuitor_core::doctor::{Options, ProjectInput};
 use tuitor_core::project::{Project, Source};
 use tuitor_core::store::Store;
 
@@ -84,6 +86,16 @@ enum Command {
     },
     /// Show the projects, launch configurations and adapters tuitor sees.
     Configs,
+    /// Check what debugging needs: each adapter, and what the project's configurations need
+    /// (a free port, Xdebug, a browser). Exits with 1 when something needed is missing.
+    Doctor {
+        /// Adapters to check, by type (php, gdb, pwa-chrome…) or name (js-debug, codelldb,
+        /// delve); they are then needed too. Without, every adapter is listed.
+        adapters: Vec<String>,
+        /// The PHP to look for Xdebug in, instead of `php` on PATH.
+        #[arg(long, value_name = "PATH")]
+        php: Option<String>,
+    },
 }
 
 fn main() -> Result<ExitCode> {
@@ -104,6 +116,16 @@ fn main() -> Result<ExitCode> {
             let mut projects = vec![first];
             projects.extend(others.iter().map(|dir| Project::open(dir, &store, None)));
             return print_configs(&projects, &adapters, &store).map(|()| ExitCode::SUCCESS);
+        }
+        Some(Command::Doctor { adapters: only, php }) => {
+            // The current directory counts only if it is a project, as for a tab.
+            let first = (cli.workspace.is_some() || first.is_project()).then_some(first);
+            let mut projects: Vec<ProjectInput> = first.iter().map(ProjectInput::of).collect();
+            projects.extend(others.iter().map(|dir| ProjectInput::of(&Project::open(dir, &store, None))));
+            let options = Options { only: only.clone(), php: php.clone(), own_ports: Vec::new() };
+            let report = tuitor_core::doctor::check(&adapters, &projects, &options);
+            print!("{}", doctor::print(&report));
+            return Ok(if report.blocking() == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE });
         }
         Some(Command::Exec { adapter, program, args }) => Some(exec_config(adapter, program, args, &workspace)?),
         Some(Command::Listen { port, maps }) => Some(listen_config(*port, maps, &workspace)?),
@@ -230,7 +252,7 @@ fn print_configs(projects: &[Project], adapters: &Adapters, store: &Store) -> Re
         }
     }
     if missing {
-        println!("\nTo install a missing adapter, {INSTALL_HELP}.");
+        println!("\n`tuitor doctor` says what is missing and what installs it.");
     }
     Ok(())
 }

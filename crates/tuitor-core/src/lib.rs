@@ -4,11 +4,13 @@
 pub mod breakpoints;
 mod capture;
 pub mod config;
+pub mod doctor;
 mod engine;
 pub mod flow;
 mod jsonc;
 pub mod log;
 pub mod persist;
+pub mod process;
 pub mod project;
 pub mod session;
 pub mod snapshot;

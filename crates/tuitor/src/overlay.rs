@@ -1,5 +1,5 @@
-//! Popups that take over the keyboard: the command palette, the fuzzy finder and the
-//! open-project picker.
+//! Popups that take over the keyboard: the command palette, the fuzzy finder, the
+//! open-project picker and DOCTOR.
 
 use std::path::{Path, PathBuf};
 
@@ -8,6 +8,7 @@ use nucleo_matcher::{Config, Matcher, Utf32Str};
 use tuitor_core::breakpoints::{BreakpointId, Breakpoints};
 
 use crate::command::{self, Arg, COMMANDS, Group, Spec};
+use crate::doctor::Doctor;
 use crate::keymap::Keymap;
 use crate::picker::Picker;
 
@@ -18,6 +19,7 @@ pub enum Overlay {
     Palette(Palette),
     Finder(Finder),
     Picker(Picker),
+    Doctor(Doctor),
 }
 
 /// Score and matched character positions, or `None` when the pattern does not match.

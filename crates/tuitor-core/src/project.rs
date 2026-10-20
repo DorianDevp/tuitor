@@ -109,10 +109,7 @@ pub fn template(adapter: &str, dir: &Path) -> Map<String, Value> {
                 Path::new(&program).file_name().map_or_else(|| program.clone(), |n| n.to_string_lossy().into_owned());
             json!({ "name": name, "program": format!("{workspace}/{program}"), "cwd": workspace })
         }
-        "pwa-chrome" | "chrome" => {
-            let browser = std::env::var_os("PATH").and_then(|path| browser_in(&path));
-            browser_launch(workspace, browser)
-        }
+        "pwa-chrome" | "chrome" => browser_launch(workspace, browser_on_path()),
         "pwa-node" => {
             json!({ "name": "Launch Node", "program": format!("{workspace}/{}", node_main(dir)), "cwd": workspace })
         }
@@ -140,6 +137,11 @@ const BROWSERS: [&str; 6] = [
     "microsoft-edge",
     "microsoft-edge-stable",
 ];
+
+/// The browser a configuration tuitor makes names: the first of [`BROWSERS`] on PATH.
+pub fn browser_on_path() -> Option<PathBuf> {
+    std::env::var_os("PATH").and_then(|path| browser_in(&path))
+}
 
 /// The first of [`BROWSERS`] in a directory of `path`, a value of PATH.
 fn browser_in(path: &OsStr) -> Option<PathBuf> {
