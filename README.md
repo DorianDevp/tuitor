@@ -35,8 +35,9 @@ launch configuration or a kind tuitor knows, see below); otherwise tuitor starts
 with an empty tab, and `O` opens a project in it.
 
 [`examples/`](examples) has a small program for PHP, Rust, C, Go, Node.js, a
-web page in Chromium and TypeScript, each with a launch.json, a `run.sh` that
-sets it up and starts tuitor on it, and a walk through a first session.
+web page in Chromium, TypeScript and Angular, each with a launch.json, a
+`run.sh` that sets it up and starts tuitor on it, and a walk through a first
+session.
 
 ### PHP in a container
 
@@ -59,25 +60,30 @@ To keep the mapping, add it to the project's configuration in CONFIG:
 
 ### Angular
 
-Not verified: no Angular project was tried with tuitor. This is the
-configuration VS Code uses for `ng serve`; an Angular project opened without
+[`examples/angular`](examples/angular) is an app made by Angular CLI 22, with
+a breakpoint in its component that stops while the page loads and on a click.
+This is its configuration for `ng serve`; an Angular project opened without
 configurations gets one like it in CONFIG, named `Launch Chrome`:
 
 ```jsonc
 {
   "name": "ng serve",
-  "type": "pwa-chrome",               // or "chrome", as `ng new` writes it
+  "type": "pwa-chrome",                      // or "chrome", as `ng new` writes it
   "request": "launch",
-  "url": "http://localhost:4200/",
-  "webRoot": "${workspaceFolder}"     // the project root, where src/app/… is
-  // "runtimeExecutable": "/usr/bin/chromium"   without Google Chrome
+  "url": "http://localhost:4200",
+  "webRoot": "${workspaceFolder}",           // the project root, where src/app/… is
+  "runtimeExecutable": "/usr/bin/chromium"   // without Google Chrome
 }
 ```
 
 tuitor does not run VS Code's `preLaunchTask`, so start the dev server first
 (`ng serve`), then `tuitor "ng serve"`. Breakpoints go in the `.ts` files under
-`src/app`; js-debug finds them in the served bundles through the source maps
-that `ng serve` writes.
+`src/app`, and stops, STACK and stepping show those files, down to the line of
+the template's `(click)` that called the component; Angular's own frames fold
+into one `@angular/core` line. No `sourceMapPathOverrides` are needed: the dev
+server of Angular's application builder (`@angular/build:dev-server`) sends the
+page's `main.js` with a source map that names `src/app/app.ts` and the others
+relative to the page, and `webRoot` puts them in the project.
 
 ## Projects and tabs
 

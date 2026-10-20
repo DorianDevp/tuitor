@@ -1,0 +1,29 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "ng serve",
+      "type": "pwa-chrome",
+      "request": "launch",
+      // What `ng serve` serves; tuitor does not run VS Code's preLaunchTask, so run.sh
+      // starts it first.
+      "url": "http://localhost:4200",
+      // The source maps of `ng serve` name src/app/… relative to the page, which is this
+      // directory.
+      "webRoot": "${workspaceFolder}",
+      // js-debug looks for Google Chrome unless told otherwise; this is Chromium's path on
+      // Arch and Debian. It gets a fresh profile, and closes when the session ends.
+      "runtimeExecutable": "/usr/bin/chromium"
+    },
+    {
+      // The same without a window: over ssh, or in scripts (HEADLESS=1 ./run.sh).
+      "name": "ng serve (headless)",
+      "type": "pwa-chrome",
+      "request": "launch",
+      "url": "http://localhost:4200",
+      "webRoot": "${workspaceFolder}",
+      "runtimeExecutable": "/usr/bin/chromium",
+      "runtimeArgs": ["--headless=new"]
+    }
+  ]
+}
