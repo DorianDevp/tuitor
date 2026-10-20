@@ -4,7 +4,7 @@
 //! ```text
 //! # comments and blank lines are ignored
 //! /bp toggle src/main.rs:12      any command line
-//! @key g c                       press keys
+//! @key g c                       press keys (an editor `edit` opens runs right away)
 //! @wait stop                     until a new stop is recorded, in any tab
 //! @wait running | exited         until the active tab's session is in that state
 //! @sleep 300                     milliseconds
@@ -94,6 +94,7 @@ async fn run_lines(
                     mark = stops(app);
                     for key in arg.split_whitespace() {
                         app.on_key(key_event(key).with_context(context)?);
+                        open_editor(app).await;
                         drain(app, rx);
                     }
                 }
@@ -108,11 +109,19 @@ async fn run_lines(
         } else {
             mark = stops(app);
             app.execute(line, None);
+            open_editor(app).await;
             pump_for(app, rx, Duration::from_millis(50)).await;
         }
         terminal.draw(|frame| ui::draw(frame, app))?;
     }
     Ok(())
+}
+
+/// Runs the editor `edit` asked for, and waits for it; there is no screen to hand it.
+async fn open_editor(app: &mut App) {
+    let Some(editor) = app.editor.take() else { return };
+    let result = if editor.terminal { editor.run_in_terminal().await } else { editor.run_beside().await };
+    app.edited(result);
 }
 
 /// Stops recorded in all tabs.

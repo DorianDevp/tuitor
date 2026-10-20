@@ -515,7 +515,7 @@ fn hints(p: &mut Painter<'_>, app: &App, area: Rect) {
     let pane = app.focus();
     let specific: &[(&str, &str)] = match pane {
         _ if app.tab().project.is_none() => &[("tab open", "open a project")],
-        Pane::Source => &[("bp toggle", "breakpoint"), ("find", "find"), ("follow", "follow")],
+        Pane::Source => &[("bp toggle", "breakpoint"), ("find", "find"), ("follow", "follow"), ("edit", "editor")],
         Pane::Locals => &[("open", "expand"), ("watch add", "watch"), ("copy", "copy")],
         Pane::Stack => &[("open", "show frame"), ("vendor", "library frames")],
         Pane::Watch => &[("watch add", "add"), ("watch delete", "delete")],
@@ -525,6 +525,7 @@ fn hints(p: &mut Painter<'_>, app: &App, area: Rect) {
             ("bp log", "logpoint"),
             ("bp enable", "on/off"),
             ("bp delete", "delete"),
+            ("edit", "editor"),
         ],
         Pane::Output => &[("clear output", "clear")],
         Pane::Config => &[
