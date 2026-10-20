@@ -75,6 +75,20 @@ trigger a request with the Xdebug cookie, or `XDEBUG_TRIGGER=1` for CLI scripts.
 To keep the mapping, add it to the project's configuration in CONFIG:
 `/config map /var/www/app=./api`.
 
+`/config mappings-from-compose` (`M` in CONFIG) takes them from the compose
+file of the project, or of the nearest directory above it that has one: it
+asks `docker compose config` for the bind mounts of the service that runs PHP
+(by its name, image or Dockerfile), or of the one named, and maps each to
+where it is here. Without docker it reads `compose.yaml` and its override
+itself, with `${VAR}`s from the environment and `.env`; a project that uses
+`include`, `extends` or `COMPOSE_FILE` needs docker. Named volumes and mounts
+of single files are left out. Mounts that share a root here and in the
+container (`./api/src:/var/www/app/src`, `./api/config:/var/www/app/config`, …)
+become one mapping of the roots, `/var/www/app=./api`, but only when nothing
+else under `./api` holds code: a `vendor` here that is not mounted is not the
+one in the container, and then every mount keeps a mapping of its own. The
+mappings go into the selected configuration, which has to be tuitor's own.
+
 ### Angular
 
 [`examples/angular`](examples/angular) is an app made by Angular CLI 22, with
@@ -158,6 +172,7 @@ configurations change with these commands and are saved at once:
 /config set args ["--verbose"]
 /config unset stopOnEntry            (u on a field)
 /config map /var/www/app=./api       pathMappings; /var/www/app= removes it
+/config mappings-from-compose [service]   pathMappings from a compose service's bind mounts (M)
 /config add rust                     a kind, or a type: php, gdb, lldb, go, pwa-chrome, pwa-node…
 /config delete                       the selected configuration (d)
 /config start                        the selected configuration (S)
@@ -282,8 +297,8 @@ Every key runs a command; `/` opens the command line with the same commands and
 | `E` | open the SOURCE line or the selected breakpoint in your editor | | `!` | doctor: what debugging needs here |
 
 In BREAKPOINTS: `a` session/all, `e` condition, `l` logpoint, `space` on/off, `d` delete.
-In CONFIG: `enter` start or edit, `a` add, `m` map a path, `u` unset a field, `d` delete,
-`i` install the selected configuration's adapter.
+In CONFIG: `enter` start or edit, `a` add, `m` map a path, `M` map the mounts of a compose
+service, `u` unset a field, `d` delete, `i` install the selected configuration's adapter.
 In STACK: `v` library frames. In OUTPUT: `C` clear.
 In FLOW: `enter` open in CODE, `b` breakpoint where the file is entered, `v` library files.
 In OUTLINE: `enter` go to the function, `b` breakpoint on its first line.

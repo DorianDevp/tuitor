@@ -6,6 +6,7 @@ mod editor;
 mod flow;
 mod installer;
 mod keymap;
+mod mappings;
 mod model;
 mod outline;
 mod overlay;

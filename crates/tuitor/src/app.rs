@@ -9,6 +9,7 @@ use std::time::Duration;
 use crossterm::event::KeyEvent;
 use tokio::sync::mpsc::UnboundedSender;
 use tuitor_core::breakpoints::Toggle;
+use tuitor_core::compose;
 use tuitor_core::config::{Adapters, LaunchConfig, home_relative};
 use tuitor_core::doctor::{Fix, Options, ProjectInput, listen_port};
 use tuitor_core::flow::Row;
@@ -25,6 +26,7 @@ use crate::editor::{Editor, Settings};
 use crate::flow::{Item, first_symbol, items};
 use crate::installer::{Installer, State as Installing};
 use crate::keymap::{self, Key, Keymap, Lookup};
+use crate::mappings;
 use crate::model::{BpRow, ConfigRow, Shown, StackRow};
 use crate::overlay::{Finder, Overlay, Palette};
 use crate::picker::Picker;
@@ -124,6 +126,8 @@ pub struct App {
     pub headless: bool,
     /// The installation INSTALL shows; it goes on with INSTALL closed.
     pub installer: Option<Installer>,
+    /// `/config mappings-from-compose` reading the compose file.
+    pub compose: Option<mappings::Running>,
 }
 
 /// Why a command did not happen: an error, or a warning that asks for something first.
@@ -133,7 +137,7 @@ pub(crate) struct Refusal {
 }
 
 impl Refusal {
-    fn warn(message: String) -> Refusal {
+    pub(crate) fn warn(message: String) -> Refusal {
         Refusal { level: Level::Warn, message }
     }
 }
@@ -187,6 +191,7 @@ impl App {
             quit: false,
             headless: false,
             installer: None,
+            compose: None,
         }
     }
 
@@ -458,11 +463,22 @@ impl App {
         }
     }
 
-    /// Takes in what finished in the background: DOCTOR's checks, INSTALL's steps.
+    /// Takes in what finished in the background: DOCTOR's checks, INSTALL's steps, the mappings
+    /// of a compose file.
     pub fn poll(&mut self) {
         let cwd = self.base_dir();
         if let Some(Overlay::Doctor(doctor)) = &mut self.ui.overlay {
             doctor.poll();
+        }
+        if let Some((job, result)) = self.compose.as_ref().and_then(mappings::Running::poll) {
+            self.compose = None;
+            let outcome = result.and_then(|found| self.compose_found(&job, found));
+            let (message, level) = match outcome {
+                Ok(message) => (message, Level::Info),
+                Err(Refusal { level, message }) => (message, level),
+            };
+            let command = Some("/config mappings-from-compose".into());
+            self.ui.status = Some(Status { key: None, command, message, level });
         }
         let Some(installer) = &mut self.installer else { return };
         installer.poll(&self.adapters, &cwd);
@@ -742,6 +758,7 @@ impl App {
             Action::ConfigSet(arg) => self.config_set(arg.unwrap_or_default().trim()),
             Action::ConfigUnset(field) => self.config_unset(field),
             Action::ConfigMap(Some(mapping)) => self.config_map(&mapping),
+            Action::ConfigCompose(service) => self.config_compose(service),
             Action::ConfigAdd(Some(adapter)) => self.config_add(&adapter),
             Action::ConfigMap(None) | Action::ConfigAdd(None) => self.prompt(spec),
             Action::ConfigDelete => self.config_delete(),
@@ -954,6 +971,49 @@ impl App {
         let rows = self.tab().config_rows().len();
         self.tab_mut().ui.config.clamp(rows);
         Ok(if local.is_empty() { format!("{remote} is no longer mapped") } else { format!("{remote} → {local}") })
+    }
+
+    /// `pathMappings` of the selected configuration from the bind mounts of a service of the
+    /// project's docker compose file, or the nearest one above it. Read on a thread of its own,
+    /// they are saved once there.
+    fn config_compose(&mut self, service: Option<String>) -> Outcome {
+        if let Some(job) = &self.compose {
+            return Err(Refusal::warn(format!("still reading {}", job.file_name())));
+        }
+        let tab = self.tab();
+        let project = tab.project.as_ref().ok_or(NO_PROJECT)?;
+        let config = tab.selected_configuration().ok_or("no configuration; /config add ‹type› adds one")?;
+        project.editable(tab.ui.config_sel).map_err(|e| format!("{e:#}"))?;
+        let file = compose::find(&project.dir)
+            .ok_or("no compose.yaml, compose.yml, docker-compose.yml or docker-compose.yaml here or above")?;
+        let job = mappings::Job {
+            tab: self.tabs.active_id(),
+            dir: project.dir.clone(),
+            config: config.name().to_owned(),
+            file,
+            service,
+            php: config.adapter() == "php",
+            adapter: self.adapters.get(config.adapter()).cloned(),
+        };
+        let reading = format!("reading {}…", job.file_name());
+        self.compose = Some(job.start());
+        Ok(reading)
+    }
+
+    /// Saves the mappings `/config mappings-from-compose` found, in the configuration it was for.
+    fn compose_found(&mut self, job: &mappings::Job, found: mappings::Found) -> Outcome {
+        let App { tabs, store, .. } = self;
+        let tab = tabs.get_mut(job.tab).ok_or("that tab is closed")?;
+        let project = tab.project.as_mut().ok_or(NO_PROJECT)?;
+        let index = project.find(&job.config).ok_or_else(|| format!("“{}” is gone", job.config))?;
+        let others = project.add_mappings(store, index, &found.mappings).map_err(|e| format!("{e:#}"))?;
+        let rows = tab.config_rows().len();
+        tab.ui.config.clamp(rows);
+        let kept = match others {
+            0 => String::new(),
+            n => format!("; {n} other mapping{} kept", if n == 1 { "" } else { "s" }),
+        };
+        Ok(format!("{}{kept}", found.summary))
     }
 
     fn config_add(&mut self, adapter: &str) -> Outcome {
