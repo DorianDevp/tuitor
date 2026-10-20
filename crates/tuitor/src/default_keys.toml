@@ -80,6 +80,7 @@ ctrl-p = "search prev"
 a = "bp scope"
 e = "bp condition"
 l = "bp log"
+h = "bp hits"
 d = "bp delete"
 space = "bp enable"
 

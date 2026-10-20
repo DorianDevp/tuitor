@@ -603,6 +603,7 @@ fn hints(p: &mut Painter<'_>, app: &App, area: Rect) {
             ("bp scope", "scope"),
             ("bp condition", "condition"),
             ("bp log", "logpoint"),
+            ("bp hits", "hits"),
             ("bp enable", "on/off"),
             ("bp delete", "delete"),
             ("edit", "editor"),

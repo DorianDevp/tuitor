@@ -21,6 +21,9 @@ pub struct Breakpoint {
     /// Makes this a logpoint: the adapter prints the message instead of stopping.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_message: Option<String>,
+    /// Which hits stop, in the adapter's terms (`>= 3`, `% 10`; gdb: how many to pass over).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hit_condition: Option<String>,
     #[serde(default = "enabled_default")]
     pub enabled: bool,
     #[serde(skip)]
@@ -127,6 +130,7 @@ impl Breakpoints {
             line,
             condition: None,
             log_message: None,
+            hit_condition: None,
             enabled: true,
             hits: 0,
             bindings: HashMap::new(),
@@ -148,14 +152,16 @@ impl Breakpoints {
     }
 
     /// The enabled breakpoints of a file as DAP wants them, plus their ids in the same order.
-    pub fn for_adapter(&self, path: &Path) -> (Vec<BreakpointId>, Vec<SourceBreakpoint>) {
+    /// Hit conditions go only to an adapter that counts hits (`hits`): one that does not may
+    /// refuse the breakpoint, or take the count for a condition.
+    pub fn for_adapter(&self, path: &Path, hits: bool) -> (Vec<BreakpointId>, Vec<SourceBreakpoint>) {
         self.in_file(path)
             .filter(|b| b.enabled)
             .map(|b| {
                 let source = SourceBreakpoint {
                     line: i64::from(b.line),
                     condition: b.condition.clone(),
-                    hit_condition: None,
+                    hit_condition: b.hit_condition.clone().filter(|_| hits),
                     log_message: b.log_message.clone(),
                 };
                 (b.id, source)
@@ -234,7 +240,7 @@ mod tests {
         let first = bps.add(file.clone(), 136);
         let second = bps.add(file.clone(), 141);
         bps.update(first, |b| b.enabled = false);
-        let (ids, payload) = bps.for_adapter(&file);
+        let (ids, payload) = bps.for_adapter(&file, true);
         assert_eq!(ids, [second]);
         assert_eq!(payload[0].line, 141);
 
@@ -243,6 +249,25 @@ mod tests {
         assert_eq!(bps.by_adapter_id(1, 7), Some(second));
         assert_eq!(bps.get(second).and_then(Breakpoint::verified), Some(true));
         assert_eq!(bps.get(first).and_then(Breakpoint::verified), None);
+    }
+
+    #[test]
+    fn hit_conditions_are_kept_and_sent_only_where_hits_count() {
+        let mut bps = Breakpoints::default();
+        let file = PathBuf::from("/src/orders.php");
+        let id = bps.add(file.clone(), 68);
+        bps.update(id, |b| b.hit_condition = Some(">= 3".into()));
+        assert_eq!(bps.for_adapter(&file, true).1[0].hit_condition.as_deref(), Some(">= 3"));
+        assert_eq!(bps.for_adapter(&file, false).1[0].hit_condition, None);
+
+        // Saved with the breakpoint, and read back.
+        let text = serde_json::to_string(bps.saved()).expect("save");
+        assert!(text.contains(r#""hit_condition":">= 3""#), "{text}");
+        let restored: Vec<Breakpoint> = serde_json::from_str(&text).expect("load");
+        assert_eq!(restored[0].hit_condition.as_deref(), Some(">= 3"));
+        // Breakpoints saved before there were hit conditions have none.
+        let old: Vec<Breakpoint> = serde_json::from_str(r#"[{"id":1,"path":"/a.rs","line":3}]"#).expect("old");
+        assert_eq!((old[0].hit_condition.as_ref(), old[0].enabled), (None, true));
     }
 
     #[test]

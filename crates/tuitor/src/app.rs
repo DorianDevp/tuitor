@@ -9,7 +9,7 @@ use std::time::Duration;
 use crossterm::event::KeyEvent;
 use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
-use tuitor_core::breakpoints::Toggle;
+use tuitor_core::breakpoints::{Breakpoint, Toggle};
 use tuitor_core::compose;
 use tuitor_core::config::{Adapters, LaunchConfig, home_relative};
 use tuitor_core::doctor::{Fix, Options, ProjectInput, listen_port};
@@ -604,8 +604,9 @@ impl App {
                 Ok("live".into())
             }
             Action::BpToggle(location) => self.bp_toggle(location),
-            Action::BpCondition(expr) => self.bp_edit(expr, spec, false),
-            Action::BpLog(message) => self.bp_edit(message, spec, true),
+            Action::BpCondition(expr) => self.bp_edit(expr, spec, BpField::Condition),
+            Action::BpLog(message) => self.bp_edit(message, spec, BpField::Log),
+            Action::BpHits(expr) => self.bp_edit(expr, spec, BpField::Hits),
             Action::BpDelete => {
                 let (tab, id) = self.selected_bp().ok_or("no breakpoint selected")?;
                 self.engine_of(tab)?.delete_breakpoint(id).map_err(|e| e.to_string())?;
@@ -1099,9 +1100,9 @@ impl App {
         })
     }
 
-    /// `e` / `l` on a breakpoint: with an argument it sets the value (`-` clears),
+    /// `e` / `l` / `h` on a breakpoint: with an argument it sets the value (`-` clears),
     /// without one it opens the palette pre-filled with the current value.
-    fn bp_edit(&mut self, value: Option<String>, spec: &'static command::Spec, log: bool) -> Outcome {
+    fn bp_edit(&mut self, value: Option<String>, spec: &'static command::Spec, field: BpField) -> Outcome {
         let (tab, id) = match self.selected_bp() {
             Some(selected) => selected,
             None => {
@@ -1124,23 +1125,30 @@ impl App {
         };
         let engine = self.engine_of(tab)?;
         let Some(value) = value else {
-            let current = engine
-                .breakpoints()
-                .get(id)
-                .and_then(|b| if log { b.log_message.clone() } else { b.condition.clone() });
+            let current = engine.breakpoints().get(id).and_then(|b| field.slot(b).clone());
             self.open_palette(format!("/{} {}", spec.name, current.unwrap_or_default()));
             return Ok(String::new());
         };
         let cleared = value.trim() == "-";
         let value = (!cleared).then(|| value.clone());
-        engine
-            .update_breakpoint(id, |b| if log { b.log_message = value } else { b.condition = value })
-            .map_err(|e| e.to_string())?;
-        Ok(match (log, cleared) {
-            (false, true) => format!("#{id} condition cleared"),
-            (true, true) => format!("#{id} is a breakpoint again"),
-            (false, false) => format!("#{id} stops when this holds"),
-            (true, false) => format!("#{id} logs instead of stopping"),
+        engine.update_breakpoint(id, |b| *field.slot_mut(b) = value).map_err(|e| e.to_string())?;
+        let path = engine.breakpoints().get(id).map(|b| b.path.clone()).unwrap_or_default();
+        Ok(match (field, cleared) {
+            (BpField::Condition, true) => format!("#{id} condition cleared"),
+            (BpField::Log, true) => format!("#{id} is a breakpoint again"),
+            (BpField::Hits, true) => format!("#{id} stops at every hit again"),
+            (BpField::Condition, false) => format!("#{id} stops when this holds"),
+            (BpField::Log, false) => format!("#{id} logs instead of stopping"),
+            (BpField::Hits, false) => match engine.uncounted(&path).as_slice() {
+                [] => format!("#{id} stops on the hits this says"),
+                // Sent anyway to the adapters that count; this one would refuse or misread it.
+                names => {
+                    let names = names.join(", ");
+                    return Err(Refusal::warn(format!(
+                        "#{id} has a hit condition, but {names} counts no hits: it stops at every hit there"
+                    )));
+                }
+            },
         })
     }
 
@@ -1799,6 +1807,32 @@ impl Tab {
         // The part that runs the program is shown. Its stops were followed above, so SOURCE
         // has nothing new to go to.
         self.ui.session = self.ui.session.map(|sid| self.shown(sid));
+    }
+}
+
+/// What `bp condition`, `bp log` and `bp hits` change of a breakpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BpField {
+    Condition,
+    Log,
+    Hits,
+}
+
+impl BpField {
+    fn slot(self, bp: &Breakpoint) -> &Option<String> {
+        match self {
+            BpField::Condition => &bp.condition,
+            BpField::Log => &bp.log_message,
+            BpField::Hits => &bp.hit_condition,
+        }
+    }
+
+    fn slot_mut(self, bp: &mut Breakpoint) -> &mut Option<String> {
+        match self {
+            BpField::Condition => &mut bp.condition,
+            BpField::Log => &mut bp.log_message,
+            BpField::Hits => &mut bp.hit_condition,
+        }
     }
 }
 

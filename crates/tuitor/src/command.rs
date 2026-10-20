@@ -83,6 +83,7 @@ pub enum Action {
     BpToggle(Option<Location>),
     BpCondition(Option<String>),
     BpLog(Option<String>),
+    BpHits(Option<String>),
     BpDelete,
     BpEnable,
     BpScope(Option<BpScope>),
@@ -282,6 +283,13 @@ pub static COMMANDS: &[Spec] = &[
         help: "log instead of stopping ({expr} interpolates)",
         group: Group::Breakpoints,
         parse: |a| Ok(Action::BpLog(text(a))),
+    },
+    Spec {
+        name: "bp hits",
+        arg: Arg::Optional("‹expr›"),
+        help: "stop only on the hits this says, in the adapter's terms (>= 3, % 10; gdb: hits to pass)",
+        group: Group::Breakpoints,
+        parse: |a| Ok(Action::BpHits(text(a))),
     },
     Spec {
         name: "bp delete",

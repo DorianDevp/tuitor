@@ -1,4 +1,6 @@
 use ratatui::layout::Rect;
+use tuitor_core::Engine;
+use tuitor_core::breakpoints::Breakpoint;
 use tuitor_core::config::home_relative;
 
 use super::paint::{Painter, Panel, Seg, seg, truncate_left};
@@ -12,8 +14,11 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool)
     let tab = app.tab();
     let rows = app.bp_rows();
     let scope = scope_toggle(tab.ui.bp_scope);
-    let keys =
-        if focus { vec![("a", "scope"), ("e", "cond"), ("l", "log"), ("d", "del")] } else { vec![("a", "scope")] };
+    let keys = if focus {
+        vec![("a", "scope"), ("e", "cond"), ("h", "hits"), ("l", "log"), ("d", "del")]
+    } else {
+        vec![("a", "scope")]
+    };
     p.panel(area, &Panel { title: "BREAKPOINTS", sub: scope, right: vec![], keys, focus });
 
     let inner = super::paint::inner(area);
@@ -72,7 +77,7 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool)
                     ("◌", RED_DIM)
                 } else if bp.is_logpoint() {
                     ("◆", YELLOW_DIM)
-                } else if bp.condition.is_some() {
+                } else if bp.condition.is_some() || bp.hit_condition.is_some() {
                     ("●", YELLOW_DIM)
                 } else {
                     ("●", if here { RED } else { RED_DIM })
@@ -94,10 +99,8 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool)
                 p.text(inner.x + 3, y, &location, loc_style, cond_x.saturating_sub(1));
                 let detail: Vec<Seg<'_>> = if here {
                     vec![seg("stopped here", italic(AMBER))]
-                } else if let Some(log) = &bp.log_message {
-                    vec![seg(format!("log \"{log}\""), italic(DIM))]
-                } else if let Some(cond) = &bp.condition {
-                    vec![seg(cond.clone(), italic(DIM))]
+                } else if bp.log_message.is_some() || bp.condition.is_some() || bp.hit_condition.is_some() {
+                    conditions(bp, &owner_tab.engine)
                 } else if !bp.enabled {
                     vec![seg("disabled", italic(GHOST))]
                 } else if bp.verified() == Some(false) {
@@ -137,6 +140,28 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool)
     if let Some(footer) = footer {
         p.text(inner.x + 1, inner.bottom() - 1, &footer, fg(FAINT), inner.right());
     }
+}
+
+/// What a breakpoint logs, or its condition, and the hits it stops on; an adapter of a live
+/// session that counts no hits is named.
+fn conditions(bp: &Breakpoint, engine: &Engine) -> Vec<Seg<'static>> {
+    let mut segs = Vec::new();
+    match (&bp.log_message, &bp.condition) {
+        (Some(log), _) => segs.push(seg(format!("log \"{log}\""), italic(DIM))),
+        (None, Some(cond)) => segs.push(seg(cond.clone(), italic(DIM))),
+        (None, None) => {}
+    }
+    if let Some(hits) = &bp.hit_condition {
+        if !segs.is_empty() {
+            segs.push(seg(" · ", fg(GHOST)));
+        }
+        segs.push(seg(format!("hits {hits}"), italic(DIM)));
+        let uncounted = engine.uncounted(&bp.path);
+        if !uncounted.is_empty() {
+            segs.push(seg(format!(" · {} counts no hits", uncounted.join(", ")), italic(FAINT)));
+        }
+    }
+    segs
 }
 
 /// What the session scope leaves out, and the key that shows it.

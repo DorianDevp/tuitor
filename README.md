@@ -297,7 +297,7 @@ Every key runs a command; `/` opens the command line with the same commands and
 | `E` | open the SOURCE line or the selected breakpoint in your editor | | `!` | doctor: what debugging needs here |
 | `^f` | search the file in SOURCE as you type | | `^n` `^p` | in SOURCE: next / previous match |
 
-In BREAKPOINTS: `a` session/all, `e` condition, `l` logpoint, `space` on/off, `d` delete.
+In BREAKPOINTS: `a` session/all, `e` condition, `h` hit count, `l` logpoint, `space` on/off, `d` delete.
 In CONFIG: `enter` start or edit, `a` add, `m` map a path, `M` map a compose service's mounts,
 `u` unset a field, `d` delete, `i` install the selected configuration's adapter.
 In SOURCE: `^n` `^p` next / previous match of a search, `q` clears its highlights.
@@ -308,6 +308,13 @@ In OUTLINE: `enter` go to the function, `b` breakpoint on its first line.
 
 A search (`^f`) goes to the first match as it is typed; it ignores case unless it has a
 capital letter, and `enter` on an empty search repeats the last one.
+
+A hit count (`/bp hits`, `h`) has a breakpoint stop on some of its hits only, and is kept
+with the breakpoint. It is written as the adapter takes it: `>= 3` stops from the third hit
+on in js-debug, `% 2` on every second hit in vscode-php-debug, `> 2` from the third in
+Delve, and gdb takes the number of hits to pass over (`2` stops at the third and from then
+on). It goes only to adapters whose capabilities say they count hits; where one does not,
+tuitor says so, and the breakpoint stops at every hit there.
 
 `enter` on a line of OUTPUT or EVENTS that names a file and a line opens it in CODE: PHP's
 `in /app/src/Order.php:12`, `Order.php(12)` and `on line 12`, Node's `at f (/w/a.js:3:9)`,
