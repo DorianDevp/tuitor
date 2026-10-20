@@ -1,8 +1,12 @@
 //! Colours follow one rule: chrome and data are grey; only three things are bright.
-//! Amber is where execution is, green is what changed in this step, red is a hit
-//! breakpoint or an error.
+//! Amber is where execution is, green is what changed in this step, red is an error.
+//!
+//! Breakpoints are the one exception: each has the colour of its set, which is all a set is
+//! known by. Their shape says what they do, and a hit is a ◉ at full colour on a band, so
+//! that it reads the same whatever the set.
 
 use ratatui::style::{Color, Modifier, Style};
+use tuitor_core::breakpoints::{SET_COLORS, SetId};
 
 pub const fn rgb(hex: u32) -> Color {
     Color::Rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
@@ -44,6 +48,31 @@ pub const SYN_NUMBER: Color = rgb(0xbea9cb);
 pub const SYN_TYPE: Color = rgb(0xa6c2b6);
 pub const SYN_PUNCT: Color = rgb(0x8e8e8e);
 pub const SYN_VAR: Color = rgb(0xe2e2e2);
+
+/// The colours of breakpoint sets, and the names commands know them by, in the order new
+/// sets take them. From the logo's stripes, kept apart from the three bright meanings: its
+/// coral and orange would read as an error and as execution, so they are left out, rose
+/// is a pink lighter than the red of errors, and teal leans to cyan, away from the green
+/// of changes. Sky, which the logo lacks, fills the gap between teal and orchid; gold, the
+/// nearest to amber, comes last.
+pub const SETS: [(&str, Color); SET_COLORS as usize] = [
+    ("rose", rgb(0xf0909e)),
+    ("teal", rgb(0x4cc2bd)),
+    ("orchid", rgb(0xcf86eb)),
+    ("sky", rgb(0x7ea9ee)),
+    ("gold", rgb(0xdcc15c)),
+];
+
+/// A set's colour: whole for the active set, whose breakpoints stop the program, and half
+/// toward the background for the others, which only record.
+pub fn set_color(set: SetId, active: bool) -> Color {
+    let color = SETS.get(usize::from(set)).map_or(DIM, |(_, color)| *color);
+    if active { color } else { mix(color, BG, 0.45) }
+}
+
+pub fn set_name(set: SetId) -> &'static str {
+    SETS.get(usize::from(set)).map_or("?", |(name, _)| name)
+}
 
 /// Muted colour per session tag so sessions are distinguishable but quiet.
 pub fn tag(tag: &str) -> Color {

@@ -4,7 +4,7 @@
 use ratatui::layout::Rect;
 use tuitor_core::snapshot::Snapshot;
 
-use super::paint::{Painter, Panel, seg, truncate};
+use super::paint::{Painter, Panel, Seg, seg, truncate};
 use super::theme::*;
 use super::watch::number;
 use crate::tab::Tab;
@@ -38,7 +38,11 @@ pub fn table(p: &mut Painter<'_>, tab: &Tab, area: Rect, focus: bool) {
     let session = tab.active();
     let history: &[Snapshot] = session.map(|s| s.history.as_slice()).unwrap_or_default();
     let sub = vec![seg("value of every variable at every stop", fg(DIM))];
-    let right = vec![seg(format!("{} stops", history.len()), fg(DIM))];
+    let passed = history.iter().filter(|s| s.silent).count();
+    let mut right = vec![seg(format!("{} stops", history.len()), fg(DIM))];
+    if passed > 0 {
+        right.push(seg(format!(" · ↷ {passed} passed"), fg(FAINT)));
+    }
     let keys = if focus { vec![("j/k", "stop"), ("h/l", "column"), ("⏎", "open")] } else { vec![] };
     p.panel(area, &Panel { title: "HISTORY", sub, right, keys, focus });
 
@@ -121,11 +125,7 @@ pub fn table(p: &mut Painter<'_>, tab: &Tab, area: Rect, focus: bool) {
         p.text(inner.x, y, mark, bold(if is_cursor { WHITE } else { AMBER }), inner.right());
         p.text(x_num, y, &format!("#{}", snapshot.number), fg(if is_cursor { FG } else { DIM }), inner.right());
         p.text(x_time, y, &snapshot.time.format("%H:%M:%S%.3f").to_string(), fg(FAINT), inner.right());
-        let reason = match snapshot.hit_breakpoints.first() {
-            Some(id) => format!("bp #{id}"),
-            None => snapshot.reason.clone(),
-        };
-        p.text(x_reason, y, &reason, fg(if snapshot.hit_breakpoints.is_empty() { FAINT } else { RED_DIM }), x_loc - 1);
+        p.segs(x_reason, y, &reason(snapshot), x_loc - 1);
         let location = snapshot.top().map(|f| f.location()).unwrap_or_default();
         let loc_style = if is_live {
             fg(AMBER)
@@ -248,6 +248,19 @@ pub fn value(p: &mut Painter<'_>, tab: &Tab, area: Rect) {
             y += 1;
         }
         last = Some(v);
+    }
+}
+
+/// Why the program stopped: a breakpoint by its set's colour, `●` where it waited and `↷`
+/// where it went on by itself, or the adapter's reason.
+pub fn reason(snapshot: &Snapshot) -> Vec<Seg<'static>> {
+    match (snapshot.hit_breakpoints.first(), snapshot.set) {
+        (Some(id), Some(set)) => {
+            let (glyph, text) = if snapshot.silent { ("↷", fg(FAINT)) } else { ("●", fg(DIM)) };
+            vec![seg(glyph, bold(set_color(set, true))), seg(format!(" bp #{id}"), text)]
+        }
+        (Some(id), None) => vec![seg(format!("bp #{id}"), fg(DIM))],
+        (None, _) => vec![seg(snapshot.reason.clone(), fg(FAINT))],
     }
 }
 

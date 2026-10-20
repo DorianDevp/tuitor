@@ -130,13 +130,26 @@ impl Tab {
         self.sessions().filter(|s| live.contains(&s.id)).count()
     }
 
-    /// The stop being looked at: the latest one, or one picked from history.
+    /// The stop being looked at: the latest one the program waited at, or one picked from
+    /// history, which can be one where it went on by itself.
     pub fn viewed(&self) -> Option<&Snapshot> {
         let session = self.active()?;
         match self.ui.viewing.get(&session.id) {
             Some(number) => session.snapshot(*number),
-            None => session.latest(),
+            None => session.latest_stop(),
         }
+    }
+
+    /// Shows stop `number` of `sid`, or the latest stop the program waited at when it is that one.
+    pub fn view_stop(&mut self, sid: SessionId, number: u32) {
+        let latest = self.engine.session(sid).and_then(|s| s.latest_stop()).map(|s| s.number);
+        if latest == Some(number) {
+            self.ui.viewing.remove(&sid);
+        } else {
+            self.ui.viewing.insert(sid, number);
+        }
+        self.ui.stack.pos = 0;
+        self.jump_to_execution();
     }
 
     /// The session, stop and frame whose variables LOCALS shows.
@@ -149,9 +162,14 @@ impl Tab {
         self.ui.session.is_some_and(|sid| self.ui.viewing.contains_key(&sid))
     }
 
+    /// The stop the viewed one is compared with: the one before it, and for a stop the program
+    /// waited at, the one before that it waited at too, which the user saw last. Those it went
+    /// on from by themselves in between are mostly elsewhere, read only in their top frame.
     pub fn previous(&self) -> Option<&Snapshot> {
-        let number = self.viewed()?.number;
-        self.active()?.snapshot(number.checked_sub(1)?)
+        let viewed = self.viewed()?;
+        let index = usize::try_from(viewed.number).ok()?.checked_sub(1)?;
+        let mut earlier = self.active()?.history[..index].iter().rev();
+        if viewed.silent { earlier.next() } else { earlier.find(|s| !s.silent) }
     }
 
     /// What changed in the selected frame since the previous stop.

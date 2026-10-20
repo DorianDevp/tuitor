@@ -139,3 +139,57 @@ async fn breakpoint_step_and_delta_with_gdb() {
     assert_eq!(kind("total=60"), Some(OutputKind::Stdout), "program output missing");
     assert!(matches!(kind("pending"), None | Some(OutputKind::Console)), "gdb's own output shown as the program's");
 }
+
+/// Breakpoints of a set other than the active one record the stop and let the program go
+/// on; switching the active set while stopped makes the other set's next hit stop.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn breakpoints_of_another_set_record_and_go_on_with_gdb() {
+    if !have_gdb() {
+        eprintln!("gdb not installed; skipping");
+        return;
+    }
+    let tmp = TestDir::new("gdb-sets");
+    let dir = tmp.path().to_path_buf();
+    let bin = build_fixture(&dir);
+    let source = std::fs::canonicalize(dir.join("sum.rs")).expect("source path");
+
+    let (mut engine, mut rx) =
+        Engine::new(EngineOptions { adapters: Adapters::default(), workspace: dir.clone(), state_file: None });
+    let rose = engine.breakpoints().active_set();
+    engine.toggle_breakpoint(&source, 11); // `let result = total(&prices);`
+    let teal = engine.new_set().expect("set");
+    engine.toggle_breakpoint(&source, BREAK_LINE);
+    engine.activate_set(rose).expect("activate");
+
+    let mut args = Map::new();
+    args.insert("program".into(), Value::String(bin.display().to_string()));
+    args.insert("cwd".into(), Value::String(dir.display().to_string()));
+    let sid = engine.start(LaunchConfig::adhoc("sum", "gdb", RequestKind::Launch, args)).expect("start session");
+    pump(&mut engine, &mut rx, |e| e.session(sid).is_some_and(|s| s.state == SessionState::Running)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // The active set's breakpoint stops.
+    pump(&mut engine, &mut rx, |e| stops(e, sid) >= 1).await;
+    let first = engine.session(sid).and_then(|s| s.latest()).expect("snapshot");
+    assert_eq!((first.top().map(|f| f.line), first.set, first.silent), (Some(11), Some(rose), false));
+
+    // The other set's breakpoint stops once it is active...
+    engine.activate_set(teal).expect("activate");
+    engine.resume(sid, Step::Continue).expect("continue");
+    pump(&mut engine, &mut rx, |e| e.session(sid).is_some_and(|s| s.is_stopped()) && stops(e, sid) >= 2).await;
+    let second = engine.session(sid).and_then(|s| s.latest()).expect("snapshot");
+    assert_eq!((second.top().map(|f| f.line), second.set, second.silent), (Some(BREAK_LINE), Some(teal), false));
+
+    // ...and records its next hits without stopping once it is not: the program runs to its end.
+    engine.activate_set(rose).expect("activate");
+    engine.resume(sid, Step::Continue).expect("continue");
+    pump(&mut engine, &mut rx, |e| e.session(sid).is_some_and(|s| s.state == SessionState::Exited)).await;
+    let session = engine.session(sid).expect("session");
+    let passed: Vec<(bool, Option<&str>)> =
+        session.history[2..].iter().map(|s| (s.silent, s.local_value("sum"))).collect();
+    assert_eq!(passed, [(true, Some("10")), (true, Some("30"))]);
+    assert!(session.history[2..].iter().all(|s| s.set == Some(teal) && !s.live && s.watches.is_empty()));
+    assert_eq!(session.latest_stop().map(|s| s.number), Some(2));
+    assert_eq!(engine.breakpoints().get(2).map(|b| b.hits), Some(3));
+    assert!(engine.output().iter().any(|l| l.text.contains("total=60")), "the program did not run to its end");
+}

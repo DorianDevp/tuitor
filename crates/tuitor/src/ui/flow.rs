@@ -12,6 +12,7 @@ use tuitor_core::breakpoints::Breakpoint;
 use tuitor_core::config::home_relative;
 use tuitor_core::flow::{Axis, Flow, Row, Status};
 
+use super::breakpoints::glyph;
 use super::paint::{Painter, Panel, Seg, seg, truncate_left};
 use super::syntax::highlight;
 use super::theme::*;
@@ -252,6 +253,7 @@ fn bar(p: &mut Painter<'_>, tab: &Tab, flow: &Flow, item: &Item, x: u16, y: u16,
         return;
     }
     let hits = tab.viewed().map(|s| s.hit_breakpoints.as_slice()).unwrap_or_default();
+    let active = tab.engine.breakpoints().active_set();
     let now = column(flow.axis, flow.now, width);
     let rows: Vec<&Row> = item.rows().iter().map(|&r| &flow.rows[r]).collect();
     let status = item.status(flow);
@@ -300,22 +302,10 @@ fn bar(p: &mut Painter<'_>, tab: &Tab, flow: &Flow, item: &Item, x: u16, y: u16,
         for bp in tab.engine.breakpoints().in_file(&row.path).filter(|b| b.enabled) {
             for at in row.lines.get(&bp.line).into_iter().flatten() {
                 let hit = hits.contains(&bp.id) && column(flow.axis, *at, width) == now;
-                let (glyph, color) = marker(bp, hit);
+                let (glyph, color) = glyph(bp, active, hit);
                 p.text(x + column(flow.axis, *at, width), y, glyph, bold(color), x + width);
             }
         }
-    }
-}
-
-fn marker(bp: &Breakpoint, hit: bool) -> (&'static str, Color) {
-    if bp.is_logpoint() {
-        ("◆", YELLOW_DIM)
-    } else if hit {
-        ("●", RED)
-    } else if bp.condition.is_some() {
-        ("●", YELLOW_DIM)
-    } else {
-        ("●", RED_DIM)
     }
 }
 
@@ -331,8 +321,8 @@ fn legend(p: &mut Painter<'_>, x: u16, y: u16, right: u16) {
         key("─", fg(DIM), "ran"),
         key("┄", fg(GHOST), "predicted"),
         key("▼", bold(AMBER), "this stop"),
-        key("●", bold(RED_DIM), "breakpoint"),
-        key("◆", bold(YELLOW_DIM), "logpoint"),
+        key("●", bold(DIM), "breakpoint, in its set's colour"),
+        key("◆", bold(DIM), "logpoint"),
     ]
     .into_iter()
     .flatten()
@@ -361,7 +351,7 @@ fn next_breakpoints(tab: &Tab, view: &FlowView) -> Vec<Seg<'static>> {
         if i > 0 {
             segs.push(seg(" · ", fg(GHOST)));
         }
-        let (glyph, color) = marker(bp, false);
+        let (glyph, color) = glyph(bp, tab.engine.breakpoints().active_set(), false);
         segs.push(seg(glyph, bold(color)));
         segs.push(seg(format!(" {}:{}", file_name(&row.path), bp.line), fg(FG)));
         let when = match flow.axis {
@@ -502,7 +492,7 @@ pub fn detail(p: &mut Painter<'_>, app: &App, area: Rect) {
         let Some(text) = source.lines.get(usize::try_from(n - 1).unwrap_or(usize::MAX)) else { break };
         let x = inner.x;
         if let Some(bp) = breakpoints.at(&row.path, n) {
-            let (glyph, color) = marker(bp, false);
+            let (glyph, color) = glyph(bp, breakpoints.active_set(), false);
             p.text(x, y, glyph, bold(color), inner.right());
         } else if row.lines.contains_key(&n) {
             p.text(x, y, "│", fg(GHOST), inner.right());
@@ -634,7 +624,7 @@ fn breakpoints_of(tab: &Tab, view: &FlowView, row: &Row) -> Vec<Seg<'static>> {
         if !segs.is_empty() {
             segs.push(seg(" · ", fg(GHOST)));
         }
-        let (glyph, color) = marker(bp, false);
+        let (glyph, color) = glyph(bp, tab.engine.breakpoints().active_set(), false);
         segs.push(seg(glyph, bold(color)));
         segs.push(seg(format!(" :{}", bp.line), fg(FG)));
         let reached: Vec<f64> = row.lines.get(&bp.line).cloned().unwrap_or_default();

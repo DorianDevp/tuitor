@@ -1,5 +1,6 @@
 use ratatui::layout::Rect;
 
+use super::breakpoints::glyph;
 use super::paint::{Painter, Panel, Seg, seg, truncate, truncate_left};
 use super::syntax::{Lang, highlight};
 use super::theme::*;
@@ -169,7 +170,11 @@ pub fn finder(p: &mut Painter<'_>, app: &App, finder: &Finder, screen: Rect) {
                 p.band(inner.x, y, list_w, SEL2);
                 p.text(inner.x + 1, y, "›", bold(AMBER), list_right);
             }
-            p.text(inner.x + 3, y, "●", fg(RED_DIM), list_right);
+            let bps = app.tab().engine.breakpoints();
+            if let Some(bp) = bps.get(hit.id) {
+                let (glyph, color) = glyph(bp, bps.active_set(), false);
+                p.text(inner.x + 3, y, glyph, fg(color), list_right);
+            }
             p.segs(
                 inner.x + 5,
                 y,
@@ -303,8 +308,9 @@ fn preview(p: &mut Painter<'_>, app: &App, path: &std::path::Path, line: u32, ar
         if n == line {
             p.band(area.x, y, area.width, SEL2);
         }
-        if engine.breakpoints().at(&canonical, n).is_some() {
-            p.text(area.x, y, "●", bold(RED_DIM), area.right());
+        if let Some(bp) = engine.breakpoints().at(&canonical, n) {
+            let (glyph, color) = glyph(bp, engine.breakpoints().active_set(), false);
+            p.text(area.x, y, glyph, bold(color), area.right());
         }
         p.text(area.x + 1, y, &format!("{n:>4} "), fg(if n == line { FG } else { FAINT }), area.right());
         let mut x = area.x + 6;

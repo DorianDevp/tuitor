@@ -1,15 +1,28 @@
 //! Breakpoints live in the engine, not in a session: they survive restarts and are
 //! sent to every session whose adapter handles the file's extension.
+//!
+//! Each breakpoint belongs to a set, and one set is active. Every enabled breakpoint goes
+//! to the adapter whatever its set: a stop at the active set's breakpoints waits for the
+//! user, one at another set's is read and goes on by itself, so switching sets needs no
+//! word to the adapter and works while the program runs.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use tuitor_dap::types::{self as dap, SourceBreakpoint};
 
 use crate::session::SessionId;
 
 pub type BreakpointId = u32;
+
+/// A set has no name: it is known by its colour, one of the UI's palette of [`SET_COLORS`],
+/// and this is the colour's place in it.
+pub type SetId = u8;
+
+/// How many sets there can be: as many as there are colours that stay apart on screen.
+pub const SET_COLORS: SetId = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Breakpoint {
@@ -26,6 +39,9 @@ pub struct Breakpoint {
     pub hit_condition: Option<String>,
     #[serde(default = "enabled_default")]
     pub enabled: bool,
+    /// Breakpoints saved before there were sets are in the first.
+    #[serde(default)]
+    pub set: SetId,
     #[serde(skip)]
     pub hits: u32,
     #[serde(skip)]
@@ -65,18 +81,44 @@ pub enum Toggle {
     Removed(BreakpointId),
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Breakpoints {
     /// Sorted by (path, line).
     items: Vec<Breakpoint>,
     next_id: BreakpointId,
+    /// The sets there are, in the order they were made; never empty.
+    sets: Vec<SetId>,
+    /// The set whose breakpoints stop the program.
+    active: SetId,
+}
+
+impl Default for Breakpoints {
+    fn default() -> Self {
+        Self { items: Vec::new(), next_id: 0, sets: vec![0], active: 0 }
+    }
 }
 
 impl Breakpoints {
-    pub fn from_saved(mut items: Vec<Breakpoint>) -> Self {
+    /// Breakpoints and sets as saved. Saved before there were sets, they are all in one, the
+    /// first colour's; a breakpoint whose set is gone from the file goes to the first set.
+    pub fn from_saved(mut items: Vec<Breakpoint>, saved_sets: &[SetId], active: Option<SetId>) -> Self {
+        let mut sets: Vec<SetId> = Vec::new();
+        for set in saved_sets.iter().copied().filter(|s| *s < SET_COLORS) {
+            if !sets.contains(&set) {
+                sets.push(set);
+            }
+        }
+        let first = *sets.first().unwrap_or(&0);
+        if sets.is_empty() {
+            sets.push(first);
+        }
+        for bp in items.iter_mut().filter(|b| !sets.contains(&b.set)) {
+            bp.set = first;
+        }
         items.sort_by(|a, b| (&a.path, a.line).cmp(&(&b.path, b.line)));
         let next_id = items.iter().map(|b| b.id).max().unwrap_or(0);
-        Self { items, next_id }
+        let active = active.filter(|a| sets.contains(a)).unwrap_or(first);
+        Self { items, next_id, sets, active }
     }
 
     pub fn saved(&self) -> &[Breakpoint] {
@@ -132,6 +174,7 @@ impl Breakpoints {
             log_message: None,
             hit_condition: None,
             enabled: true,
+            set: self.active,
             hits: 0,
             bindings: HashMap::new(),
         };
@@ -143,6 +186,11 @@ impl Breakpoints {
     pub fn remove(&mut self, id: BreakpointId) -> Option<Breakpoint> {
         let index = self.items.iter().position(|b| b.id == id)?;
         Some(self.items.remove(index))
+    }
+
+    /// Removes every breakpoint; the sets stay.
+    pub fn clear(&mut self) {
+        self.items.clear();
     }
 
     pub fn update(&mut self, id: BreakpointId, f: impl FnOnce(&mut Breakpoint)) -> Option<&Breakpoint> {
@@ -213,6 +261,108 @@ impl Breakpoints {
             bp.hits += 1;
         }
     }
+
+    // ---- sets -----------------------------------------------------------------------
+
+    pub fn sets(&self) -> &[SetId] {
+        &self.sets
+    }
+
+    pub fn active_set(&self) -> SetId {
+        self.active
+    }
+
+    /// Makes `set` the one whose breakpoints stop the program.
+    pub fn activate(&mut self, set: SetId) -> Result<()> {
+        if !self.sets.contains(&set) {
+            bail!("there is no such set");
+        }
+        self.active = set;
+        Ok(())
+    }
+
+    /// The set `delta` places from `set`, in the order the sets were made, around the end.
+    pub fn neighbour(&self, set: SetId, delta: isize) -> SetId {
+        let len = self.sets.len() as isize;
+        let index = self.sets.iter().position(|s| *s == set).unwrap_or(0) as isize;
+        self.sets[(index + delta).rem_euclid(len) as usize]
+    }
+
+    /// A set in the first colour no set has, made the active one, so that the breakpoints
+    /// added next go to it.
+    pub fn new_set(&mut self) -> Result<SetId> {
+        let Some(set) = (0..SET_COLORS).find(|s| !self.sets.contains(s)) else {
+            bail!("there are {SET_COLORS} sets, one for each colour; /set delete makes room");
+        };
+        self.sets.push(set);
+        self.active = set;
+        Ok(set)
+    }
+
+    pub fn move_to(&mut self, id: BreakpointId, set: SetId) -> Result<()> {
+        if !self.sets.contains(&set) {
+            bail!("there is no such set");
+        }
+        let bp = self.items.iter_mut().find(|b| b.id == id).ok_or_else(|| anyhow::anyhow!("no breakpoint #{id}"))?;
+        bp.set = set;
+        Ok(())
+    }
+
+    pub fn in_set(&self, set: SetId) -> impl Iterator<Item = &Breakpoint> {
+        self.items.iter().filter(move |b| b.set == set)
+    }
+
+    /// Deletes `set`. Its breakpoints go to `to`, or with it when `to` is `None`; those are
+    /// returned. The last set cannot go. When the active set goes, `to` or the first set
+    /// left becomes active.
+    pub fn delete_set(&mut self, set: SetId, to: Option<SetId>) -> Result<Vec<Breakpoint>> {
+        if !self.sets.contains(&set) {
+            bail!("there is no such set");
+        }
+        if self.sets.len() == 1 {
+            bail!("the last set cannot go: every breakpoint is in one");
+        }
+        if let Some(to) = to
+            && (to == set || !self.sets.contains(&to))
+        {
+            bail!("its breakpoints can go only to another set there is");
+        }
+        let removed = match to {
+            Some(to) => {
+                for bp in self.items.iter_mut().filter(|b| b.set == set) {
+                    bp.set = to;
+                }
+                Vec::new()
+            }
+            None => {
+                let (gone, kept) = std::mem::take(&mut self.items).into_iter().partition(|b| b.set == set);
+                self.items = kept;
+                gone
+            }
+        };
+        self.sets.retain(|s| *s != set);
+        if self.active == set {
+            self.active = to.unwrap_or(self.sets[0]);
+        }
+        Ok(removed)
+    }
+
+    /// Whether a stop at breakpoints `hits` goes on by itself: they are all of sets other
+    /// than the active one. A stop at none, or at one that is gone, waits.
+    pub fn passes(&self, hits: &[BreakpointId]) -> bool {
+        !hits.is_empty() && hits.iter().all(|id| self.get(*id).is_some_and(|b| b.set != self.active))
+    }
+
+    /// Whether any enabled breakpoint is of a set other than the active one, so that a stop
+    /// at a breakpoint the adapter does not name may be one to go on from.
+    pub fn any_passing(&self) -> bool {
+        self.items.iter().any(|b| b.enabled && b.set != self.active)
+    }
+
+    /// The set of the first of `hits` that is still there.
+    pub fn set_of(&self, hits: &[BreakpointId]) -> Option<SetId> {
+        hits.iter().find_map(|id| self.get(*id)).map(|b| b.set)
+    }
 }
 
 #[cfg(test)]
@@ -275,7 +425,100 @@ mod tests {
         let mut bps = Breakpoints::default();
         bps.add(PathBuf::from("/a.rs"), 1);
         bps.add(PathBuf::from("/a.rs"), 2);
-        let mut restored = Breakpoints::from_saved(bps.saved().to_vec());
+        let mut restored = Breakpoints::from_saved(bps.saved().to_vec(), bps.sets(), Some(bps.active_set()));
         assert_eq!(restored.add(PathBuf::from("/a.rs"), 3), 3);
+    }
+
+    #[test]
+    fn breakpoints_saved_before_sets_are_in_the_first_set() {
+        let old: Vec<Breakpoint> =
+            serde_json::from_str(r#"[{"id":1,"path":"/a.rs","line":3},{"id":2,"path":"/a.rs","line":9}]"#)
+                .expect("old");
+        let bps = Breakpoints::from_saved(old, &[], None);
+        assert_eq!((bps.sets(), bps.active_set()), (&[0][..], 0));
+        assert!(bps.iter().all(|b| b.set == 0));
+
+        // A set gone from the file, or one out of the palette, takes its breakpoints to the first.
+        let mut saved = bps.saved().to_vec();
+        saved[1].set = 3;
+        let bps = Breakpoints::from_saved(saved, &[2, 2, 9], Some(4));
+        assert_eq!((bps.sets(), bps.active_set()), (&[2][..], 2));
+        assert_eq!(bps.iter().map(|b| b.set).collect::<Vec<_>>(), [2, 2]);
+    }
+
+    #[test]
+    fn sets_are_saved_with_their_breakpoints() {
+        let mut bps = Breakpoints::default();
+        bps.add(PathBuf::from("/a.rs"), 1);
+        let teal = bps.new_set().expect("set");
+        let b = bps.add(PathBuf::from("/a.rs"), 2);
+        let text = serde_json::to_string(bps.saved()).expect("save");
+        let restored = Breakpoints::from_saved(serde_json::from_str(&text).expect("load"), bps.sets(), Some(teal));
+        assert_eq!((restored.sets(), restored.active_set()), (&[0, teal][..], teal));
+        assert_eq!(restored.get(b).map(|b| b.set), Some(teal));
+        assert_eq!(restored.get(1).map(|b| b.set), Some(0));
+    }
+
+    #[test]
+    fn new_breakpoints_go_to_the_active_set_and_sets_take_the_free_colours() {
+        let mut bps = Breakpoints::default();
+        let first = bps.add(PathBuf::from("/a.rs"), 1);
+        let (one, two) = (bps.new_set().expect("set"), bps.new_set().expect("set"));
+        assert_eq!((one, two, bps.active_set()), (1, 2, 2));
+        let second = bps.add(PathBuf::from("/a.rs"), 2);
+        assert_eq!(bps.get(first).map(|b| b.set), Some(0));
+        assert_eq!(bps.get(second).map(|b| b.set), Some(2));
+        // A deleted set's colour is free again; then there is one set per colour, and no more.
+        bps.delete_set(one, Some(0)).expect("delete");
+        assert_eq!(bps.new_set().expect("set"), 1);
+        while bps.sets().len() < usize::from(SET_COLORS) {
+            bps.new_set().expect("set");
+        }
+        assert!(bps.new_set().is_err());
+        assert_eq!(bps.neighbour(bps.sets()[0], -1), *bps.sets().last().expect("sets"));
+    }
+
+    #[test]
+    fn only_hits_of_other_sets_all_of_them_pass() {
+        let mut bps = Breakpoints::default();
+        let rose = bps.add(PathBuf::from("/a.rs"), 1);
+        let teal_set = bps.new_set().expect("set");
+        let teal = bps.add(PathBuf::from("/a.rs"), 2);
+        bps.activate(0).expect("activate");
+        assert!(bps.passes(&[teal]));
+        assert!(!bps.passes(&[rose]));
+        assert!(!bps.passes(&[teal, rose]), "a hit of the active set stops");
+        assert!(!bps.passes(&[]), "a stop at no breakpoint waits");
+        assert!(!bps.passes(&[99]), "nor does one at a breakpoint that is gone");
+        assert!(bps.any_passing());
+        assert_eq!(bps.set_of(&[99, teal]), Some(teal_set));
+
+        // Switching sets turns it around, with nothing sent to the adapter.
+        bps.activate(teal_set).expect("activate");
+        assert!(bps.passes(&[rose]) && !bps.passes(&[teal]));
+        // A disabled breakpoint, which the adapter does not have, cannot be hit.
+        bps.update(rose, |b| b.enabled = false);
+        assert!(!bps.any_passing());
+    }
+
+    #[test]
+    fn a_deleted_set_moves_its_breakpoints_or_takes_them_along() {
+        let mut bps = Breakpoints::default();
+        let teal = bps.new_set().expect("set");
+        let a = bps.add(PathBuf::from("/a.rs"), 1);
+        let orchid = bps.new_set().expect("set");
+        let b = bps.add(PathBuf::from("/b.rs"), 2);
+        assert!(bps.delete_set(teal, Some(teal)).is_err());
+        assert!(bps.delete_set(teal, Some(4)).is_err());
+
+        assert!(bps.delete_set(teal, Some(orchid)).expect("move").is_empty());
+        assert_eq!(bps.get(a).map(|b| b.set), Some(orchid));
+        assert_eq!(bps.sets(), [0, orchid]);
+
+        // The active set going leaves the first one active, with its breakpoints gone.
+        let gone = bps.delete_set(orchid, None).expect("delete");
+        assert_eq!(gone.iter().map(|b| b.id).collect::<Vec<_>>(), [a, b]);
+        assert_eq!((bps.sets(), bps.active_set(), bps.len()), (&[0][..], 0, 0));
+        assert!(bps.delete_set(0, None).is_err(), "the last set stays");
     }
 }

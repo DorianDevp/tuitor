@@ -103,10 +103,12 @@ fn glyph(status: Option<Status>) -> Seg<'static> {
 /// A function's glyph, and its breakpoint, or that nothing saw it run.
 fn symbol_status(app: &App, flow: Option<&Flow>, path: &Path, symbol: &Symbol) -> (Seg<'static>, Vec<Seg<'static>>) {
     let status = function_status(app, flow, path, &|name| same(name, symbol));
-    let bp = app.tab().engine.breakpoints().in_file(path).find(|b| (symbol.line..=symbol.end).contains(&b.line));
+    let bps = app.tab().engine.breakpoints();
+    let bp = bps.in_file(path).find(|b| (symbol.line..=symbol.end).contains(&b.line));
     let mut note = Vec::new();
     if let Some(bp) = bp {
-        note.push(seg("●", bold(RED_DIM)));
+        let (glyph, color) = super::breakpoints::glyph(bp, bps.active_set(), false);
+        note.push(seg(glyph, bold(color)));
         note.push(seg(format!(":{} ", bp.line), fg(DIM)));
     }
     if status.is_none() {

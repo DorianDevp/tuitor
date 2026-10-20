@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
+use std::time::Instant;
 
 use tuitor_dap::Client;
 use tuitor_dap::types::{Capabilities, Thread};
@@ -44,6 +45,8 @@ pub(crate) struct PendingStop {
     pub reason: String,
     pub description: Option<String>,
     pub hits: Vec<BreakpointId>,
+    /// When the adapter said it stopped; a stop that goes on by itself says how long it took.
+    pub at: Instant,
 }
 
 pub struct Session {
@@ -80,6 +83,16 @@ pub struct Session {
     pub(crate) launch_sent: bool,
     pub(crate) configure_pending: bool,
     pub(crate) pending_stop: Option<PendingStop>,
+    /// Stopped at a breakpoint of a set other than the active one, or perhaps one when the
+    /// adapter names no breakpoint: the stop is being read, and the program then goes on by
+    /// itself. Until then the session counts as running, so that nothing the user does
+    /// steps from a place they were never shown.
+    pub(crate) passing: bool,
+    /// `pause` came while passing: the program stays where it is, as at any stop.
+    pub(crate) hold: bool,
+    /// The program was resumed with a step, which ends where the user asked even when that
+    /// is a breakpoint of another set.
+    pub(crate) stepping: bool,
     /// Partial output lines per kind, until their newline arrives.
     pub(crate) partial_output: HashMap<OutputKind, String>,
     pub(crate) configured: bool,
@@ -116,6 +129,9 @@ impl Session {
             launch_sent: false,
             configure_pending: false,
             pending_stop: None,
+            passing: false,
+            hold: false,
+            stepping: false,
             partial_output: HashMap::new(),
             configured: false,
             configuration_unanswered: 0,
@@ -125,6 +141,12 @@ impl Session {
 
     pub fn latest(&self) -> Option<&Snapshot> {
         self.history.last()
+    }
+
+    /// The latest stop the program waited at; stops at breakpoints of other sets went on
+    /// by themselves.
+    pub fn latest_stop(&self) -> Option<&Snapshot> {
+        self.history.iter().rev().find(|s| !s.silent)
     }
 
     pub fn snapshot(&self, number: u32) -> Option<&Snapshot> {
@@ -186,6 +208,7 @@ impl Session {
 
     pub(crate) fn mark_exited(&mut self) {
         self.state = SessionState::Exited;
+        self.passing = false;
         if let Some(last) = self.history.last_mut() {
             last.live = false;
         }

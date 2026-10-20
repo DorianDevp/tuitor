@@ -623,6 +623,8 @@ mod tests {
             reason: if hit { "breakpoint" } else { "step" }.into(),
             description: None,
             hit_breakpoints: if hit { vec![1] } else { vec![] },
+            set: hit.then_some(0),
+            silent: false,
             frames,
             watches: vec![],
             live: false,

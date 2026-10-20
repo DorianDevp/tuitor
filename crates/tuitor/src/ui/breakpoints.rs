@@ -1,6 +1,7 @@
 use ratatui::layout::Rect;
+use ratatui::style::Color;
 use tuitor_core::Engine;
-use tuitor_core::breakpoints::Breakpoint;
+use tuitor_core::breakpoints::{Breakpoint, Breakpoints, SetId};
 use tuitor_core::config::home_relative;
 
 use super::paint::{Painter, Panel, Seg, seg, truncate_left};
@@ -13,13 +14,15 @@ use crate::tab::Tab;
 pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool) {
     let tab = app.tab();
     let rows = app.bp_rows();
-    let scope = scope_toggle(tab.ui.bp_scope);
+    // The sets first: where the pane is narrow, the scope is what gets cut.
+    let mut sub = set_chips(tab.engine.breakpoints());
+    sub.extend(scope_toggle(tab.ui.bp_scope));
     let keys = if focus {
-        vec![("a", "scope"), ("e", "cond"), ("h", "hits"), ("l", "log"), ("d", "del")]
+        vec![("a", "scope"), ("e", "cond"), ("h", "hits"), ("l", "log"), ("M", "set"), ("d", "del")]
     } else {
         vec![("a", "scope")]
     };
-    p.panel(area, &Panel { title: "BREAKPOINTS", sub: scope, right: vec![], keys, focus });
+    p.panel(area, &Panel { title: "BREAKPOINTS", sub, right: vec![], keys, focus });
 
     let inner = super::paint::inner(area);
     if rows.is_empty() {
@@ -29,6 +32,7 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool)
     // Breakpoint ids are per tab: only this tab's viewed stop marks one as hit.
     let current = app.tabs.active_id();
     let hits = tab.viewed().map(|s| s.hit_breakpoints.clone()).unwrap_or_default();
+    let passed = tab.viewed().is_some_and(|s| s.silent);
     let hits_x = inner.right().saturating_sub(5);
     let cond_x = if wide { inner.x + inner.width * 45 / 100 } else { inner.x + inner.width * 55 / 100 };
 
@@ -71,17 +75,8 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool)
                 } else if selected {
                     p.band(inner.x, y, inner.width, SEL2);
                 }
-                let (glyph, color) = if !bp.enabled {
-                    ("○", GHOST)
-                } else if bp.verified() == Some(false) {
-                    ("◌", RED_DIM)
-                } else if bp.is_logpoint() {
-                    ("◆", YELLOW_DIM)
-                } else if bp.condition.is_some() || bp.hit_condition.is_some() {
-                    ("●", YELLOW_DIM)
-                } else {
-                    ("●", if here { RED } else { RED_DIM })
-                };
+                let active = owner_tab.engine.breakpoints().active_set();
+                let (glyph, color) = glyph(bp, active, here);
                 p.text(inner.x + 1, y, glyph, bold(color), inner.right());
                 let path = if wide {
                     bp.path.strip_prefix(owner_tab.engine.workspace()).unwrap_or(&bp.path).display().to_string()
@@ -97,7 +92,9 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool)
                     fg(FG)
                 };
                 p.text(inner.x + 3, y, &location, loc_style, cond_x.saturating_sub(1));
-                let detail: Vec<Seg<'_>> = if here {
+                let detail: Vec<Seg<'_>> = if here && passed {
+                    vec![seg("passed here, without stopping", italic(DIM))]
+                } else if here {
                     vec![seg("stopped here", italic(AMBER))]
                 } else if bp.log_message.is_some() || bp.condition.is_some() || bp.hit_condition.is_some() {
                     conditions(bp, &owner_tab.engine)
@@ -105,6 +102,8 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool)
                     vec![seg("disabled", italic(GHOST))]
                 } else if bp.verified() == Some(false) {
                     vec![seg(bp.adapter_message().unwrap_or("not verified").to_owned(), italic(RED_DIM))]
+                } else if bp.set != active {
+                    vec![seg("records only", italic(FAINT))]
                 } else {
                     vec![]
                 };
@@ -140,6 +139,45 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool)
     if let Some(footer) = footer {
         p.text(inner.x + 1, inner.bottom() - 1, &footer, fg(FAINT), inner.right());
     }
+}
+
+/// How a breakpoint is drawn. Its colour is its set's, whole while that set is active and
+/// its breakpoints stop the program; its shape is what it does: ● stops, ◐ stops when its
+/// condition or hit count says, ◆ logs, ○ is off, ◌ the adapter did not take it. A hit at
+/// the stop on view is ◉, at full colour whatever the set.
+pub fn glyph(bp: &Breakpoint, active: SetId, hit: bool) -> (&'static str, Color) {
+    let shape = if !bp.enabled {
+        "○"
+    } else if bp.verified() == Some(false) {
+        "◌"
+    } else if hit {
+        "◉"
+    } else if bp.is_logpoint() {
+        "◆"
+    } else if bp.condition.is_some() || bp.hit_condition.is_some() {
+        "◐"
+    } else {
+        "●"
+    };
+    (shape, set_color(bp.set, hit || (bp.enabled && bp.set == active)))
+}
+
+/// The sets, once there is more than one: the active one named on a band, as the view on
+/// screen is in the header, the others by their colour.
+fn set_chips(bps: &Breakpoints) -> Vec<Seg<'static>> {
+    if bps.sets().len() < 2 {
+        return Vec::new();
+    }
+    let mut segs = Vec::new();
+    for &set in bps.sets() {
+        if set == bps.active_set() {
+            segs.push(seg(format!(" ● {} ", set_name(set)), bold(set_color(set, true)).bg(SEL2)));
+        } else {
+            segs.push(seg(" ● ", fg(set_color(set, false))));
+        }
+    }
+    segs.push(seg("  ", fg(GHOST)));
+    segs
 }
 
 /// What a breakpoint logs, or its condition, and the hits it stops on; an adapter of a live

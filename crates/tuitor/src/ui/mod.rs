@@ -430,7 +430,14 @@ fn context(p: &mut Painter<'_>, app: &App, area: Rect) {
             seg(" ◂ HISTORY ", bold(theme::BG)),
             seg(format!("  stop #{} of {}", snapshot.number, session.history.len()), fg(theme::BG)),
             seg(format!("   ·   {}  (−{ago:.1}s)", snapshot.time.format("%H:%M:%S%.3f")), fg(theme::BG)),
-            seg("   ·   recorded values, nothing is re-read", fg(theme::BG)),
+            seg(
+                if snapshot.silent {
+                    "   ·   passed without stopping, its set not active; recorded"
+                } else {
+                    "   ·   recorded values, nothing is re-read"
+                },
+                fg(theme::BG),
+            ),
             seg("   ·   ] newer   } live ▸", bold(theme::BG)),
         ];
         // Where it is narrow the note goes first, then the time; the keys stay.
@@ -468,6 +475,10 @@ fn context(p: &mut Painter<'_>, app: &App, area: Rect) {
                     Some(id) => format!("breakpoint #{id}"),
                     None => snapshot.reason.clone(),
                 };
+                // The breakpoint's set, by its colour, beside the amber of execution.
+                if let Some(set) = snapshot.set {
+                    segs.push(seg("◉ ", bold(set_color(set, true))));
+                }
                 segs.push(seg(reason, bold(AMBER)));
                 if let Some(top) = snapshot.top() {
                     segs.push(seg(" at ", fg(DIM)));
@@ -605,8 +616,10 @@ fn hints(p: &mut Painter<'_>, app: &App, area: Rect) {
             ("bp condition", "condition"),
             ("bp log", "logpoint"),
             ("bp hits", "hits"),
+            ("set move", "set"),
             ("bp enable", "on/off"),
             ("bp delete", "delete"),
+            ("set delete", "delete set"),
             ("edit", "editor"),
         ],
         Pane::Output => &[("open", "go to its file:line"), ("copy", "copy"), ("clear output", "clear")],
@@ -627,6 +640,7 @@ fn hints(p: &mut Painter<'_>, app: &App, area: Rect) {
         Pane::Outline => &[("open", "jump"), ("bp toggle", "bp on entry")],
     };
     let common: &[(&str, &str)] = &[
+        ("set next", "active set"),
         ("continue", "continue"),
         ("next", "over"),
         ("step in", "into"),
@@ -641,8 +655,9 @@ fn hints(p: &mut Painter<'_>, app: &App, area: Rect) {
     ];
     let mut x = 1;
     let one_tab = app.tabs.len() == 1;
+    let one_set = app.tab().engine.breakpoints().sets().len() == 1;
     for (command, label) in specific.iter().chain(common) {
-        if one_tab && *command == "tab next" {
+        if (one_tab && *command == "tab next") || (one_set && *command == "set next") {
             continue;
         }
         let Some(key) = app.keymap.key_for(pane.name(), command) else { continue };

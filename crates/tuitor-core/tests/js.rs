@@ -167,3 +167,53 @@ async fn stopping_a_child_stops_the_program() {
     pump(&mut engine, &mut rx, |e| e.sessions().iter().all(|s| !s.is_alive())).await;
     assert!(!engine.output().iter().any(|l| l.text.contains("revenue")), "the program ran on after stop");
 }
+
+/// js-debug names the breakpoint hit: one of a set other than the active one records and
+/// goes on, and switching sets turns that around from the next hit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs TUITOR_JS_ADAPTER"]
+async fn breakpoints_of_another_set_record_and_go_on() {
+    let (dir, script, adapters) = workspace("js-sets", "pwa-node");
+    let (mut engine, mut rx) =
+        Engine::new(EngineOptions { adapters, workspace: dir.path().to_path_buf(), state_file: None });
+    let rose = engine.breakpoints().active_set();
+    engine.toggle_breakpoint(&script, 77); // `revenue += total;`
+    let teal = engine.new_set().expect("set");
+    engine.toggle_breakpoint(&script, 39); // `return line.qty * line.price;`
+    engine.activate_set(rose).expect("activate");
+    let Value::Object(args) = json!({ "program": script.display().to_string(), "console": "internalConsole" }) else {
+        unreachable!()
+    };
+    let parent = engine.start(LaunchConfig::adhoc("orders", "pwa-node", RequestKind::Launch, args)).expect("start");
+    // Stopped, and the stop read.
+    let stopped = |e: &Engine| child_of(e, parent).is_some_and(|c| c.live().is_some());
+    let lines = |e: &Engine| -> Vec<(u32, bool)> {
+        let history = child_of(e, parent).map(|c| c.history.as_slice()).unwrap_or_default();
+        history.iter().map(|s| (s.top().map_or(0, |f| f.line), s.silent)).collect()
+    };
+
+    // The first order's three lines pass, then it waits after their total.
+    pump(&mut engine, &mut rx, stopped).await;
+    assert_eq!(lines(&engine), [(39, true), (39, true), (39, true), (77, false)]);
+    let cid = child_of(&engine, parent).expect("child").id;
+    assert!(engine.session(cid).expect("child").history[..3].iter().all(|s| s.set == Some(teal)));
+
+    // The other set now stops at its next hit, the second order's first line...
+    engine.activate_set(teal).expect("activate");
+    engine.resume(cid, Step::Continue).expect("continue");
+    pump(&mut engine, &mut rx, |e| stopped(e) && lines(e).len() == 5).await;
+    assert_eq!(lines(&engine)[4], (39, false));
+
+    // ...and passes its second once the first set is active again.
+    engine.activate_set(rose).expect("activate");
+    engine.resume(cid, Step::Continue).expect("continue");
+    pump(&mut engine, &mut rx, |e| stopped(e) && lines(e).len() == 7).await;
+    assert_eq!(lines(&engine)[5..], [(39, true), (77, false)]);
+
+    engine.clear_breakpoints();
+    engine.resume(cid, Step::Continue).expect("continue");
+    pump(&mut engine, &mut rx, |e| e.sessions().iter().all(|s| !s.is_alive())).await;
+    let printed = |text: &str| engine.output().iter().any(|l| l.kind == OutputKind::Stdout && l.text.contains(text));
+    assert!(printed("revenue 564.03"), "program output missing");
+    engine.shutdown().await;
+}
