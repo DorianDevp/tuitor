@@ -33,6 +33,8 @@ tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 unicode-width = "0.2"
+# compose files, read without docker; no encodings but UTF-8 needed.
+yaml-rust2 = { version = "0.13", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

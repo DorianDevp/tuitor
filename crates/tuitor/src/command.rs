@@ -121,6 +121,7 @@ pub enum Action {
     ConfigSet(Option<String>),
     ConfigUnset(Option<String>),
     ConfigMap(Option<String>),
+    ConfigCompose(Option<String>),
     ConfigAdd(Option<String>),
     ConfigDelete,
     ClearOutput,
@@ -537,6 +538,13 @@ pub static COMMANDS: &[Spec] = &[
         help: "map a path the adapter sees to one here (remote= removes it)",
         group: Group::Config,
         parse: |a| Ok(Action::ConfigMap(text(a))),
+    },
+    Spec {
+        name: "config mappings-from-compose",
+        arg: Arg::Optional("‹service›"),
+        help: "pathMappings from the bind mounts of a docker compose service (PHP's by default)",
+        group: Group::Config,
+        parse: |a| Ok(Action::ConfigCompose(text(a))),
     },
     Spec {
         name: "config add",

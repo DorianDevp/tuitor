@@ -45,6 +45,10 @@ pub const HEADER: u16 = logo::MARK_ROWS;
 
 pub fn draw(frame: &mut Frame, app: &App) {
     app.ui.animating.set(None);
+    // Soon again, to show what a compose file maps once it is read.
+    if app.compose.is_some() {
+        app.ui.animate(Duration::from_millis(100));
+    }
     let area = frame.area();
     let mut p = Painter { buf: frame.buffer_mut() };
     p.fill(area, BG);
@@ -572,6 +576,7 @@ fn hints(p: &mut Painter<'_>, app: &App, area: Rect) {
             ("open", "edit"),
             ("config add", "add"),
             ("config map", "map"),
+            ("config mappings-from-compose", "compose"),
             ("config unset", "unset"),
             ("config delete", "delete"),
             ("install", "install"),

@@ -398,6 +398,27 @@ impl Project {
         })
     }
 
+    /// Puts `mappings` (a path the adapter sees → the path here) in `pathMappings`, in one
+    /// change; mappings of other paths stay. Returns how many those are.
+    pub fn add_mappings(&mut self, store: &Store, index: usize, mappings: &[(String, PathBuf)]) -> Result<usize> {
+        let mut others = 0;
+        self.edit(store, index, |fields| {
+            let mut all = match fields.remove("pathMappings") {
+                Some(Value::Object(map)) => map,
+                _ => Map::new(),
+            };
+            others = all.keys().filter(|remote| !mappings.iter().any(|(r, _)| r == *remote)).count();
+            for (remote, local) in mappings {
+                // As breakpoints have their paths, which go through the mapping.
+                let local = std::fs::canonicalize(local).unwrap_or_else(|_| local.clone());
+                all.insert(remote.clone(), local.display().to_string().into());
+            }
+            fields.insert("pathMappings".into(), Value::Object(all));
+            Ok(())
+        })?;
+        Ok(others)
+    }
+
     /// Changes one of tuitor's own configurations, checks the result and saves it; on any
     /// error nothing changes.
     fn edit(
@@ -423,7 +444,8 @@ impl Project {
         Ok(())
     }
 
-    fn editable(&self, index: usize) -> Result<()> {
+    /// Whether configuration `index` is tuitor's own, which tuitor changes; else why not.
+    pub fn editable(&self, index: usize) -> Result<()> {
         let config = self.configurations.get(index).ok_or_else(|| anyhow!("no configuration selected"))?;
         match &config.source {
             Source::Tuitor => Ok(()),
@@ -605,6 +627,14 @@ mod tests {
 
         project.map(&store, index, "/var/www/app", "").expect("unmap");
         assert!(!project.configurations[index].fields.contains_key("pathMappings"));
+        project.map(&store, index, "/tmp/xdebug", ".").expect("map");
+        let compose = [("/app/src".to_owned(), dir.join("src")), ("/tmp/xdebug".to_owned(), dir.join("var"))];
+        assert_eq!(project.add_mappings(&store, index, &compose).expect("add"), 0);
+        project.map(&store, index, "/srv", ".").expect("map");
+        assert_eq!(project.add_mappings(&store, index, &compose[..1]).expect("add"), 2);
+        let mappings = &Project::open(&dir, &store, None).configurations[index].fields["pathMappings"];
+        assert_eq!(mappings["/tmp/xdebug"], dir.join("var").display().to_string());
+        assert_eq!(mappings.as_object().map(Map::len), Some(3));
         project.delete(&store, 1).expect("delete");
         assert_eq!(Project::open(&dir, &store, None).configurations.len(), 1);
         std::fs::remove_dir_all(dir).ok();
