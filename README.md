@@ -323,8 +323,9 @@ editor_terminal = false     # it has a window of its own; true (the default) han
 ## Why not an IDE
 
 tuitor needs a terminal and nothing else: no display server, window manager or GUI
-toolkit. It runs over SSH, in tmux, on a Linux console and inside Neovim's terminal, where
-`E` opens files in that Neovim. The release binary links only libc, libm and libgcc_s.
+toolkit, so it works wherever a terminal program does, SSH sessions and terminal
+multiplexers included. The release binary links only libc, libm and libgcc_s. Started
+inside Neovim's terminal, `E` opens files in that Neovim.
 
 It is also small. Sizes measured on 2026-10-20, x86_64 Linux (Arch), in MB of 10⁶ bytes:
 
