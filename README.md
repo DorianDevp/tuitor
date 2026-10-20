@@ -301,12 +301,20 @@ In BREAKPOINTS: `a` session/all, `e` condition, `l` logpoint, `space` on/off, `d
 In CONFIG: `enter` start or edit, `a` add, `m` map a path, `M` map a compose service's mounts,
 `u` unset a field, `d` delete, `i` install the selected configuration's adapter.
 In SOURCE: `^n` `^p` next / previous match of a search, `q` clears its highlights.
-In STACK: `v` library frames. In OUTPUT: `C` clear.
+In STACK: `v` library frames. In OUTPUT: `enter` opens the file:line of the bottom line, `C` clear.
+In EVENTS: `enter` opens the file:line of the selected line.
 In FLOW: `enter` open in CODE, `b` breakpoint where the file is entered, `v` library files.
 In OUTLINE: `enter` go to the function, `b` breakpoint on its first line.
 
 A search (`^f`) goes to the first match as it is typed; it ignores case unless it has a
 capital letter, and `enter` on an empty search repeats the last one.
+
+`enter` on a line of OUTPUT or EVENTS that names a file and a line opens it in CODE: PHP's
+`in /app/src/Order.php:12`, `Order.php(12)` and `on line 12`, Node's `at f (/w/a.js:3:9)`,
+Rust's `panicked at src/main.rs:12:5`, Go's `/w/main.go:58`. EVENTS has such a line, `at`,
+for every stop. A path of a program that runs elsewhere goes through its session's
+`pathMappings` the other way; a relative one is taken from the project, else from the
+configuration's `cwd`. In OUTPUT `k` and `j` scroll, and the bottom line is the one taken.
 
 ### Changing keys
 

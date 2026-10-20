@@ -995,6 +995,11 @@ impl Engine {
         }
 
         let location = top.map(|f| f.location()).unwrap_or_else(|| "?".into());
+        // Where it stopped, with the whole path, for EVENTS to go to.
+        let at = top.map(|f| match &f.path {
+            Some(path) => format!("{}:{} · {}", path.display(), f.line, f.name),
+            None => format!("{location} · {}", f.name),
+        });
         let reason = match stop.hits.first() {
             Some(id) => format!("breakpoint #{id}"),
             None => stop.reason.clone(),
@@ -1028,6 +1033,9 @@ impl Engine {
             live: true,
         });
         let name = session.name.clone();
+        if let Some(at) = at {
+            self.log_event(sid, "at", at);
+        }
         // Paths expanded while the stop was being read, or whose reading failed, load now.
         self.load_expanded(sid, Some(0), &[]);
         self.notice(Some(sid), Level::Info, format!("{name} stopped: {reason} at {location} · #{number}"));

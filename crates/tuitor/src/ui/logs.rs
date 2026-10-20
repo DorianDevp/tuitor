@@ -21,6 +21,10 @@ pub fn output(p: &mut Painter<'_>, tab: &Tab, area: Rect, focus: bool) {
     let start = end.saturating_sub(height);
     for (row, line) in lines.iter().skip(start).take(end - start).enumerate() {
         let y = inner.y + row as u16;
+        // The bottom line is the one `enter` and `copy` take.
+        if focus && start + row + 1 == end {
+            p.band(inner.x, y, inner.width, SEL);
+        }
         let tag = tab.engine.session(line.session).map(|s| s.tag.clone()).unwrap_or_default();
         let mut x = p.text(inner.x + 1, y, &line.time.format("%H:%M:%S%.3f ").to_string(), fg(FAINT), inner.right());
         x = p.text(x, y, &format!("{tag:<5} "), fg(super::theme::tag(&tag)), inner.right());
@@ -67,7 +71,8 @@ pub fn events(p: &mut Painter<'_>, tab: &Tab, area: Rect, focus: bool) {
         let mut x = p.text(inner.x + 1, y, &event.time.format("%H:%M:%S%.3f ").to_string(), fg(FAINT), inner.right());
         x = p.text(x, y, &format!("{tag:<5} "), fg(super::theme::tag(&tag)), inner.right());
         let name_style = match (event.name.as_str(), newest) {
-            ("stopped", true) => bold(AMBER),
+            // Where execution is: the stop, and its place.
+            ("stopped" | "at", true) => bold(AMBER),
             ("failed", _) => bold(RED),
             (_, true) => bold(FG),
             _ => fg(DIM),

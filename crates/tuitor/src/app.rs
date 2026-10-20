@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crossterm::event::KeyEvent;
+use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
 use tuitor_core::breakpoints::Toggle;
 use tuitor_core::compose;
@@ -30,6 +31,7 @@ use crate::mappings;
 use crate::model::{BpRow, ConfigRow, Shown, StackRow};
 use crate::overlay::{Finder, Overlay, Palette};
 use crate::picker::Picker;
+use crate::places;
 use crate::search::{self, Prompt, Search};
 use crate::sources::Sources;
 use crate::tab::{Tab, TabId, TabUi, Tabs, forward};
@@ -1506,6 +1508,7 @@ impl App {
                 Ok("showing the selected stop".into())
             }
             Pane::Flow => self.flow_open(),
+            Pane::Output | Pane::Events => self.open_place(),
             Pane::Outline => {
                 let tab = self.tab();
                 let path = tab.source_path().ok_or("no file in SOURCE")?;
@@ -1526,6 +1529,51 @@ impl App {
                 None => Ok(String::new()),
             },
             _ => Ok(String::new()),
+        }
+    }
+
+    /// `enter` on a line of OUTPUT or EVENTS: the file and line it names, in SOURCE. A path from
+    /// a program that runs elsewhere goes through its session's `pathMappings` the other way; a
+    /// relative one is from the project, else the configuration's `cwd`.
+    fn open_place(&mut self) -> Outcome {
+        let (place, session) = self.selected_place().ok_or("nothing selected")?;
+        let place = place.ok_or("no file:line on this line")?;
+        let tab = self.tab();
+        let config = session.and_then(|sid| tab.engine.session(tab.engine.root(sid))).map(|s| &s.config);
+        let mappings = config.and_then(|c| c.arguments.get("pathMappings")).and_then(Value::as_object);
+        let workspace = tab.engine.workspace().to_path_buf();
+        let cwd = config.and_then(|c| c.arguments.get("cwd")).and_then(Value::as_str).map(|cwd| workspace.join(cwd));
+        let dirs: Vec<PathBuf> = std::iter::once(workspace).chain(cwd).collect();
+        let path = places::here(&place.path, mappings, &dirs).ok_or_else(|| format!("{} is not here", place.path))?;
+        let shown = path.strip_prefix(&dirs[0]).unwrap_or(&path).display().to_string();
+        let printed =
+            if Path::new(&place.path) == path { String::new() } else { format!(", printed as {}", place.path) };
+        let tab = self.tab_mut();
+        tab.ui.view = View::Code;
+        tab.ui.zoom = false;
+        tab.browse(path, place.line);
+        Ok(format!("{shown}:{}{printed}", place.line))
+    }
+
+    /// The place the line under the cursor of OUTPUT or EVENTS names, if it names one, and the
+    /// session the line is from.
+    fn selected_place(&self) -> Option<(Option<places::Place>, Option<SessionId>)> {
+        let tab = self.tab();
+        match tab.focus() {
+            Pane::Output => {
+                let output = tab.engine.output();
+                let line = output.iter().nth(output.len().checked_sub(1 + tab.ui.output_back)?)?;
+                Some((places::find(&line.text), Some(line.session)))
+            }
+            Pane::Events => {
+                let event = tab.engine.events().iter().rev().nth(tab.ui.events.pos)?;
+                let place = match event.name.as_str() {
+                    "at" => places::stop(&event.detail),
+                    _ => places::find(&format!("{} {}", event.name, event.detail)),
+                };
+                Some((place, Some(event.session)))
+            }
+            _ => None,
         }
     }
 
