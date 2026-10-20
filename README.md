@@ -18,6 +18,33 @@ all of them that needs only a terminal, next to whatever editor you use.
 
 ![OVERVIEW, stopped at a breakpoint in the PHP example: SOURCE with values inline, LOCALS with ▲ deltas and the previous values, two watches with their trend](assets/screenshots/overview.png)
 
+## Why not an IDE
+
+tuitor needs a terminal and nothing else: no display server, window manager or GUI
+toolkit, so it works wherever a terminal program does, SSH sessions and terminal
+multiplexers included. The release binary links only libc, libm and libgcc_s. Started
+inside Neovim's terminal, `E` opens files in that Neovim.
+
+It is also small. Sizes measured on 2026-10-20, x86_64 Linux (Arch), in MB of 10⁶ bytes:
+
+| | version | MB |
+|---|---|---:|
+| tuitor, `cargo build --release` (x86_64-unknown-linux-gnu, symbols kept) | 0.1.0 | 10.2 |
+| tuitor, after `strip` | 0.1.0 | 8.0 |
+| vscode-php-debug, unpacked | 1.40.2 | 5.8 |
+| Xdebug, `xdebug.so` (Arch package) | 3.5.3 | 0.4 |
+| js-debug DAP server, unpacked | 1.140.0 | 2.6 |
+| Delve, `dlv` as `go install` builds it | 1.27.2 | 24.6 |
+| gdb, `/usr/bin/gdb` (Arch package) | 17.2 | 31.9 |
+| Node.js, `/usr/bin/node` (Arch package) | 26.8.1 | 63.3 |
+| VS Code, Linux x64 `.tar.gz` from code.visualstudio.com | 1.142.0 | 345.7 |
+| VS Code, unpacked | 1.142.0 | 1016.5 |
+
+Debugging PHP and JavaScript with tuitor takes 19 MB on top of Node.js, which both
+adapters run on and most development machines already have. VS Code needs the
+same adapters: its PHP Debug extension is vscode-php-debug, and its JavaScript debugger is
+js-debug (VS Code 1.142.0 ships js-debug 1.140.0).
+
 ## Install
 
 From a clone of this repository, with a stable Rust toolchain (tested with 1.96):
@@ -320,32 +347,6 @@ editor = "code --goto {file}:{line}"
 editor_terminal = false     # it has a window of its own; true (the default) hands it the terminal
 ```
 
-## Why not an IDE
-
-tuitor needs a terminal and nothing else: no display server, window manager or GUI
-toolkit, so it works wherever a terminal program does, SSH sessions and terminal
-multiplexers included. The release binary links only libc, libm and libgcc_s. Started
-inside Neovim's terminal, `E` opens files in that Neovim.
-
-It is also small. Sizes measured on 2026-10-20, x86_64 Linux (Arch), in MB of 10⁶ bytes:
-
-| | version | MB |
-|---|---|---:|
-| tuitor, `cargo build --release` (x86_64-unknown-linux-gnu, symbols kept) | 0.1.0 | 10.2 |
-| tuitor, after `strip` | 0.1.0 | 8.0 |
-| vscode-php-debug, unpacked | 1.40.2 | 5.8 |
-| Xdebug, `xdebug.so` (Arch package) | 3.5.3 | 0.4 |
-| js-debug DAP server, unpacked | 1.140.0 | 2.6 |
-| Delve, `dlv` as `go install` builds it | 1.27.2 | 24.6 |
-| gdb, `/usr/bin/gdb` (Arch package) | 17.2 | 31.9 |
-| Node.js, `/usr/bin/node` (Arch package) | 26.8.1 | 63.3 |
-| VS Code, Linux x64 `.tar.gz` from code.visualstudio.com | 1.142.0 | 345.7 |
-| VS Code, unpacked | 1.142.0 | 1016.5 |
-
-Debugging PHP and JavaScript with tuitor takes 19 MB on top of Node.js, which both
-adapters run on and most development machines already have. VS Code needs the
-same adapters: its PHP Debug extension is vscode-php-debug, and its JavaScript debugger is
-js-debug (VS Code 1.142.0 ships js-debug 1.140.0).
 
 ## Architecture
 
