@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use tuitor_core::breakpoints::{BreakpointId, Breakpoints};
+use tuitor_core::config::project_relative;
 
 use crate::callpaths::Paths;
 use crate::command::{self, Arg, COMMANDS, Group, Spec};
@@ -184,10 +185,7 @@ impl Finder {
 
         let labels: Vec<(BreakpointId, String)> = breakpoints
             .iter()
-            .map(|b| {
-                let rel = b.path.strip_prefix(workspace).unwrap_or(&b.path);
-                (b.id, format!("{}:{}", rel.display(), b.line))
-            })
+            .map(|b| (b.id, format!("{}:{}", project_relative(&b.path, workspace), b.line)))
             .collect();
 
         if text.is_empty() {

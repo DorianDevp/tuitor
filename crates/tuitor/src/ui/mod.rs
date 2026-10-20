@@ -29,6 +29,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 use tuitor_core::Level;
+use tuitor_core::config::project_relative;
 use tuitor_core::session::SessionState;
 use unicode_width::UnicodeWidthStr;
 
@@ -526,12 +527,11 @@ fn context(p: &mut Painter<'_>, app: &App, area: Rect) {
         }
     }
     if let Some(path) = &tab.ui.source.browse {
-        let rel = path.strip_prefix(tab.engine.workspace()).unwrap_or(path);
         if !segs.is_empty() {
             segs.push(sep());
         }
         segs.push(seg("browsing ", fg(FAINT)));
-        segs.push(seg(rel.display().to_string(), fg(FG)));
+        segs.push(seg(project_relative(path, tab.engine.workspace()), fg(FG)));
         segs.push(seg("  . follows execution", fg(GHOST)));
     }
     p.segs(x, y, &segs, right);

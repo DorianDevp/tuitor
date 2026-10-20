@@ -1,5 +1,9 @@
+use std::borrow::Cow;
+use std::path::Path;
+
 use ratatui::layout::Rect;
-use tuitor_core::log::OutputKind;
+use tuitor_core::config::project_relative;
+use tuitor_core::log::{EventLine, OutputKind};
 
 use super::paint::{Painter, Panel, seg, truncate};
 use super::theme::*;
@@ -79,6 +83,40 @@ pub fn events(p: &mut Painter<'_>, tab: &Tab, area: Rect, focus: bool) {
         };
         let name = truncate(&event.name, EVENT_NAME);
         x = p.text(x, y, &format!("{name:<EVENT_NAME$} "), name_style, inner.right());
-        p.text(x, y, &event.detail, fg(if newest { FG } else { DIM }), inner.right());
+        p.text(x, y, &detail(event, tab.engine.workspace()), fg(if newest { FG } else { DIM }), inner.right());
+    }
+}
+
+/// An event's detail as EVENTS shows it: the place of a stop with its path from the project,
+/// or from the home directory. `enter` goes by the whole path, which the event keeps.
+fn detail<'a>(event: &'a EventLine, project: &Path) -> Cow<'a, str> {
+    if event.name == "at"
+        && let Some(place) = crate::places::stop(&event.detail)
+        && let Some(rest) = event.detail.strip_prefix(place.path.as_str())
+    {
+        return Cow::Owned(format!("{}{rest}", project_relative(Path::new(&place.path), project)));
+    }
+    Cow::Borrowed(&event.detail)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event(name: &str, detail: &str) -> EventLine {
+        EventLine { time: chrono::Local::now(), session: 1, name: name.into(), detail: detail.into() }
+    }
+
+    #[test]
+    fn a_stop_is_at_a_path_from_the_project() {
+        let project = Path::new("/tmp/tmp.olQZlu8JqT/home/tuitor/examples/php-paths");
+        let at = event("at", "/tmp/tmp.olQZlu8JqT/home/tuitor/examples/php-paths/src/My Shop/Order.php:23 · total");
+        assert_eq!(detail(&at, project), "src/My Shop/Order.php:23 · total");
+        let elsewhere = event("at", "/var/www/app/src/Order.php:23 · App\\Order->total");
+        assert_eq!(detail(&elsewhere, project), "/var/www/app/src/Order.php:23 · App\\Order->total");
+        let no_path = event("at", "orders.c:48 · order_total");
+        assert_eq!(detail(&no_path, project), "orders.c:48 · order_total");
+        let stopped = event("stopped", "breakpoint");
+        assert_eq!(detail(&stopped, project), "breakpoint");
     }
 }

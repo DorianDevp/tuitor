@@ -2,7 +2,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use tuitor_core::Engine;
 use tuitor_core::breakpoints::{Breakpoint, Breakpoints, SetId};
-use tuitor_core::config::home_relative;
+use tuitor_core::config::{home_relative, project_relative};
 
 use super::paint::{Painter, Panel, Seg, seg, truncate_left};
 use super::theme::*;
@@ -77,11 +77,8 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool)
                 }
                 let active = owner_tab.engine.breakpoints().active_set();
                 p.segs(inner.x + 1, y, &marks(bp, active, here), inner.right());
-                let path = if wide {
-                    bp.path.strip_prefix(owner_tab.engine.workspace()).unwrap_or(&bp.path).display().to_string()
-                } else {
-                    file_name(&bp.path)
-                };
+                let path =
+                    if wide { project_relative(&bp.path, owner_tab.engine.workspace()) } else { file_name(&bp.path) };
                 let location = format!("{path}:{}", bp.line);
                 let loc_style = if !bp.enabled {
                     fg(GHOST)

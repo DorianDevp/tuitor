@@ -5,7 +5,7 @@ use std::time::Duration;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use tuitor_core::breakpoints::Breakpoint;
-use tuitor_core::config::home_relative;
+use tuitor_core::config::{home_relative, project_relative};
 use tuitor_core::session::{SessionState, SourceText};
 use tuitor_core::snapshot::{Change, Frame};
 use unicode_width::UnicodeWidthChar;
@@ -38,7 +38,7 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
     let sub_width = usize::from(area.width / 2);
     let sub = match &shown {
         Some(Shown::File(path)) => {
-            let rel = path.strip_prefix(tab.engine.workspace()).unwrap_or(path).display().to_string();
+            let rel = project_relative(path, tab.engine.workspace());
             vec![seg(truncate_left(&rel, sub_width).into_owned(), fg(DIM))]
         }
         Some(Shown::Adapter { name, .. }) => {
@@ -260,7 +260,7 @@ fn unavailable(app: &App, shown: &Shown) -> Vec<Vec<Seg<'static>>> {
             let config =
                 app.keymap.key_for(tab.focus().name(), "view config").map(|k| format!(" ({k})")).unwrap_or_default();
             vec![
-                line(format!("not on this machine: {}", path.display()), DIM),
+                line(format!("not on this machine: {}", project_relative(path, project)), DIM),
                 line("The program runs elsewhere, in a container or on another host, where its".into(), FAINT),
                 line(format!("files have other paths. Map them to this project in CONFIG{config}:"), FAINT),
                 vec![seg("    ", fg(FAINT)), seg(map, bold(FG))],
@@ -268,7 +268,7 @@ fn unavailable(app: &App, shown: &Shown) -> Vec<Vec<Seg<'static>>> {
         }
         Shown::File(path) => {
             let err = std::fs::read(path).err().map(|e| format!(": {e}")).unwrap_or_default();
-            vec![line(format!("cannot read {}{err}", path.display()), DIM)]
+            vec![line(format!("cannot read {}{err}", project_relative(path, tab.engine.workspace())), DIM)]
         }
     }
 }
