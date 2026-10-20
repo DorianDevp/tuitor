@@ -101,8 +101,17 @@ impl Frame {
 
 /// Paths that look like dependencies rather than the user's code.
 pub fn is_library_path(path: &std::path::Path) -> bool {
-    const MARKERS: &[&str] =
-        &["/vendor/", "/node_modules/", "/.cargo/registry/", "/rustc/", "/usr/include/", "/usr/lib/"];
+    // Rust's standard library is under /rustc/ in its debug info, and in the toolchain
+    // (lib/rustlib/src) where rustup installed its sources.
+    const MARKERS: &[&str] = &[
+        "/vendor/",
+        "/node_modules/",
+        "/.cargo/registry/",
+        "/rustc/",
+        "/lib/rustlib/src/",
+        "/usr/include/",
+        "/usr/lib/",
+    ];
     let path = path.to_string_lossy();
     MARKERS.iter().any(|m| path.contains(m))
 }
