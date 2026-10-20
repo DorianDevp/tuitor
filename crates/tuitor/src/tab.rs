@@ -14,6 +14,7 @@ use tuitor_core::{Engine, EngineMsg, EngineOptions, persist};
 
 use crate::app::Pane;
 use crate::command::{BpScope, View};
+use crate::flow::{FlowState, Item, executing};
 
 pub type TabId = u32;
 
@@ -196,6 +197,13 @@ pub struct TabUi {
     pub config: Cursor,
     /// The configuration CONFIG shows the fields of; `S` starts it.
     pub config_sel: usize,
+    /// The line of FLOW under the cursor, once moved; see [`Tab::flow_cursor`].
+    pub flow: Cursor,
+    /// FLOW's cursor is on the file where execution is, until it is moved.
+    pub flow_follow: bool,
+    /// FLOW lists library files one by one instead of one line per package.
+    pub flow_vendor: bool,
+    pub outline: Cursor,
     pub(crate) seen_stops: HashMap<SessionId, usize>,
 }
 
@@ -219,6 +227,10 @@ impl Default for TabUi {
             history_col: 0,
             config: Cursor::default(),
             config_sel: 0,
+            flow: Cursor::default(),
+            flow_follow: true,
+            flow_vendor: false,
+            outline: Cursor::default(),
             seen_stops: HashMap::new(),
         }
     }
@@ -233,13 +245,14 @@ pub struct Tab {
     pub ui: TabUi,
     /// Files for the finder, listed on first use.
     pub files: Option<Vec<String>>,
+    pub flows: FlowState,
 }
 
 impl Tab {
     pub fn empty(adapters: &Adapters) -> Tab {
         let options = EngineOptions { adapters: adapters.clone(), workspace: PathBuf::new(), state_file: None };
         let (engine, _) = Engine::new(options);
-        Tab { project: None, engine, ui: TabUi::default(), files: None }
+        Tab { project: None, engine, ui: TabUi::default(), files: None, flows: FlowState::default() }
     }
 
     /// A tab for `project`, and the channel its engine reports on.
@@ -249,7 +262,16 @@ impl Tab {
             workspace: project.dir.clone(),
             state_file: persist::state_file(&project.dir),
         });
-        (Tab { project: Some(project), engine, ui: TabUi::default(), files: None }, rx)
+        let flows = FlowState::open(&project.dir);
+        (Tab { project: Some(project), engine, ui: TabUi::default(), files: None, flows }, rx)
+    }
+
+    /// The line of FLOW under the cursor among `items`: the file where execution is until
+    /// the cursor is moved.
+    pub fn flow_cursor(&self, items: &[Item]) -> usize {
+        let flow = self.flow();
+        let followed = flow.as_ref().filter(|_| self.ui.flow_follow).and_then(|view| executing(&view.flow, items));
+        followed.unwrap_or(self.ui.flow.pos).min(items.len().saturating_sub(1))
     }
 
     /// The project's directory name; tabs are told apart by it.

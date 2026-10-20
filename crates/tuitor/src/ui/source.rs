@@ -93,6 +93,10 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
         Shown::File(path) => Lang::from_path(path),
         Shown::Adapter { session, name, .. } => adapter_lang(tab, *session, name),
     };
+    // Lines a stop or the trace reached, as FLOW knows them.
+    let flow = tab.flow();
+    let reached = flow.as_ref().zip(file_path.as_deref()).and_then(|(view, path)| view.flow.row(path));
+    let reached = reached.map(|row| &row.lines);
     let browsing = tab.ui.source.browse.is_some() || focus;
 
     for row in 0..height {
@@ -122,6 +126,8 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
         if let Some(bp) = breakpoints.get(&n) {
             let (glyph, color) = marker(bp, hit.contains(&bp.id));
             p.text(x, y, glyph, bold(color), inner.right());
+        } else if reached.is_some_and(|lines| lines.contains_key(&n)) {
+            p.text(x, y, "│", fg(GHOST), inner.right());
         }
         let number_style = if is_exec {
             bold(if exec_is_top && !in_history { AMBER } else { DIM })

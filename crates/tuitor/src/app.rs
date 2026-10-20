@@ -10,6 +10,7 @@ use crossterm::event::KeyEvent;
 use tokio::sync::mpsc::UnboundedSender;
 use tuitor_core::breakpoints::Toggle;
 use tuitor_core::config::{Adapters, LaunchConfig, home_relative};
+use tuitor_core::flow::Row;
 use tuitor_core::project::{Project, parse_value};
 use tuitor_core::session::SessionId;
 use tuitor_core::store::Store;
@@ -18,6 +19,7 @@ use tuitor_core::{Engine, EngineMsg, Level, Step, persist};
 use crate::clipboard;
 use crate::command::{self, Action, Arg, BpScope, Location, View};
 use crate::editor::{Editor, Settings};
+use crate::flow::{Item, first_symbol, items};
 use crate::keymap::{self, Key, Keymap, Lookup};
 use crate::model::{BpRow, ConfigRow, Shown, StackRow};
 use crate::overlay::{Finder, Overlay, Palette};
@@ -36,6 +38,8 @@ pub enum Pane {
     Events,
     History,
     Config,
+    Flow,
+    Outline,
 }
 
 impl Pane {
@@ -50,6 +54,8 @@ impl Pane {
             Pane::Events => "events",
             Pane::History => "history",
             Pane::Config => "config",
+            Pane::Flow => "flow",
+            Pane::Outline => "outline",
         }
     }
 }
@@ -58,8 +64,9 @@ pub fn panes(view: View) -> &'static [Pane] {
     use Pane::*;
     match view {
         View::Overview => &[Source, Locals, Stack, Watch, Breakpoints, Output, Events],
-        View::Code => &[Source, Stack, Breakpoints],
+        View::Code => &[Source, Stack, Breakpoints, Flow, Outline],
         View::History => &[History, Locals],
+        View::Flow => &[Flow],
         View::Project => &[Breakpoints, Config],
     }
 }
@@ -612,6 +619,11 @@ impl App {
                 self.tab_mut().jump_to_execution();
                 Ok("following execution".into())
             }
+            Action::Vendor if self.focus() == Pane::Flow => {
+                let ui = &mut self.tab_mut().ui;
+                ui.flow_vendor = !ui.flow_vendor;
+                Ok(if ui.flow_vendor { "library files one by one" } else { "library files by package" }.into())
+            }
             Action::Vendor => {
                 let tab = self.tab_mut();
                 tab.ui.show_vendor = !tab.ui.show_vendor;
@@ -830,10 +842,22 @@ impl App {
     }
 
     fn bp_toggle(&mut self, location: Option<Location>) -> Outcome {
+        let tab = self.tab();
         let (path, line) = match location {
             Some(Location { file: Some(file), line }) => (self.resolve_file(&file)?, line),
             Some(Location { file: None, line }) => (self.breakpoint_file()?, line),
-            None => (self.breakpoint_file()?, self.tab().ui.source.cursor.max(1)),
+            None if tab.focus() == Pane::Flow => {
+                let row = self.flow_file()?;
+                let line = self.flow_entry(&row);
+                (row.path, line)
+            }
+            None if tab.focus() == Pane::Outline => {
+                let path = tab.source_path().ok_or("no file in SOURCE")?;
+                let source = self.sources.borrow_mut().get(&path).ok_or("cannot read the file")?;
+                let symbol = source.outline().get(tab.ui.outline.pos).ok_or("no function selected")?;
+                (path, crate::outline::body_start(&source.lines, source.lang(), symbol))
+            }
+            None => (self.breakpoint_file()?, tab.ui.source.cursor.max(1)),
         };
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         Ok(match self.tab_mut().engine.toggle_breakpoint(&path, line) {
@@ -1000,6 +1024,12 @@ impl App {
                 let len = tab.engine.events().len();
                 tab.ui.events.move_by(delta, len);
             }
+            Pane::Flow => self.flow_move(delta),
+            Pane::Outline => {
+                let path = self.tab().source_path();
+                let len = path.and_then(|p| self.sources.borrow_mut().get(&p)).map_or(0, |f| f.outline().len());
+                self.tab_mut().ui.outline.move_by(delta, len);
+            }
             Pane::Config => {
                 let tab = self.tab_mut();
                 let rows = tab.config_rows();
@@ -1101,6 +1131,15 @@ impl App {
                 tab.jump_to_execution();
                 Ok("showing the selected stop".into())
             }
+            Pane::Flow => self.flow_open(),
+            Pane::Outline => {
+                let tab = self.tab();
+                let path = tab.source_path().ok_or("no file in SOURCE")?;
+                let source = self.sources.borrow_mut().get(&path).ok_or("cannot read the file")?;
+                let symbol = source.outline().get(tab.ui.outline.pos).cloned().ok_or("no function selected")?;
+                self.tab_mut().browse(path, symbol.line);
+                Ok(String::new())
+            }
             // A configuration starts; a field or mapping goes to the palette to be edited.
             Pane::Config => match self.tab().config_row() {
                 Some(ConfigRow::Configuration(index)) => self.start_configuration(index),
@@ -1180,6 +1219,86 @@ impl App {
         }
     }
 
+    /// The file under the FLOW cursor; for a line of library files, the first of them.
+    pub fn flow_row(&self) -> Option<Row> {
+        let tab = self.tab();
+        let view = tab.flow()?;
+        let items = items(&view.flow, tab.ui.flow_vendor);
+        let item = items.get(tab.flow_cursor(&items))?;
+        Some(view.flow.rows[*item.rows().first()?].clone())
+    }
+
+    /// The file under the FLOW cursor, when it is one here: js-debug names Node's internals
+    /// `<node_internals>/…`, which only the adapter has.
+    fn flow_file(&self) -> Result<Row, Refusal> {
+        let row = self.flow_row().ok_or("no file selected in FLOW")?;
+        if !row.path.is_file() {
+            return Err(format!("{} is no file here; STACK shows the adapter's source", row.path.display()).into());
+        }
+        Ok(row)
+    }
+
+    /// Where a breakpoint on entering the file of `row` goes: the first line of the body of
+    /// the first function seen in it, as OUTLINE finds it, else the first line reached.
+    pub fn flow_entry(&self, row: &Row) -> u32 {
+        let source = self.sources.borrow_mut().get(&row.path);
+        let entry = source.as_ref().and_then(|source| {
+            let symbol = first_symbol(row, source.outline())?;
+            Some(crate::outline::body_start(&source.lines, source.lang(), symbol))
+        });
+        entry.or_else(|| row.lines.keys().next().copied()).unwrap_or(1)
+    }
+
+    /// Moves FLOW's cursor; in CODE, SOURCE shows the file it lands on.
+    fn flow_move(&mut self, delta: isize) {
+        let tab = self.tab();
+        let Some(view) = tab.flow() else { return };
+        let items = items(&view.flow, tab.ui.flow_vendor);
+        let from = tab.flow_cursor(&items);
+        let ui = &mut self.tab_mut().ui;
+        ui.flow_follow = false;
+        ui.flow.pos = from;
+        ui.flow.move_by(delta, items.len());
+        if ui.view == View::Code
+            && let Some(row) = self.flow_row()
+        {
+            let line = row.stack_line.unwrap_or_else(|| self.flow_entry(&row));
+            let source = &mut self.tab_mut().ui.source;
+            source.browse = Some(row.path);
+            source.cursor = line;
+            source.recenter.set(true);
+        }
+    }
+
+    /// `enter` in FLOW: a line of library files opens up; a file opens in CODE where the
+    /// stack is in it, else where it is entered.
+    fn flow_open(&mut self) -> Outcome {
+        let tab = self.tab();
+        let view = tab.flow().ok_or("nothing in FLOW yet")?;
+        let items = items(&view.flow, tab.ui.flow_vendor);
+        match items.get(tab.flow_cursor(&items)) {
+            Some(Item::Library { rows, .. }) => {
+                let first = rows[0];
+                let ui = &mut self.tab_mut().ui;
+                ui.flow_vendor = true;
+                ui.flow_follow = false;
+                // Every file is a line of its own now, so the row is the line.
+                ui.flow.pos = first;
+                Ok("library files one by one".into())
+            }
+            Some(Item::File(_)) => {
+                let row = self.flow_file()?;
+                let line = row.stack_line.unwrap_or_else(|| self.flow_entry(&row));
+                let tab = self.tab_mut();
+                tab.ui.view = View::Code;
+                tab.ui.zoom = false;
+                tab.browse(row.path, line);
+                Ok(String::new())
+            }
+            None => Err("nothing selected".into()),
+        }
+    }
+
     fn resolve_file(&self, file: &str) -> Result<PathBuf, String> {
         let path = Path::new(file);
         let path = if path.is_absolute() { path.to_path_buf() } else { self.tab().engine.workspace().join(path) };
@@ -1231,6 +1350,7 @@ impl Tab {
     /// stopped too, and SOURCE goes to where it stopped. A session started from a
     /// configuration gives way to the child its adapter runs the program in, once there is one.
     pub fn follow_stops(&mut self) {
+        self.flows.record(self.engine.sessions());
         let mut newest: Option<SessionId> = None;
         for session in self.engine.sessions() {
             let seen = self.ui.seen_stops.entry(session.id).or_default();
@@ -1250,6 +1370,7 @@ impl Tab {
             if self.ui.session == Some(sid) {
                 self.ui.viewing.remove(&sid);
                 self.ui.stack.pos = 0;
+                self.ui.flow_follow = true;
                 self.jump_to_execution();
             }
         }

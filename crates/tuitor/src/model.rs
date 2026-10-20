@@ -426,6 +426,11 @@ impl App {
                 tab.engine.output().iter().nth(index).map(|l| l.text.clone())
             }
             Pane::Config => tab.config_text(&tab.config_row()?),
+            Pane::Flow => Some(self.flow_row()?.path.display().to_string()),
+            Pane::Outline => {
+                let source = self.sources.borrow_mut().get(&tab.source_path()?)?;
+                source.outline().get(tab.ui.outline.pos).map(|s| s.name.clone())
+            }
             Pane::Events | Pane::History => None,
         }
     }
@@ -522,7 +527,9 @@ pub fn package_of(path: &std::path::Path) -> String {
             Some(rest.split('/').take(parts).collect::<Vec<_>>().join("/"))
         })
         .or_else(|| after("/.cargo/registry/src/", 2).map(|p| p.split('/').nth(1).unwrap_or(&p).to_owned()))
-        .or_else(|| text.contains("/rustc/").then(|| "std".to_owned()))
+        .or_else(|| (text.contains("/rustc/") || text.contains("/lib/rustlib/src/")).then(|| "std".to_owned()))
+        // Node's own modules, as js-debug names them (`<node_internals>/internal/modules/run_main`).
+        .or_else(|| text.starts_with("<node_internals>").then(|| "node".to_owned()))
         .unwrap_or_else(|| "library".to_owned())
 }
 
@@ -549,6 +556,10 @@ mod tests {
         assert_eq!(package_of(Path::new("/app/vendor/symfony/http-kernel/HttpKernel.php")), "symfony/http-kernel");
         assert_eq!(package_of(Path::new("/w/node_modules/@angular/core/fesm.js")), "@angular/core");
         assert_eq!(package_of(Path::new("/w/node_modules/zone.js/dist/zone.js")), "zone.js");
+        let rust_src =
+            "/h/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/iter/mod.rs";
+        assert_eq!(package_of(Path::new(rust_src)), "std");
+        assert_eq!(package_of(Path::new("<node_internals>/internal/modules/cjs/loader")), "node");
         assert_eq!(
             package_of(Path::new("/h/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.40.0/src/rt.rs")),
             "tokio-1.40.0"

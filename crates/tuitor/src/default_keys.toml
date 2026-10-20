@@ -48,6 +48,7 @@ S = "config start"
 "g o" = "view overview"
 "g c" = "view code"
 "g h" = "view history"
+"g f" = "view flow"
 "g p" = "view config"
 "g b" = "view breakpoints"
 B = "view breakpoints"
@@ -80,6 +81,9 @@ space = "bp enable"
 d = "watch delete"
 
 [pane.stack]
+v = "vendor"
+
+[pane.flow]
 v = "vendor"
 
 [pane.output]

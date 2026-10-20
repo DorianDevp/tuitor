@@ -3,10 +3,12 @@
 
 mod breakpoints;
 mod config;
+mod flow;
 mod history;
 mod locals;
 mod logo;
 mod logs;
+mod outline;
 mod overlays;
 pub mod paint;
 mod source;
@@ -59,6 +61,12 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if tab.ui.view == View::History && !tab.ui.zoom {
         history::value(&mut p, tab, history_value_area(body));
     }
+    if tab.ui.view == View::Flow && !tab.ui.zoom {
+        let below = flow_detail_area(app, body);
+        let half = pct(below.width, 55);
+        flow::detail(&mut p, app, Rect::new(below.x, below.y, half, below.height));
+        flow::evidence(&mut p, app, Rect::new(below.x + half, below.y, below.width - half, below.height));
+    }
     status(&mut p, app, Rect::new(0, area.height - 2, area.width, 1));
     hints(&mut p, app, Rect::new(0, area.height - 1, area.width, 1));
 
@@ -83,6 +91,8 @@ fn draw_pane(p: &mut Painter<'_>, app: &App, pane: Pane, area: Rect) {
         Pane::Events => logs::events(p, tab, area, focus),
         Pane::History => history::table(p, tab, area, focus),
         Pane::Config => config::draw(p, app, area, focus),
+        Pane::Flow => flow::draw(p, app, area, focus),
+        Pane::Outline => outline::draw(p, app, area, focus),
     }
 }
 
@@ -117,14 +127,21 @@ fn layout(app: &App, body: Rect) -> Vec<(Pane, Rect)> {
             ]
         }
         View::Code => {
-            let lw = pct(w, 68);
+            // FLOW and OUTLINE on the left, SOURCE, then STACK and BREAKPOINTS.
+            let side = (w / 5).clamp(22, 34);
+            let right = pct(w, 28);
+            let lw = w - side - right;
             let stack_h = pct(h, 55);
+            let flow_h = pct(h, 45);
             vec![
-                (Pane::Source, Rect::new(x, y, lw, h)),
-                (Pane::Stack, Rect::new(x + lw, y, w - lw, stack_h)),
-                (Pane::Breakpoints, Rect::new(x + lw, y + stack_h, w - lw, h - stack_h)),
+                (Pane::Source, Rect::new(x + side, y, lw, h)),
+                (Pane::Stack, Rect::new(x + side + lw, y, right, stack_h)),
+                (Pane::Breakpoints, Rect::new(x + side + lw, y + stack_h, right, h - stack_h)),
+                (Pane::Flow, Rect::new(x, y, side, flow_h)),
+                (Pane::Outline, Rect::new(x, y + flow_h, side, h - flow_h)),
             ]
         }
+        View::Flow => vec![(Pane::Flow, Rect::new(x, y, w, flow_height(app, h)))],
         View::History => {
             let table_h = pct(h, 48).max(8);
             let half = w / 2;
@@ -138,6 +155,20 @@ fn layout(app: &App, body: Rect) -> Vec<(Pane, Rect)> {
             vec![(Pane::Breakpoints, Rect::new(x, y, lw, h)), (Pane::Config, Rect::new(x + lw, y, w - lw, h))]
         }
     }
+}
+
+/// FLOW gets a line per file, with its axis and legend, and leaves the rest of the
+/// body to the selected file and the evidence.
+fn flow_height(app: &App, height: u16) -> u16 {
+    let tab = app.tab();
+    let lines = tab.flow().map_or(0, |view| crate::flow::items(&view.flow, tab.ui.flow_vendor).len());
+    let wanted = u16::try_from(lines).unwrap_or(u16::MAX).saturating_add(6);
+    wanted.clamp(height.min(12), height * 3 / 5)
+}
+
+fn flow_detail_area(app: &App, body: Rect) -> Rect {
+    let top = flow_height(app, body.height);
+    Rect::new(body.x, body.y + top, body.width, body.height - top)
 }
 
 fn history_value_area(body: Rect) -> Rect {
@@ -538,6 +569,8 @@ fn hints(p: &mut Painter<'_>, app: &App, area: Rect) {
         ],
         Pane::Events => &[],
         Pane::History => &[("open", "open stop"), ("right", "column")],
+        Pane::Flow => &[("open", "open in code"), ("bp toggle", "bp on entry"), ("vendor", "library files")],
+        Pane::Outline => &[("open", "jump"), ("bp toggle", "bp on entry")],
     };
     let common: &[(&str, &str)] = &[
         ("continue", "continue"),
