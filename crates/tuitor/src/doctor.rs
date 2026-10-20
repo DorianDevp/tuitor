@@ -22,6 +22,8 @@ pub fn fix_text(fix: &Fix, in_tuitor: bool) -> String {
         Fix::Shell(command) | Fix::Text(command) => command.clone(),
         Fix::Command(line) if in_tuitor => format!("/{line}"),
         Fix::Command(line) => format!("in tuitor's CONFIG: /{line}"),
+        Fix::Install(package) if in_tuitor => format!("/install {package}"),
+        Fix::Install(package) => format!("tuitor install {package}"),
     }
 }
 
@@ -80,9 +82,11 @@ impl Doctor {
         let Some(rx) = &self.pending else { return };
         match rx.try_recv() {
             Ok(report) => {
-                // The first problem is what to look at first.
-                let findings = report.sections.iter().flat_map(|s| &s.findings);
-                self.selected = findings.clone().position(|f| f.status == Status::Problem).unwrap_or(0);
+                // What to look at first: the first problem in the way, else the first at all.
+                let findings = report.sections.iter().flat_map(|s| s.findings.iter().map(move |f| (s.needed, f)));
+                let problem =
+                    |needed: bool| findings.clone().position(|(n, f)| f.status == Status::Problem && (n || !needed));
+                self.selected = problem(true).or_else(|| problem(false)).unwrap_or(0);
                 self.report = Some(report);
                 self.pending = None;
             }

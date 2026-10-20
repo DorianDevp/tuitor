@@ -92,6 +92,7 @@ C = "clear output"
 
 [pane.config]
 a = "config add"
+i = "install"
 m = "config map"
 u = "config unset"
 d = "config delete"

@@ -27,6 +27,7 @@ tuitor listen --port 9003 --map /var/www/app=./api   # PHP, no configuration nee
 tuitor exec ./target/debug/app -- --flag              # native program through gdb
 tuitor configs                 # what tuitor sees: projects, configurations and adapters
 tuitor doctor                  # what debugging needs here, and what is missing
+tuitor install php             # an adapter from its official release, after asking
 ```
 
 `-C <dir>` sets the project directory (default: the current directory) and
@@ -281,7 +282,8 @@ Every key runs a command; `/` opens the command line with the same commands and
 | `E` | open the SOURCE line or the selected breakpoint in your editor | | `!` | doctor: what debugging needs here |
 
 In BREAKPOINTS: `a` session/all, `e` condition, `l` logpoint, `space` on/off, `d` delete.
-In CONFIG: `enter` start or edit, `a` add, `m` map a path, `u` unset a field, `d` delete.
+In CONFIG: `enter` start or edit, `a` add, `m` map a path, `u` unset a field, `d` delete,
+`i` install the selected configuration's adapter.
 In STACK: `v` library frames. In OUTPUT: `C` clear.
 In FLOW: `enter` open in CODE, `b` breakpoint where the file is entered, `v` library files.
 In OUTLINE: `enter` go to the function, `b` breakpoint on its first line.
@@ -428,7 +430,17 @@ signal tuitor alone, which then ends them in that order.
 
 ### Installing adapters
 
-Each from where its authors publish it.
+Each from where its authors publish it. `tuitor install <adapter>` (`/install`,
+or `i` on a configuration in CONFIG) does what this section describes: it says
+what it downloads from where into which directory, asks, downloads the release
+with curl, unpacks it beside the installation and puts it in its place only
+once it is complete, then checks that the adapter finds what it runs; closed
+while it runs, INSTALL lets it go on and the status line says how it went. The
+adapter is a type (`php`, `pwa-node`, `pwa-chrome`, `lldb`, `go`) or a name
+(`vscode-php-debug`, `js-debug`, `codelldb`, `delve`); `--version` installs
+another release than the one below. Delve it installs with the `go install`
+below, after asking. gdb, LLDB and Xdebug come with your distribution: tuitor
+names the package and does not install it, as that takes root.
 
 **PHP** needs three things:
 
@@ -463,9 +475,10 @@ archive from [LLVM's releases](https://github.com/llvm/llvm-project/releases)
 [GitHub releases](https://github.com/vadimcn/codelldb/releases):
 
 ```sh
+v=1.12.3    # or a newer release
 dir="${XDG_DATA_HOME:-$HOME/.local/share}/tuitor/adapters/codelldb"
 rm -rf "$dir" && mkdir -p "$dir"
-curl -fL -o "$dir/codelldb.vsix" https://github.com/vadimcn/codelldb/releases/latest/download/codelldb-linux-x64.vsix
+curl -fL -o "$dir/codelldb.vsix" "https://github.com/vadimcn/codelldb/releases/download/v$v/codelldb-linux-x64.vsix"
 unzip -q "$dir/codelldb.vsix" -d "$dir" && rm "$dir/codelldb.vsix"
 ```
 

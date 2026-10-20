@@ -12,6 +12,7 @@ use tuitor_core::breakpoints::Toggle;
 use tuitor_core::config::{Adapters, LaunchConfig, home_relative};
 use tuitor_core::doctor::{Fix, Options, ProjectInput, listen_port};
 use tuitor_core::flow::Row;
+use tuitor_core::install::{self, Package};
 use tuitor_core::project::{Project, parse_value};
 use tuitor_core::session::SessionId;
 use tuitor_core::store::Store;
@@ -22,6 +23,7 @@ use crate::command::{self, Action, Arg, BpScope, Location, View};
 use crate::doctor::Doctor;
 use crate::editor::{Editor, Settings};
 use crate::flow::{Item, first_symbol, items};
+use crate::installer::{Installer, State as Installing};
 use crate::keymap::{self, Key, Keymap, Lookup};
 use crate::model::{BpRow, ConfigRow, Shown, StackRow};
 use crate::overlay::{Finder, Overlay, Palette};
@@ -120,6 +122,8 @@ pub struct App {
     inbox: UnboundedSender<(TabId, EngineMsg)>,
     pub quit: bool,
     pub headless: bool,
+    /// The installation INSTALL shows; it goes on with INSTALL closed.
+    pub installer: Option<Installer>,
 }
 
 /// Why a command did not happen: an error, or a warning that asks for something first.
@@ -182,6 +186,7 @@ impl App {
             inbox,
             quit: false,
             headless: false,
+            installer: None,
         }
     }
 
@@ -321,6 +326,9 @@ impl App {
     fn overlay_key(&mut self, key: Key) {
         let Some(overlay) = self.ui.overlay.as_mut() else { return };
         if key.is("esc") || key.is("ctrl-c") {
+            if let Overlay::Install = overlay {
+                return self.close_installer();
+            }
             self.ui.overlay = None;
             return;
         }
@@ -395,6 +403,7 @@ impl App {
                     self.ui.overlay = None;
                 }
             }
+            Overlay::Install => self.installer_key(key),
             Overlay::Picker(picker) => {
                 if key.is("enter") {
                     // When nothing matches, opening what was typed says why it cannot be opened.
@@ -418,10 +427,52 @@ impl App {
         }
     }
 
-    /// Takes in what finished in the background: DOCTOR's checks.
+    /// A key in INSTALL: `y` installs, `n` closes; `enter` copies the command of a package of
+    /// the distribution, and closes once done.
+    fn installer_key(&mut self, key: Key) {
+        let Some(installer) = self.installer.as_mut() else {
+            self.ui.overlay = None;
+            return;
+        };
+        if key.is("y") {
+            installer.start();
+        } else if key.is("n") || key.is("q") {
+            self.close_installer();
+        } else if key.is("enter") {
+            match (&installer.plan, &installer.state) {
+                (install::Plan::Distro { command, .. }, _) => {
+                    let command = command.clone();
+                    self.copy_command(&command, "/install");
+                }
+                (_, Installing::Done(_)) => self.close_installer(),
+                _ => {}
+            }
+        }
+    }
+
+    /// Closes INSTALL; an installation that runs goes on, and says how it went when done.
+    fn close_installer(&mut self) {
+        self.ui.overlay = None;
+        if !self.installer.as_ref().is_some_and(Installer::running) {
+            self.installer = None;
+        }
+    }
+
+    /// Takes in what finished in the background: DOCTOR's checks, INSTALL's steps.
     pub fn poll(&mut self) {
+        let cwd = self.base_dir();
         if let Some(Overlay::Doctor(doctor)) = &mut self.ui.overlay {
             doctor.poll();
+        }
+        let Some(installer) = &mut self.installer else { return };
+        installer.poll(&self.adapters, &cwd);
+        // Done with INSTALL closed: the status line says how it went.
+        if !matches!(self.ui.overlay, Some(Overlay::Install))
+            && let Some((message, ok)) = installer.outcome()
+        {
+            let level = if ok { Level::Info } else { Level::Error };
+            self.ui.status = Some(Status { key: None, command: Some("/install".into()), message, level });
+            self.installer = None;
         }
     }
 
@@ -704,6 +755,20 @@ impl App {
                 self.open_doctor(only);
                 Ok(String::new())
             }
+            Action::Install(arg) => {
+                let arg = arg.unwrap_or_default();
+                let mut words = arg.split_whitespace();
+                let name = match words.next() {
+                    Some(name) => name.to_owned(),
+                    // In CONFIG, the adapter of the selected configuration; elsewhere, ask.
+                    None => match self.tab().selected_configuration() {
+                        Some(config) if self.focus() == Pane::Config => config.adapter().to_owned(),
+                        _ => return self.prompt(spec),
+                    },
+                };
+                let package = Package::parse(&name).ok_or_else(|| format!("nothing called `{name}` to install"))?;
+                self.open_installer(package, words.next())
+            }
             Action::Palette(text) => {
                 let mut input = text.unwrap_or_default();
                 if let Some((spec, None)) = command::split(&input)
@@ -742,23 +807,46 @@ impl App {
         let Some(Overlay::Doctor(doctor)) = &self.ui.overlay else { return };
         let Some((section, finding)) = doctor.selection() else { return };
         let (dir, subject) = (section.dir.clone(), finding.subject.clone());
-        let message = match finding.fix.clone() {
+        match finding.fix.clone() {
             Some(Fix::Command(line)) => {
                 self.ui.overlay = None;
                 self.select_configuration(dir, &subject);
                 self.open_palette(format!("/{line}"));
-                return;
             }
-            Some(Fix::Shell(command)) => {
-                let copied = if self.headless { Ok(()) } else { clipboard::copy(&command) };
-                match copied {
-                    Ok(()) => format!("copied `{command}`; tuitor runs no shell commands"),
-                    Err(err) => err.to_string(),
-                }
+            Some(Fix::Shell(command)) => self.copy_command(&command, "/doctor"),
+            Some(Fix::Install(package)) => {
+                let outcome = self.open_installer(package, None);
+                self.report(outcome);
             }
-            Some(Fix::Text(_)) | None => return,
+            Some(Fix::Text(_)) | None => {}
+        }
+    }
+
+    /// INSTALL for `package`: what it downloads from where, or runs, until `y` installs it. One
+    /// installation at a time: while one runs, INSTALL shows it.
+    fn open_installer(&mut self, package: Package, version: Option<&str>) -> Outcome {
+        if let Some(running) = self.installer.as_ref().filter(|installer| installer.running()) {
+            let running = running.package();
+            self.ui.overlay = Some(Overlay::Install);
+            if running != package {
+                return Err(Refusal::warn(format!("{running} is being installed; one at a time")));
+            }
+            return Ok(String::new());
+        }
+        let plan = install::plan(package, version).map_err(|e| format!("{e:#}"))?;
+        self.installer = Some(Installer::new(plan));
+        self.ui.overlay = Some(Overlay::Install);
+        Ok(String::new())
+    }
+
+    /// Copies a shell command for the user to run, as tuitor runs none.
+    fn copy_command(&mut self, command: &str, from: &str) {
+        let copied = if self.headless { Ok(()) } else { clipboard::copy(command) };
+        let message = match copied {
+            Ok(()) => format!("copied `{command}`; tuitor runs no shell commands"),
+            Err(err) => err.to_string(),
         };
-        self.ui.status = Some(Status { key: None, command: Some("/doctor".into()), message, level: Level::Info });
+        self.ui.status = Some(Status { key: None, command: Some(from.into()), message, level: Level::Info });
     }
 
     /// Shows configuration `name` of the project in `dir` in CONFIG, selected.

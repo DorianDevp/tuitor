@@ -12,9 +12,10 @@ TypeScript (the version in `package.json`) into `node_modules`.
 ./run.sh
 ```
 
-`run.sh` checks those (and offers to install js-debug), installs TypeScript
-the first time (`npm ci`), compiles `dist/orders.js` and `dist/orders.js.map`
-(`tsc`), builds tuitor, and starts it on the configuration `orders` in
+`run.sh` checks those, installs TypeScript the first time (`npm ci`),
+compiles `dist/orders.js` and `dist/orders.js.map` (`tsc`), builds tuitor, has
+it offer to install js-debug (`tuitor install`) when it is missing, and starts
+it on the configuration `orders` in
 `.vscode/launch.json`, which stops on the first line.
 `TUITOR=/path/to/tuitor ./run.sh` uses that binary instead of building tuitor
 from this repository, and arguments go to tuitor (`./run.sh --script demo.tsc`).

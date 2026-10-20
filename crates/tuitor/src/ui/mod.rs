@@ -6,6 +6,7 @@ mod config;
 mod doctor;
 mod flow;
 mod history;
+mod install;
 mod locals;
 mod logo;
 mod logs;
@@ -76,6 +77,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Some(Overlay::Finder(finder)) => overlays::finder(&mut p, app, finder, area),
         Some(Overlay::Picker(picker)) => overlays::picker(&mut p, app, picker, area),
         Some(Overlay::Doctor(view)) => doctor::draw(&mut p, app, view, area),
+        Some(Overlay::Install) => {
+            if let Some(installer) = &app.installer {
+                install::draw(&mut p, app, installer, area);
+            }
+        }
         None => {}
     }
 }
@@ -568,6 +574,7 @@ fn hints(p: &mut Painter<'_>, app: &App, area: Rect) {
             ("config map", "map"),
             ("config unset", "unset"),
             ("config delete", "delete"),
+            ("install", "install"),
             ("doctor", "doctor"),
         ],
         Pane::Events => &[],

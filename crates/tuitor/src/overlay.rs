@@ -1,5 +1,5 @@
 //! Popups that take over the keyboard: the command palette, the fuzzy finder, the
-//! open-project picker and DOCTOR.
+//! open-project picker, DOCTOR and INSTALL.
 
 use std::path::{Path, PathBuf};
 
@@ -20,6 +20,8 @@ pub enum Overlay {
     Finder(Finder),
     Picker(Picker),
     Doctor(Doctor),
+    /// INSTALL, which shows [`App::installer`]: an installation goes on with it closed.
+    Install,
 }
 
 /// Score and matched character positions, or `None` when the pattern does not match.

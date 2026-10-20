@@ -24,7 +24,8 @@ use tuitor_dap::{AdapterCommand, Client, Event, Incoming, Transport};
 
 use crate::breakpoints::{Breakpoint, BreakpointId, Breakpoints, Toggle};
 use crate::capture::{self, Capture, canonical, short_error};
-use crate::config::{AdapterSpec, Adapters, INSTALL_HELP, LaunchConfig, RequestKind, TransportKind};
+use crate::config::{AdapterSpec, Adapters, INSTALL_HELP, LaunchConfig, Missing, RequestKind, TransportKind};
+use crate::install::Package;
 use crate::log::{Bounded, EventLine, OutputKind, OutputLine};
 use crate::persist::{self, Persisted};
 use crate::session::{ExceptionFilter, PendingStop, Session, SessionId, SessionState, SourceText};
@@ -1260,7 +1261,7 @@ impl Engine {
         let command = || -> Result<(AdapterCommand, Option<TempDir>)> {
             let program = spec
                 .locate(&self.workspace)
-                .map_err(|missing| anyhow!("adapter `{}`: {missing}; {INSTALL_HELP}", spec.name))?;
+                .map_err(|missing| anyhow!("adapter `{}`: {missing}; {}", spec.name, install_help(spec, &missing)))?;
             // Node-based adapters print deprecation warnings that would clutter OUTPUT.
             let mut env = vec![("NODE_NO_WARNINGS".to_owned(), "1".to_owned())];
             // What it and the programs it starts leave in the temporary directory goes with it.
@@ -1312,6 +1313,17 @@ impl Engine {
             return name;
         }
         (2..).map(|n| format!("{name}#{n}")).find(|c| !taken(c)).unwrap_or(name)
+    }
+}
+
+/// What installs what an adapter misses: `/install`, unless it is there but off PATH, which
+/// DOCTOR explains.
+fn install_help(spec: &AdapterSpec, missing: &Missing) -> String {
+    match (Package::parse(&spec.name), missing) {
+        // Node.js itself, which tuitor does not install.
+        (_, Missing::Program(program)) if program == "node" => INSTALL_HELP.to_owned(),
+        (Some(package), Missing::Program(_) | Missing::Script(_)) => format!("/install {package} installs it"),
+        _ => INSTALL_HELP.to_owned(),
     }
 }
 

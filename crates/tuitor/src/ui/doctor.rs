@@ -6,7 +6,7 @@ use std::time::Duration;
 use ratatui::layout::Rect;
 use tuitor_core::doctor::{Fix, Report, Status};
 
-use super::paint::{Painter, Panel, Seg, seg, wrap};
+use super::paint::{Painter, Panel, Seg, seg, wrap_hard};
 use super::theme::*;
 use crate::app::App;
 use crate::doctor::{Doctor, fix_text, glyph};
@@ -120,22 +120,12 @@ fn lines(report: &Report, width: usize) -> Vec<Line> {
     lines
 }
 
-/// [`wrap`], with words longer than a line cut into lines: a path is what a finding is about,
-/// and it shows whole.
-fn wrap_hard(text: &str, width: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    for line in wrap(text, width) {
-        let chars: Vec<char> = line.chars().collect();
-        lines.extend(chars.chunks(width.max(1)).map(|chunk| chunk.iter().collect::<String>()));
-    }
-    lines
-}
-
 /// What `enter` does with the selected finding's fix, and the other keys.
 fn footer(p: &mut Painter<'_>, doctor: &Doctor, inner: Rect) {
     let enter = match doctor.selection().and_then(|(_, finding)| finding.fix.as_ref()) {
         Some(Fix::Command(_)) => Some("edit the command, ⏎ again runs it"),
         Some(Fix::Shell(_)) => Some("copy the command"),
+        Some(Fix::Install(_)) => Some("install it, after asking"),
         Some(Fix::Text(_)) | None => None,
     };
     let mut actions = Vec::new();

@@ -26,7 +26,7 @@ die() {
 }
 
 # 1. Prerequisites.
-step "checking Chromium, Node.js, npm, curl and js-debug"
+step "checking Chromium, Node.js, npm and curl"
 # The browser of the first configuration, "ng serve".
 browser=$(grep -m 1 -o '"runtimeExecutable": *"[^"]*"' "$here/.vscode/launch.json") ||
     die "No runtimeExecutable in .vscode/launch.json."
@@ -42,20 +42,6 @@ command -v npm >/dev/null || die "npm is not installed; it installs Angular for 
     "separately (pacman -S npm, apt-get install npm)."
 command -v curl >/dev/null || die "curl is not installed; run.sh uses it to see when ng serve serves the page." \
     "Install it, e.g. pacman -S curl or apt-get install curl."
-if [[ ! -f $adapter/js-debug/src/dapDebugServer.js ]]; then
-    url="https://github.com/microsoft/vscode-js-debug/releases/download/v$js_debug_version/js-debug-dap-v$js_debug_version.tar.gz"
-    echo "js-debug is not installed in $adapter."
-    echo "README.md (\"Installing adapters\") installs it there from its GitHub release:"
-    echo "    $url"
-    read -r -p "Download and unpack it now? [y/N] " answer || answer=
-    [[ $answer == [yY]* ]] || die "js-debug is not installed; nothing was changed." \
-        "To install it yourself, $install_help; then run ./run.sh again."
-    step "installing js-debug $js_debug_version"
-    # The commands from README.md, "Installing adapters".
-    rm -rf "$adapter" && mkdir -p "$adapter"
-    curl -fL -o "$adapter/js-debug-dap.tar.gz" "$url"
-    tar -xzf "$adapter/js-debug-dap.tar.gz" -C "$adapter" && rm "$adapter/js-debug-dap.tar.gz"
-fi
 # The page of the first configuration, which ng serve is to serve.
 url=$(grep -m 1 -o '"url": *"[^"]*"' "$here/.vscode/launch.json") || die "No url in .vscode/launch.json."
 url=${url%\"}
@@ -86,6 +72,14 @@ if [[ -z ${TUITOR:-} ]]; then
     step "building tuitor (cargo build -p tuitor)"
     cargo build -p tuitor --manifest-path "$repo/Cargo.toml"
     tuitor="${CARGO_TARGET_DIR:-$repo/target}/debug/tuitor"
+fi
+
+# js-debug, which tuitor installs from its GitHub release as README.md ("Installing
+# adapters") does, once you say so.
+if [[ ! -f $adapter/js-debug/src/dapDebugServer.js ]]; then
+    step "installing js-debug $js_debug_version"
+    "$tuitor" install js-debug --version "$js_debug_version" ||
+        die "js-debug is not installed." "To install it yourself, $install_help; then run ./run.sh again."
 fi
 
 # 4. ng serve, in the background; tuitor does not run VS Code's preLaunchTask. It reads

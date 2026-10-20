@@ -24,7 +24,7 @@ die() {
 }
 
 # 1. Prerequisites.
-step "checking PHP with Xdebug, Node.js and vscode-php-debug"
+step "checking PHP with Xdebug and Node.js"
 php=$(command -v "${PHP:-php}") || die "${PHP:-php} not found." \
     "Install PHP with Xdebug 3 ($install_help)," \
     "or point PHP at one: PHP=/path/to/php ./run.sh"
@@ -53,22 +53,6 @@ IFS=. read -r node_major node_minor _ <<<"${node_version#v}"
 (( node_major > 20 || (node_major == 20 && node_minor >= 18) )) ||
     die "Node.js $node_version is too old: vscode-php-debug needs 20.18 or newer." \
         "Install a newer one: https://nodejs.org/en/download or your distribution's nodejs; $install_help."
-if [[ ! -f $adapter/extension/out/phpDebug.js ]]; then
-    url="https://github.com/xdebug/vscode-php-debug/releases/download/v$php_debug_version/php-debug-$php_debug_version.vsix"
-    echo "vscode-php-debug is not installed in $adapter."
-    echo "README.md (\"Installing adapters\") installs it there from its GitHub release:"
-    echo "    $url"
-    read -r -p "Download and unpack it now? [y/N] " answer || answer=
-    [[ $answer == [yY]* ]] || die "vscode-php-debug is not installed; nothing was changed." \
-        "To install it yourself, $install_help; then run ./run.sh again."
-    command -v curl >/dev/null || die "Installing it needs curl."
-    command -v unzip >/dev/null || die "Installing it needs unzip."
-    step "installing vscode-php-debug $php_debug_version"
-    # The commands from README.md, "Installing adapters".
-    rm -rf "$adapter" && mkdir -p "$adapter"
-    curl -fL -o "$adapter/php-debug.vsix" "$url"
-    unzip -q "$adapter/php-debug.vsix" -d "$adapter" && rm "$adapter/php-debug.vsix"
-fi
 command -v ss >/dev/null || die "ss is not installed; run.sh uses it to see when tuitor listens." \
     "Install iproute2, e.g. pacman -S iproute2 or apt-get install iproute2."
 # The port of the first configuration, "Listen for Xdebug".
@@ -92,6 +76,14 @@ if [[ -z ${TUITOR:-} ]]; then
     step "building tuitor (cargo build -p tuitor)"
     cargo build -p tuitor --manifest-path "$repo/Cargo.toml"
     tuitor="${CARGO_TARGET_DIR:-$repo/target}/debug/tuitor"
+fi
+
+# vscode-php-debug, which tuitor installs from its GitHub release as README.md ("Installing
+# adapters") does, once you say so.
+if [[ ! -f $adapter/extension/out/phpDebug.js ]]; then
+    step "installing vscode-php-debug $php_debug_version"
+    "$tuitor" install vscode-php-debug --version "$php_debug_version" ||
+        die "vscode-php-debug is not installed." "To install it yourself, $install_help; then run ./run.sh again."
 fi
 
 # 4. Debug. PHP connects to tuitor, so a helper starts it once tuitor listens (ss sees that
