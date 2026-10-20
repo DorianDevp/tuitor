@@ -297,7 +297,7 @@ impl Tab {
             let path = map_path(raw, mappings);
             std::fs::canonicalize(&path).unwrap_or(path)
         };
-        let trace = std::fs::read_to_string(&file.path)
+        let trace = trace::read(&file.path, TRACE_BYTES)
             .map_err(|e| e.to_string())
             .and_then(|text| Trace::parse(&text, &map).map_err(|e| format!("{e:#}")));
         let cached = Rc::new(CachedTrace {

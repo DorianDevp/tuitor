@@ -386,11 +386,16 @@ pub struct TraceFile {
     pub len: u64,
 }
 
-/// The trace files (`*.xt`) in `dir`, newest first.
+/// The trace files in `dir`, newest first: `*.xt`, and `*.xt.gz`, as Xdebug writes them
+/// when it was built with zlib (`xdebug.use_compression` is then on by default).
 pub fn list(dir: &Path) -> std::io::Result<Vec<TraceFile>> {
     let mut files: Vec<TraceFile> = std::fs::read_dir(dir)?
         .filter_map(Result::ok)
-        .filter(|entry| entry.path().extension().is_some_and(|e| e == "xt"))
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.ends_with(".xt") || name.ends_with(".xt.gz")
+        })
         .filter_map(|entry| {
             let meta = entry.metadata().ok()?;
             meta.is_file().then(|| TraceFile {
@@ -402,6 +407,28 @@ pub fn list(dir: &Path) -> std::io::Result<Vec<TraceFile>> {
         .collect();
     files.sort_by(|a, b| b.modified.cmp(&a.modified).then_with(|| b.path.cmp(&a.path)));
     Ok(files)
+}
+
+/// The text of a trace file, unpacked if it is gzipped, refused beyond `limit` bytes of
+/// text. Of a gzipped trace still being written, what unpacks so far: it has no
+/// `TRACE END` yet, so [`Trace::parse`] takes it as incomplete.
+pub fn read(path: &Path, limit: u64) -> std::io::Result<String> {
+    use std::io::{Error, ErrorKind, Read};
+    let file = std::fs::File::open(path)?;
+    let mut bytes = Vec::new();
+    if path.extension().is_some_and(|e| e == "gz") {
+        let read = flate2::read::MultiGzDecoder::new(file).take(limit + 1).read_to_end(&mut bytes);
+        match read {
+            Err(err) if err.kind() == ErrorKind::UnexpectedEof => {}
+            other => drop(other?),
+        }
+    } else {
+        file.take(limit + 1).read_to_end(&mut bytes)?;
+    }
+    if bytes.len() as u64 > limit {
+        return Err(Error::other(format!("over {} MB of text", limit >> 20)));
+    }
+    String::from_utf8(bytes).map_err(|e| Error::new(ErrorKind::InvalidData, e))
 }
 
 /// `path` as tuitor sees it, by the longest of `mappings` (remote → local) it starts with.
@@ -590,7 +617,7 @@ TRACE END   [2026-10-20 01:12:55.000000]
     fn lists_traces_newest_first() {
         let dir = std::env::temp_dir().join(format!("tuitor-traces-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("dir");
-        for name in ["a.xt", "b.xt", "notes.txt"] {
+        for name in ["a.xt", "b.xt.gz", "c.xt", "notes.txt", "d.gz"] {
             std::fs::write(dir.join(name), "x").expect("write");
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
@@ -599,7 +626,38 @@ TRACE END   [2026-10-20 01:12:55.000000]
             .into_iter()
             .map(|f| f.path.file_name().unwrap_or_default().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(names, ["b.xt", "a.xt"]);
+        assert_eq!(names, ["c.xt", "b.xt.gz", "a.xt"]);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn reads_gzipped_traces_and_takes_a_cut_off_one_as_incomplete() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("tuitor-gz-traces-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gz.write_all(TRACE.as_bytes()).expect("gzip");
+        let packed = gz.finish().expect("gzip");
+        let whole = dir.join("whole.xt.gz");
+        std::fs::write(&whole, &packed).expect("write");
+        assert_eq!(read(&whole, 1 << 20).expect("read"), TRACE);
+        assert!(read(&whole, 100).is_err(), "longer than the limit");
+
+        // As Xdebug leaves it while the request runs: what it flushed, without the end of
+        // the stream.
+        let so_far = &TRACE[..TRACE.find("TRACE END").expect("end")];
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gz.write_all(so_far.as_bytes()).expect("gzip");
+        gz.flush().expect("flush");
+        let running = dir.join("running.xt.gz");
+        std::fs::write(&running, gz.get_ref()).expect("write");
+        let text = read(&running, 1 << 20).expect("read");
+        assert_eq!(text, so_far);
+        assert!(!Trace::parse(&text, &|p| PathBuf::from(p)).expect("parse").complete);
+
+        let plain = dir.join("plain.xt");
+        std::fs::write(&plain, TRACE).expect("write");
+        assert_eq!(read(&plain, 1 << 20).expect("read"), TRACE);
         std::fs::remove_dir_all(dir).ok();
     }
 }
