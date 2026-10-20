@@ -12,7 +12,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tuitor_code::CallPath;
 use tuitor_core::breakpoints::{Breakpoint, SetId, Toggle};
 use tuitor_core::compose;
-use tuitor_core::config::{Adapters, LaunchConfig, home_relative};
+use tuitor_core::config::{Adapters, LaunchConfig, home_relative, project_relative};
 use tuitor_core::doctor::{Fix, Options, ProjectInput, listen_port};
 use tuitor_core::flow::Row;
 use tuitor_core::install::{self, Package};
@@ -1706,7 +1706,7 @@ impl App {
         let cwd = config.and_then(|c| c.arguments.get("cwd")).and_then(Value::as_str).map(|cwd| workspace.join(cwd));
         let dirs: Vec<PathBuf> = std::iter::once(workspace).chain(cwd).collect();
         let path = places::here(&place.path, mappings, &dirs).ok_or_else(|| format!("{} is not here", place.path))?;
-        let shown = path.strip_prefix(&dirs[0]).unwrap_or(&path).display().to_string();
+        let shown = project_relative(&path, &dirs[0]);
         let printed =
             if Path::new(&place.path) == path { String::new() } else { format!(", printed as {}", place.path) };
         let tab = self.tab_mut();
@@ -1754,7 +1754,8 @@ impl App {
             },
         };
         if !path.is_file() {
-            return Err(format!("not on this machine: {}", path.display()).into());
+            let shown = project_relative(&path, self.tab().engine.workspace());
+            return Err(format!("not on this machine: {shown}").into());
         }
         let editor = Editor::new(&self.settings, |name| std::env::var(name).ok(), &path, line)?;
         let message = format!("opening {} in {}", editor.place, editor.name());
@@ -1816,7 +1817,8 @@ impl App {
     fn flow_file(&self) -> Result<Row, Refusal> {
         let row = self.flow_row().ok_or("no file selected in FLOW")?;
         if !row.path.is_file() {
-            return Err(format!("{} is no file here; STACK shows the adapter's source", row.path.display()).into());
+            let shown = project_relative(&row.path, self.tab().engine.workspace());
+            return Err(format!("{shown} is no file here; STACK shows the adapter's source").into());
         }
         Ok(row)
     }

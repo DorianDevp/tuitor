@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use ratatui::layout::Rect;
 use tuitor_code::{CallPath, Entry, Root, Why};
+use tuitor_core::config::project_relative;
 
 use super::paint::{Painter, Panel, Seg, seg, truncate_left, wrap};
 use super::syntax::{Lang, highlight};
@@ -156,8 +157,7 @@ fn detail(p: &mut Painter<'_>, app: &App, paths: &Paths, path: &CallPath, area: 
             return;
         }
         let x = p.text(area.x + 2, y, &step.name, bold(FG), area.right());
-        let rel = step.path.strip_prefix(workspace).unwrap_or(&step.path);
-        let at = format!("  {}:{}", rel.display(), step.line);
+        let at = format!("  {}:{}", project_relative(&step.path, workspace), step.line);
         let x = p.text(x, y, &truncate_left(&at, usize::from(area.right().saturating_sub(x))), fg(FAINT), area.right());
         if step.observed {
             p.text(x, y, "  ⇢ called from the step above at run time", italic(AMBER_DIM), area.right());

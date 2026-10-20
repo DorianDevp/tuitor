@@ -1,4 +1,5 @@
 use ratatui::layout::Rect;
+use tuitor_core::config::project_relative;
 
 use super::breakpoints::marks;
 use super::paint::{Painter, Panel, Seg, seg, truncate, truncate_left};
@@ -287,14 +288,8 @@ pub fn picker(p: &mut Painter<'_>, app: &App, picker: &Picker, screen: Rect) {
 
 fn preview(p: &mut Painter<'_>, app: &App, path: &std::path::Path, line: u32, area: Rect) {
     let engine = &app.tab().engine;
-    let rel = path.strip_prefix(engine.workspace()).unwrap_or(path);
-    p.text(
-        area.x,
-        area.y,
-        &truncate(&format!("{}:{line}", rel.display()), usize::from(area.width)),
-        fg(DIM),
-        area.right(),
-    );
+    let rel = project_relative(path, engine.workspace());
+    p.text(area.x, area.y, &truncate(&format!("{rel}:{line}"), usize::from(area.width)), fg(DIM), area.right());
     let Some(file) = app.sources.borrow_mut().get(path) else { return };
     let lang = Lang::from_path(path);
     let height = u32::from(area.height.saturating_sub(1));

@@ -216,6 +216,15 @@ pub fn home_relative(path: &Path) -> String {
     }
 }
 
+/// A path as the panes and the status line show it: from the project's directory `project`
+/// when it is in it, else as [`home_relative`] has it.
+pub fn project_relative(path: &Path, project: &Path) -> String {
+    match path.strip_prefix(project) {
+        Ok(rel) if !project.as_os_str().is_empty() && !rel.as_os_str().is_empty() => rel.display().to_string(),
+        _ => home_relative(path),
+    }
+}
+
 /// Where `go install` puts programs, from the environment (`var`): `$GOBIN`, else `bin`
 /// in the first directory of `$GOPATH`, which is `~/go` when unset. Settings made with
 /// `go env -w` are not read.
@@ -441,6 +450,19 @@ mod tests {
 
     fn vars() -> Variables {
         Variables { workspace: PathBuf::from("/home/me/shop") }
+    }
+
+    #[test]
+    fn paths_are_shown_from_the_project_else_from_home() {
+        let project = Path::new("/srv/shop");
+        assert_eq!(project_relative(Path::new("/srv/shop/src/Order.php"), project), "src/Order.php");
+        assert_eq!(project_relative(Path::new("/srv/shopping/x.php"), project), "/srv/shopping/x.php");
+        assert_eq!(project_relative(Path::new("/srv/shop"), project), "/srv/shop");
+        // An empty tab has no project.
+        assert_eq!(project_relative(Path::new("/srv/shop/x.php"), Path::new("")), "/srv/shop/x.php");
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(project_relative(&home.join("lib/x.php"), project), "~/lib/x.php");
+        }
     }
 
     #[test]
