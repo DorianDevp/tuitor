@@ -25,6 +25,9 @@ pub const SNAPSHOT_BG: Color = rgb(0x22222a);
 pub const TYPE: Color = rgb(0x86abb6);
 pub const BAR_GREY: Color = rgb(0x878787);
 pub const KEY: Color = rgb(0xd0d0d0);
+/// Matches of a search in SOURCE, and the one the cursor went to.
+pub const FOUND: Color = rgb(0x393945);
+pub const FOUND_HERE: Color = rgb(0x6a6a7c);
 
 pub const AMBER: Color = rgb(0xffa31a);
 pub const AMBER_DIM: Color = rgb(0xa3732a);

@@ -8,6 +8,7 @@ use tuitor_core::breakpoints::Breakpoint;
 use tuitor_core::config::home_relative;
 use tuitor_core::session::{SessionState, SourceText};
 use tuitor_core::snapshot::{Change, Frame};
+use unicode_width::UnicodeWidthChar;
 
 use super::logo::{self, Size};
 use super::paint::{Painter, Panel, Seg, seg, truncate, truncate_left};
@@ -15,6 +16,7 @@ use super::syntax::{Lang, highlight};
 use super::theme::*;
 use crate::app::App;
 use crate::model::Shown;
+use crate::search::{self, Match};
 use crate::tab::Tab;
 
 const GUTTER: u16 = 8;
@@ -78,6 +80,12 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
     let recenter = tab.ui.source.recenter.replace(false);
     let top = window_top(tab.ui.source.top.get(), cursor, height, lines, recenter);
     tab.ui.source.top.set(top);
+    tab.ui.source.rows.set(height);
+    let mut found: HashMap<u32, Vec<Match>> = HashMap::new();
+    for m in tab.ui.search.iter().flat_map(|search| search::find(&file.lines, &search.query)) {
+        found.entry(m.line).or_default().push(m);
+    }
+    let current = tab.ui.search.as_ref().and_then(|search| search.at);
 
     // The adapter's own source has no path for breakpoints to be in.
     let file_path = match &shown {
@@ -154,10 +162,42 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
                 break;
             }
         }
+        if let Some(found) = found.get(&n) {
+            mark_found(p, line, found, current, (x + GUTTER + 1, y), inner.right());
+        }
         if let Some(values) = inline.get(&n)
             && let Some(segs) = fit_inline(values, inner.right().saturating_sub(cx + 3))
         {
             p.segs(cx + 3, y, &segs, inner.right());
+        }
+    }
+}
+
+/// Bands under the matches of the search on a line: dim, and brighter for the one the cursor
+/// went to. `at` is where the line's text starts.
+fn mark_found(
+    p: &mut Painter<'_>,
+    line: &str,
+    found: &[Match],
+    current: Option<(u32, usize)>,
+    at: (u16, u16),
+    right: u16,
+) {
+    let chars: Vec<char> = line.chars().collect();
+    let column = |end: usize| -> u16 {
+        let width: usize = chars[..end.min(chars.len())].iter().map(|c| c.width().unwrap_or(0)).sum();
+        at.0.saturating_add(u16::try_from(width).unwrap_or(u16::MAX))
+    };
+    for m in found {
+        let (start, end) = (column(m.start), column(m.start + m.len).min(right));
+        if start >= end {
+            continue;
+        }
+        if current == Some((m.line, m.start)) {
+            let text: String = chars[m.start..(m.start + m.len).min(chars.len())].iter().collect();
+            p.text(start, at.1, &text, bold(WHITE).bg(FOUND_HERE), end);
+        } else {
+            p.band(start, at.1, end - start, FOUND);
         }
     }
 }

@@ -295,13 +295,18 @@ Every key runs a command; `/` opens the command line with the same commands and
 | `<` `>` | previous / next tab (`g T` `g t`) | | `O` / `T` | open a project / in a new tab |
 | `g s` `g S` | next / previous session of the tab | | `ctrl-w` | close the tab |
 | `E` | open the SOURCE line or the selected breakpoint in your editor | | `!` | doctor: what debugging needs here |
+| `^f` | search the file in SOURCE as you type | | `^n` `^p` | in SOURCE: next / previous match |
 
 In BREAKPOINTS: `a` session/all, `e` condition, `l` logpoint, `space` on/off, `d` delete.
-In CONFIG: `enter` start or edit, `a` add, `m` map a path, `M` map the mounts of a compose
-service, `u` unset a field, `d` delete, `i` install the selected configuration's adapter.
+In CONFIG: `enter` start or edit, `a` add, `m` map a path, `M` map a compose service's mounts,
+`u` unset a field, `d` delete, `i` install the selected configuration's adapter.
+In SOURCE: `^n` `^p` next / previous match of a search, `q` clears its highlights.
 In STACK: `v` library frames. In OUTPUT: `C` clear.
 In FLOW: `enter` open in CODE, `b` breakpoint where the file is entered, `v` library files.
 In OUTLINE: `enter` go to the function, `b` breakpoint on its first line.
+
+A search (`^f`) goes to the first match as it is typed; it ignores case unless it has a
+capital letter, and `enter` on an empty search repeats the last one.
 
 ### Changing keys
 

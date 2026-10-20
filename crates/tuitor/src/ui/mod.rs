@@ -86,6 +86,8 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 install::draw(&mut p, app, installer, area);
             }
         }
+        // On the status line, over SOURCE and its highlights.
+        Some(Overlay::Search(_)) => {}
         None => {}
     }
 }
@@ -529,6 +531,19 @@ fn status(p: &mut Painter<'_>, app: &App, area: Rect) {
         p.text(x, y, "█", fg(AMBER), area.right());
         return;
     }
+    if let Some(Overlay::Search(prompt)) = &app.ui.overlay {
+        let x = p.text(1, y, "search ", fg(FAINT), area.right());
+        let x = p.text(x, y, &prompt.input, bold(WHITE), area.right());
+        let x = p.text(x, y, "█", fg(AMBER), area.right());
+        let said = app.ui.status.as_ref().filter(|_| !prompt.input.is_empty());
+        if let Some(status) = said {
+            let color = if status.level == Level::Info { DIM } else { YELLOW_DIM };
+            p.text(x + 2, y, &status.message, fg(color), area.right());
+        } else if let Some(previous) = prompt.previous.as_ref().filter(|_| prompt.input.is_empty()) {
+            p.text(x + 2, y, &format!("⏎ searches `{}` again", previous.query), fg(GHOST), area.right());
+        }
+        return;
+    }
     let Some(status) = &app.ui.status else {
         p.text(1, y, "/ opens the command line · ? lists every command and key", fg(GHOST), area.right());
         return;
@@ -555,10 +570,32 @@ fn status(p: &mut Painter<'_>, app: &App, area: Rect) {
 /// The most useful bindings for the focused pane, read from the keymap so they
 /// always show what the keys really do.
 fn hints(p: &mut Painter<'_>, app: &App, area: Rect) {
+    if let Some(Overlay::Search(_)) = &app.ui.overlay {
+        let keys = [("⏎", "keep"), ("esc", "back"), ("^n ↓", "next"), ("^p ↑", "previous")];
+        let mut x = 1;
+        for (key, label) in keys {
+            x = p.text(x, area.y, key, bold(KEY), area.right());
+            x = p.text(x, area.y, &format!(" {label}   "), fg(FAINT), area.right());
+        }
+        return;
+    }
     let pane = app.focus();
     let specific: &[(&str, &str)] = match pane {
         _ if app.tab().project.is_none() => &[("tab open", "open a project")],
-        Pane::Source => &[("bp toggle", "breakpoint"), ("find", "find"), ("follow", "follow"), ("edit", "editor")],
+        Pane::Source if app.tab().ui.search.is_some() => &[
+            ("search next", "next match"),
+            ("search prev", "previous"),
+            ("close", "clear"),
+            ("bp toggle", "breakpoint"),
+            ("search", "search"),
+        ],
+        Pane::Source => &[
+            ("bp toggle", "breakpoint"),
+            ("find", "find"),
+            ("search", "search"),
+            ("follow", "follow"),
+            ("edit", "editor"),
+        ],
         Pane::Locals => &[("open", "expand"), ("watch add", "watch"), ("copy", "copy")],
         Pane::Stack => &[("open", "show frame"), ("vendor", "library frames")],
         Pane::Watch => &[("watch add", "add"), ("watch delete", "delete")],

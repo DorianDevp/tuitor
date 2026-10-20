@@ -14,6 +14,7 @@ mod paths;
 mod picker;
 mod runner;
 mod script;
+mod search;
 mod signals;
 mod sources;
 mod tab;

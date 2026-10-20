@@ -30,6 +30,7 @@ use crate::mappings;
 use crate::model::{BpRow, ConfigRow, Shown, StackRow};
 use crate::overlay::{Finder, Overlay, Palette};
 use crate::picker::Picker;
+use crate::search::{self, Prompt, Search};
 use crate::sources::Sources;
 use crate::tab::{Tab, TabId, TabUi, Tabs, forward};
 
@@ -329,6 +330,9 @@ impl App {
     }
 
     fn overlay_key(&mut self, key: Key) {
+        if let Some(Overlay::Search(_)) = self.ui.overlay {
+            return self.search_key(key);
+        }
         let Some(overlay) = self.ui.overlay.as_mut() else { return };
         if key.is("esc") || key.is("ctrl-c") {
             if let Overlay::Install = overlay {
@@ -409,6 +413,8 @@ impl App {
                 }
             }
             Overlay::Install => self.installer_key(key),
+            // Its keys are `search_key`'s.
+            Overlay::Search(_) => {}
             Overlay::Picker(picker) => {
                 if key.is("enter") {
                     // When nothing matches, opening what was typed says why it cannot be opened.
@@ -727,6 +733,9 @@ impl App {
                 self.ui.overlay = Some(Overlay::Finder(finder));
                 Ok(String::new())
             }
+            Action::Search(query) => self.search(query),
+            Action::SearchNext => self.search_move(true, false),
+            Action::SearchPrev => self.search_move(false, false),
             Action::SessionNext => self.cycle_session(1),
             Action::SessionPrev => self.cycle_session(-1),
             Action::SessionStart(name) => {
@@ -1133,6 +1142,145 @@ impl App {
         })
     }
 
+    // ---- search ---------------------------------------------------------------------------
+
+    /// `/search`: with a text, goes to its first match from the cursor's line; without, asks for
+    /// one and goes to its first match as it is typed.
+    fn search(&mut self, query: Option<String>) -> Outcome {
+        self.show_source();
+        if self.shown_lines().is_none() {
+            return Err("no file in SOURCE to search".into());
+        }
+        let tab = self.tab_mut();
+        let Some(query) = query else {
+            let source = &tab.ui.source;
+            let (browse, cursor, previous) = (source.browse.clone(), source.cursor, tab.ui.search.clone());
+            self.ui.overlay = Some(Overlay::Search(Prompt { input: String::new(), browse, cursor, previous }));
+            return Ok(String::new());
+        };
+        tab.ui.search = Some(Search { query, at: None });
+        self.search_move(true, true)
+    }
+
+    /// Shows SOURCE, focused, in CODE when the view has none.
+    fn show_source(&mut self) {
+        let tab = self.tab_mut();
+        if !panes(tab.ui.view).contains(&Pane::Source) {
+            tab.ui.view = View::Code;
+        }
+        if tab.focus() != Pane::Source {
+            tab.ui.zoom = false;
+        }
+        tab.set_focus(Pane::Source);
+    }
+
+    /// Puts the cursor on the next match of the search, or with `forward` false the previous,
+    /// around the end of the file. From the match the cursor went to while it is on its line,
+    /// else from the start of the cursor's line, where `here` counts a match.
+    fn search_move(&mut self, forward: bool, here: bool) -> Outcome {
+        let lines = self.shown_lines().ok_or("no file in SOURCE to search")?;
+        let tab = self.tab_mut();
+        let shown = tab.source_path();
+        let search = tab.ui.search.as_mut().ok_or("nothing searched for; ^f searches")?;
+        let matches = search::find(&lines.lines, &search.query);
+        let cursor = tab.ui.source.cursor.max(1);
+        let (from, here) = match search.at {
+            Some(at) if at.0 == cursor && !here => (at, false),
+            _ => ((cursor, 0), here || forward),
+        };
+        let index =
+            search::next(&matches, from, forward, here).ok_or_else(|| format!("no `{}` in this file", search.query))?;
+        let found = matches[index];
+        search.at = Some((found.line, found.start));
+        let around = if forward { (found.line, found.start) < from } else { (found.line, found.start) > from };
+        let source = &mut tab.ui.source;
+        if source.browse.is_none() {
+            source.browse = shown;
+        }
+        source.cursor = found.line;
+        // A match on screen is gone to where it is; one off it is put in the middle.
+        let top = source.top.get();
+        if found.line < top || found.line >= top + source.rows.get().max(1) {
+            source.recenter.set(true);
+        }
+        let around = match (around, forward) {
+            (false, _) => "",
+            (true, true) => " · from the top",
+            (true, false) => " · from the end",
+        };
+        Ok(format!("{} of {}{around}", index + 1, matches.len()))
+    }
+
+    /// A key while the search is typed: it changes the text, moves between matches, keeps the
+    /// search (`enter`) or goes back to where SOURCE was (`esc`).
+    fn search_key(&mut self, key: Key) {
+        let Some(Overlay::Search(prompt)) = &mut self.ui.overlay else { return };
+        if key.is("esc") || key.is("ctrl-c") || (key.is("backspace") && prompt.input.is_empty()) {
+            return self.search_cancel();
+        }
+        if key.is("enter") {
+            return self.search_accept();
+        }
+        let outcome = if key.is("ctrl-n") || key.is("down") {
+            self.search_move(true, false)
+        } else if key.is("ctrl-p") || key.is("up") {
+            self.search_move(false, false)
+        } else if key.is("backspace") {
+            prompt.input.pop();
+            self.search_typed()
+        } else if let Some(c) = key.text_char() {
+            prompt.input.push(c);
+            self.search_typed()
+        } else {
+            return;
+        };
+        self.search_status(outcome);
+    }
+
+    /// Searches what is typed so far, from where SOURCE was before it.
+    fn search_typed(&mut self) -> Outcome {
+        let Some(Overlay::Search(prompt)) = &self.ui.overlay else { return Ok(String::new()) };
+        let (input, browse, cursor) = (prompt.input.clone(), prompt.browse.clone(), prompt.cursor);
+        let tab = self.tab_mut();
+        tab.ui.source.browse = browse;
+        tab.ui.source.cursor = cursor;
+        if input.is_empty() {
+            tab.ui.search = None;
+            return Ok(String::new());
+        }
+        tab.ui.search = Some(Search { query: input, at: None });
+        self.search_move(true, true)
+    }
+
+    /// `esc`: SOURCE as it was, with the search before.
+    fn search_cancel(&mut self) {
+        let Some(Overlay::Search(prompt)) = self.ui.overlay.take() else { return };
+        let tab = self.tab_mut();
+        tab.ui.source.browse = prompt.browse;
+        tab.ui.source.cursor = prompt.cursor;
+        tab.ui.source.recenter.set(true);
+        tab.ui.search = prompt.previous;
+        self.ui.status = None;
+    }
+
+    /// `enter`: keeps the search; with nothing typed, repeats the one before.
+    fn search_accept(&mut self) {
+        let Some(Overlay::Search(prompt)) = self.ui.overlay.take() else { return };
+        if prompt.input.is_empty() {
+            self.tab_mut().ui.search = prompt.previous;
+            let outcome = self.search_move(true, false);
+            self.search_status(outcome);
+        }
+    }
+
+    fn search_status(&mut self, outcome: Outcome) {
+        let (message, level) = match outcome {
+            Ok(message) => (message, Level::Info),
+            Err(Refusal { level, message }) => (message, level),
+        };
+        self.ui.status = Some(Status { key: None, command: Some("/search".into()), message, level });
+    }
+
     fn cycle_focus(&mut self, delta: isize) -> Outcome {
         let tab = self.tab_mut();
         let list = panes(tab.ui.view);
@@ -1197,6 +1345,10 @@ impl App {
         {
             tab.jump_to_execution();
             return Ok("back to the live stop".into());
+        }
+        // The highlights of a search go first, then the place it went to.
+        if tab.ui.search.take().is_some() {
+            return Ok(String::new());
         }
         if tab.ui.source.browse.is_some() {
             tab.jump_to_execution();
