@@ -191,13 +191,13 @@ fn groups(adapters: &Adapters) -> Vec<Vec<&AdapterSpec>> {
     for group in &mut groups {
         group.sort_by_key(|spec| spec.launch_type.is_some());
     }
-    // As README lists them, then the user's own.
+    // As docs/adapters.md lists them, then the user's own.
     let rank = |group: &Vec<&AdapterSpec>| ORDER.iter().position(|name| *name == group[0].name).unwrap_or(ORDER.len());
     groups.sort_by_key(rank);
     groups
 }
 
-/// The built-in adapters in the order README lists them.
+/// The built-in adapters in the order docs/adapters.md lists them.
 const ORDER: [&str; 7] = ["php", "gdb", "lldb-dap", "lldb", "pwa-node", "pwa-chrome", "go"];
 
 /// An adapter group's findings, without subject.
