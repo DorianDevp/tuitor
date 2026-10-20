@@ -643,9 +643,15 @@ impl<A: Ask, P: FnMut(String) + Send> Finder<'_, A, P> {
 
     async fn read_facts(&mut self, n: usize, function: &Function) -> Result<Facts> {
         let text = self.text(&function.path)?;
-        let entry = (!function.script).then(|| {
-            let at = (function.at.line, lsp::byte(text.line(function.at.line), function.at.character));
-            text::entry(&text, self.language, at, function.range.end.line)
+        let entry = (!function.script).then(|| match self.language {
+            // Delve takes only a line with a statement, and the first line of a body can be
+            // part of one that goes on over lines; on the declaration it stops as the
+            // function starts.
+            Language::Go => function.at.line,
+            _ => {
+                let at = (function.at.line, lsp::byte(text.line(function.at.line), function.at.character));
+                text::entry(&text, self.language, at, function.range.end.line)
+            }
         });
         // A script's own lines are those outside its functions.
         let symbols = self.symbols(&function.path).await?;
@@ -667,7 +673,9 @@ impl<A: Ask, P: FnMut(String) + Send> Finder<'_, A, P> {
         let mut candidates: Vec<(u32, usize, String)> = Vec::new();
         for line in function.range.start.line..=function.range.end.line {
             let toks = lexer.line(text.line(line));
-            if own(line) {
+            // Delve takes no line in the middle of a statement, nor the first of one that
+            // goes on over lines.
+            if own(line) && !(self.language == Language::Go && text::continues(&toks)) {
                 candidates.extend(text::writes(&toks).into_iter().map(|(name, at)| (line, at, name)));
             }
         }

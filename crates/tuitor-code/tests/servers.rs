@@ -97,8 +97,9 @@ async fn go_from_main_down_to_line_total() {
     assert_eq!((names(path), path.root), (vec!["main", "orderTotal", "lineTotal"], Root::Entry(Entry::Main)));
     let lines = lines(path);
     assert!(lines.contains(&(95, "calls orderTotal".into())), "{lines:?}");
-    assert!(lines.contains(&(56, "entry".into())) && lines.contains(&(58, "calls lineTotal".into())), "{lines:?}");
-    assert_eq!(lines.last(), Some(&(41, "target".into())));
+    // Delve's entry is the declaration.
+    assert!(lines.contains(&(55, "entry".into())) && lines.contains(&(58, "calls lineTotal".into())), "{lines:?}");
+    assert_eq!(lines[lines.len() - 2..], [(40, "entry".into()), (41, "target".into())]);
     code.shutdown().await;
 }
 
