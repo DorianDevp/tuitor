@@ -10,6 +10,7 @@ use tuitor_core::project::{Configuration, Project, Source, starts_browser, value
 use super::paint::{Painter, Panel, Seg, seg, truncate, truncate_left, wrap};
 use super::theme::*;
 use crate::app::App;
+use crate::flow::TRACE_DIR;
 use crate::model::ConfigRow;
 use crate::tab::Tab;
 
@@ -126,6 +127,9 @@ fn lines(app: &App, tab: &Tab, project: &Project, width: usize) -> Vec<Line> {
     if starts_browser(config.adapter()) && !config.fields.contains_key("runtimeExecutable") {
         lines.extend(browser_hint(config, width.saturating_sub(4)));
     }
+    if config.adapter() == "php" && !config.fields.contains_key(TRACE_DIR) {
+        lines.extend(trace_hint(config, width.saturating_sub(4)));
+    }
     lines.push(Line::text(Vec::new()));
     let kept = "tuitor's own are kept in ";
     let store = path(app.store.path(), width.saturating_sub(2 + kept.len()));
@@ -164,6 +168,19 @@ fn browser_hint(config: &Configuration, width: usize) -> Vec<Line> {
         wrap(text, width).into_iter().map(move |line| Line::text(vec![seg(format!("  {line}"), style)]))
     };
     lines(what, italic(YELLOW_DIM)).chain(lines(&fix, italic(FAINT))).collect()
+}
+
+/// Where FLOW finds Xdebug's function traces, for a PHP configuration that names no place.
+fn trace_hint(config: &Configuration, width: usize) -> Vec<Line> {
+    let how = match config.source {
+        Source::Tuitor => format!("/config set {TRACE_DIR} ‹dir›"),
+        Source::LaunchJson(_) => format!("set {TRACE_DIR} in launch.json"),
+    };
+    let text = format!(
+        "FLOW can time the files of a request and show those still to come from Xdebug function traces: \
+         {how}, the directory PHP writes them to (README, FLOW)."
+    );
+    wrap(&text, width).into_iter().map(|line| Line::text(vec![seg(format!("  {line}"), italic(FAINT))])).collect()
 }
 
 /// `remote → local`, the local path cut from the left to `room` columns.

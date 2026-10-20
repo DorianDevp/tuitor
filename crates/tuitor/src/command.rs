@@ -10,18 +10,21 @@ pub enum View {
     Overview,
     Code,
     History,
+    /// The files of the run, in the order execution reached them, and those to come.
+    Flow,
     /// The project's breakpoints and launch configurations.
     Project,
 }
 
 impl View {
-    pub const ALL: [View; 4] = [View::Overview, View::Code, View::History, View::Project];
+    pub const ALL: [View; 5] = [View::Overview, View::Code, View::History, View::Flow, View::Project];
 
     pub fn name(self) -> &'static str {
         match self {
             View::Overview => "overview",
             View::Code => "code",
             View::History => "history",
+            View::Flow => "flow",
             View::Project => "project",
         }
     }
@@ -32,10 +35,11 @@ impl View {
             "overview" | "o" => (View::Overview, None),
             "code" | "c" => (View::Code, None),
             "history" | "h" => (View::History, None),
+            "flow" | "f" => (View::Flow, None),
             "project" | "p" => (View::Project, None),
             "breakpoints" | "bp" | "b" => (View::Project, Some(Pane::Breakpoints)),
             "config" => (View::Project, Some(Pane::Config)),
-            other => return Err(format!("unknown view `{other}` (overview, code, history, project)")),
+            other => return Err(format!("unknown view `{other}` (overview, code, history, flow, project)")),
         })
     }
 }
@@ -255,7 +259,7 @@ pub static COMMANDS: &[Spec] = &[
     Spec {
         name: "bp toggle",
         arg: Arg::Optional("‹file:line›"),
-        help: "toggle a breakpoint (SOURCE cursor by default)",
+        help: "toggle a breakpoint (SOURCE cursor; in FLOW and OUTLINE the entry of the selection)",
         group: Group::Breakpoints,
         parse: |arg| arg.map(Location::parse).transpose().map(Action::BpToggle),
     },
@@ -336,7 +340,7 @@ pub static COMMANDS: &[Spec] = &[
     },
     Spec {
         name: "view",
-        arg: Arg::Required("‹overview|code|history|project›"),
+        arg: Arg::Required("‹overview|code|history|flow|project›"),
         help: "switch view (breakpoints and config show PROJECT)",
         group: Group::View,
         parse: |a| View::parse(a.unwrap_or_default()).map(|(view, pane)| Action::View(view, pane)),
@@ -379,7 +383,7 @@ pub static COMMANDS: &[Spec] = &[
     Spec {
         name: "vendor",
         arg: Arg::None,
-        help: "show or collapse library frames",
+        help: "show or collapse library frames (in FLOW: library files)",
         group: Group::View,
         parse: simple!(Action::Vendor),
     },
@@ -636,6 +640,7 @@ mod tests {
         assert!(parse("/frobnicate").is_err());
         assert!(parse("continuex").is_err());
         assert_eq!(parse("view h").expect("view").action, Action::View(View::History, None));
+        assert_eq!(parse("view flow").expect("view").action, Action::View(View::Flow, None));
         assert_eq!(parse("view bp").expect("view").action, Action::View(View::Project, Some(Pane::Breakpoints)));
     }
 
