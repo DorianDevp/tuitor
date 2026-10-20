@@ -1,0 +1,28 @@
+# The Go example: PROJECT with a condition, a hit count, a logpoint and a configuration of
+# tuitor's own, and the command line.
+@sleep 3000
+/bp toggle main.go:52
+/bp toggle main.go:58
+/bp toggle main.go:96
+/view breakpoints
+@key g g
+/bp condition percent > 0
+@key j
+/bp hits > 3
+@key j
+/bp log order {order.ID}: {total}
+/restart
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+/continue
+@wait stop
+/config add go
+/view breakpoints
+@key g g
+@dump project.ans
+/view overview
+@key / b p
+@dump palette.ans
