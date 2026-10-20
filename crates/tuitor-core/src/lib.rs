@@ -5,6 +5,7 @@ pub mod breakpoints;
 mod capture;
 pub mod config;
 mod engine;
+pub mod flow;
 mod jsonc;
 pub mod log;
 pub mod persist;
@@ -13,5 +14,6 @@ pub mod session;
 pub mod snapshot;
 pub mod store;
 mod tmpdir;
+pub mod trace;
 
 pub use engine::{Engine, EngineMsg, EngineOptions, Level, Notice, Step};
