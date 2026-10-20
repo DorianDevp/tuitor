@@ -1,10 +1,14 @@
-//! Breakpoint sets, as commands: make one, switch the active one, move breakpoints between
-//! them, delete one. A set has no name but its colour, which is what these take.
+//! Breakpoint sets, as commands: make one, switch the active one, put breakpoints in sets
+//! and take them out, delete one. A set has no name but its colour, which is what these
+//! take. A breakpoint can be in several sets: two ways into one service share its own.
+
+use std::path::PathBuf;
 
 use tuitor_core::Engine;
 use tuitor_core::breakpoints::{BreakpointId, SetId};
 
-use crate::app::{App, Outcome, Refusal};
+use crate::app::{App, Outcome, Refusal, canonical};
+use crate::command::Location;
 use crate::tab::TabId;
 use crate::ui::theme::{SETS, set_name};
 
@@ -30,11 +34,72 @@ fn roles(engine: &Engine) -> String {
     }
 }
 
+/// The names of `sets`: "rose", "rose and teal", "rose, teal and sky".
+fn names(sets: &[SetId]) -> String {
+    let names: Vec<&str> = sets.iter().map(|s| set_name(*s)).collect();
+    match names.split_last() {
+        Some((last, [])) => (*last).to_owned(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+        None => String::new(),
+    }
+}
+
+/// `[set] [file:line…]`: a set by its colour, and places.
+fn set_and_places(arg: Option<&str>) -> Result<(Option<SetId>, Vec<Location>), String> {
+    let mut set = None;
+    let mut places = Vec::new();
+    for word in arg.unwrap_or_default().split_whitespace() {
+        if word.contains(':') {
+            places.push(Location::parse(word)?);
+        } else if set.is_none() {
+            set = Some(parse_set(word)?);
+        } else {
+            return Err(format!("one set at a time, then file:line places; `{word}` is neither"));
+        }
+    }
+    Ok((set, places))
+}
+
+/// A breakpoint to put in a set or take out, or a place to make one in it.
+enum Target {
+    Breakpoint(TabId, BreakpointId),
+    Place(PathBuf, u32),
+}
+
+/// What `set add`, `set remove` and `set toggle` do with a breakpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Membership {
+    Add,
+    Remove,
+    Toggle,
+}
+
 impl App {
-    pub(crate) fn set_new(&mut self) -> Outcome {
-        let engine = &mut self.tab_mut().engine;
-        let set = engine.new_set().map_err(|e| e.to_string())?;
-        Ok(format!("new set {}, active; breakpoints added go to it · {}", set_name(set), roles(engine)))
+    /// `/set new [file:line…]`: a set in a new colour, made active. The breakpoints at the
+    /// places, made where there are none, else the breakpoint selected or on the SOURCE line,
+    /// if there is one, are in it from the start.
+    pub(crate) fn set_new(&mut self, places: Option<String>) -> Outcome {
+        let (named, places) = set_and_places(places.as_deref())?;
+        if named.is_some() {
+            return Err("a new set takes the first free colour; /set new takes only file:line places".into());
+        }
+        let here = if places.is_empty() { self.breakpoint_here().ok() } else { None };
+        let set = self.tab_mut().engine.new_set().map_err(|e| e.to_string())?;
+        let mut joined = Vec::new();
+        for place in &places {
+            let (path, line) = self.place(place)?;
+            joined.push(self.tab_mut().engine.put_in_set(&path, line, set).map_err(|e| e.to_string())?.0);
+        }
+        if let Some((tab, id)) = here {
+            self.engine_of(tab)?.join_set(id, set).map_err(|e| e.to_string())?;
+            joined.push(id);
+        }
+        let with = match joined.as_slice() {
+            [] => String::new(),
+            ids => format!(" with {}", ids.iter().map(|id| format!("#{id}")).collect::<Vec<_>>().join(", ")),
+        };
+        let roles = roles(&self.tab().engine);
+        Ok(format!("new set {}{with}, active; breakpoints added go to it · {roles}", set_name(set)))
     }
 
     /// Makes the set `delta` places on active.
@@ -53,25 +118,63 @@ impl App {
         Ok(roles(engine))
     }
 
-    /// Moves the breakpoint selected in BREAKPOINTS, or on the SOURCE line, to `to`, or to the
-    /// set after its own.
-    pub(crate) fn set_move(&mut self, to: Option<String>) -> Outcome {
-        let to = to.as_deref().map(parse_set).transpose()?;
-        let (tab, id) = self.breakpoint_here()?;
-        let engine = self.engine_of(tab)?;
-        let bps = engine.breakpoints();
-        let from = bps.get(id).map(|b| b.set).ok_or("that breakpoint is gone")?;
-        if to.is_none() && bps.sets().len() == 1 {
-            return Err(self.one_set());
+    /// `/set add|remove|toggle [set] [file:line…]`: the breakpoints at the places, else the one
+    /// selected or on the SOURCE line, join the set (the active one) or leave it. `add` makes a
+    /// breakpoint in that set alone at a place that has none.
+    pub(crate) fn set_membership(&mut self, how: Membership, arg: Option<String>) -> Outcome {
+        let (named, places) = set_and_places(arg.as_deref())?;
+        let set = named.unwrap_or_else(|| self.tab().engine.breakpoints().active_set());
+        let mut targets = Vec::new();
+        if places.is_empty() {
+            let (tab, id) = self.breakpoint_here()?;
+            targets.push(Target::Breakpoint(tab, id));
         }
-        let to = to.unwrap_or_else(|| bps.neighbour(from, 1));
-        engine.move_breakpoint(id, to).map_err(|e| format!("{}: {e}", set_name(to)))?;
-        let note = if to == engine.breakpoints().active_set() { "it stops" } else { "it records only" };
-        Ok(format!("#{id} is in {} now: {note}", set_name(to)))
+        for place in &places {
+            let (path, line) = self.place(place)?;
+            targets.push(match self.tab().engine.breakpoints().at(&canonical(&path), line) {
+                Some(bp) => Target::Breakpoint(self.tabs.active_id(), bp.id),
+                None => Target::Place(path, line),
+            });
+        }
+        let mut said = Vec::new();
+        for target in targets {
+            said.push(self.change_membership(how, target, set)?);
+        }
+        // Joining a set that is not active makes no breakpoint stop.
+        let records = how != Membership::Remove && set != self.tab().engine.breakpoints().active_set();
+        let note = if records { format!(" · {} records only", set_name(set)) } else { String::new() };
+        Ok(format!("{}{note}", said.join(" · ")))
     }
 
-    /// `/set delete [set] [to]`: the set named, else that of the selected breakpoint, else the
-    /// active one. Its breakpoints go to `to`, or, asked for twice in a row, with it.
+    /// A breakpoint joins `set` or leaves it, or one is made at a place in it alone; says
+    /// which sets it is in then.
+    fn change_membership(&mut self, how: Membership, target: Target, set: SetId) -> Result<String, Refusal> {
+        let failed = |e: anyhow::Error| format!("{}: {e}", set_name(set));
+        let (engine, id) = match target {
+            Target::Breakpoint(tab, id) => {
+                let engine = self.engine_of(tab)?;
+                let in_set = engine.breakpoints().get(id).is_some_and(|b| b.in_set(set));
+                if how == Membership::Remove || (how == Membership::Toggle && in_set) {
+                    engine.leave_set(id, set).map_err(failed)?;
+                } else {
+                    engine.join_set(id, set).map_err(failed)?;
+                }
+                (engine, id)
+            }
+            Target::Place(_, _) if how == Membership::Remove => return Err("no breakpoint there".into()),
+            Target::Place(path, line) => {
+                let engine = &mut self.tab_mut().engine;
+                let (id, _) = engine.put_in_set(&path, line, set).map_err(failed)?;
+                (engine, id)
+            }
+        };
+        let sets = engine.breakpoints().get(id).map(|b| b.sets.clone()).unwrap_or_default();
+        Ok(format!("#{id} is in {}", names(&sets)))
+    }
+
+    /// `/set delete [set] [to]`: the set named, else the one the selected breakpoint is shown
+    /// in, else the active one. Its breakpoints join `to`; without, those in no other set go
+    /// with it, once asked for twice in a row.
     pub(crate) fn set_delete(&mut self, arg: Option<String>) -> Outcome {
         let mut words = arg.as_deref().unwrap_or_default().split_whitespace();
         let named = words.next().map(parse_set).transpose()?;
@@ -80,21 +183,22 @@ impl App {
             Some(set) => (self.tabs.active_id(), set),
             None => match self.selected_bp() {
                 Some((tab, id)) => {
-                    let set = self.engine_of(tab)?.breakpoints().get(id).map(|b| b.set);
+                    let bps = self.engine_of(tab)?.breakpoints();
+                    let set = bps.get(id).map(|b| b.shown_set(bps.active_set()));
                     (tab, set.ok_or("that breakpoint is gone")?)
                 }
                 None => (self.tabs.active_id(), self.tab().engine.breakpoints().active_set()),
             },
         };
-        let count = self.engine_of(tab)?.breakpoints().in_set(set).count();
-        if to.is_none() && count > 0 && self.ui.deleting != Some((tab, set)) {
+        let alone = self.engine_of(tab)?.breakpoints().members(set).filter(|b| b.sets.len() == 1).count();
+        if to.is_none() && alone > 0 && self.ui.deleting != Some((tab, set)) {
             self.ui.deleting = Some((tab, set));
             let again = self.key_or_command("set delete");
             let name = set_name(set);
-            let (them, pronoun) = if count == 1 {
-                ("its breakpoint".to_owned(), "it")
+            let (them, pronoun) = if alone == 1 {
+                ("its breakpoint in no other set".to_owned(), "it")
             } else {
-                (format!("its {count} breakpoints"), "them")
+                (format!("its {alone} breakpoints in no other set"), "them")
             };
             return Err(Refusal::warn(format!(
                 "{again} again deletes {name} with {them}; /set delete {name} ‹set› moves {pronoun} there"
@@ -104,12 +208,21 @@ impl App {
         let engine = self.engine_of(tab)?;
         let deleted = engine.delete_set(set, to).map_err(|e| format!("{}: {e}", set_name(set)))?;
         let what = match (to, deleted) {
-            (Some(to), _) if count > 0 => format!("; its breakpoints are in {}", set_name(to)),
-            (_, 0) => String::new(),
-            (_, 1) => " with its breakpoint".to_owned(),
-            (_, n) => format!(" with its {n} breakpoints"),
+            (Some(to), _) => format!("; its breakpoints are in {}", set_name(to)),
+            (None, 0) => String::new(),
+            (None, 1) => " with its breakpoint".to_owned(),
+            (None, n) => format!(" with its {n} breakpoints"),
         };
         Ok(format!("deleted {}{what} · {}", set_name(set), roles(engine)))
+    }
+
+    /// A place as typed, `file:line` or `:line` in the file in SOURCE.
+    fn place(&self, place: &Location) -> Result<(PathBuf, u32), Refusal> {
+        let path = match &place.file {
+            Some(file) => self.resolve_file(file)?,
+            None => self.breakpoint_file()?,
+        };
+        Ok((path, place.line))
     }
 
     /// The breakpoint selected in BREAKPOINTS, else the one on the SOURCE line.
@@ -138,6 +251,16 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_set_and_places_are_told_apart() {
+        let (set, places) = set_and_places(Some("teal orders.php:68 :12")).expect("parse");
+        assert_eq!((set, places.len()), (Some(1), 2));
+        assert_eq!(places[1], Location { file: None, line: 12 });
+        assert_eq!(set_and_places(None), Ok((None, vec![])));
+        assert!(set_and_places(Some("teal rose")).is_err());
+        assert_eq!(names(&[0, 1, 3]), "rose, teal and sky");
+    }
 
     #[test]
     fn sets_go_by_their_colour() {

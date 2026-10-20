@@ -107,8 +107,7 @@ fn symbol_status(app: &App, flow: Option<&Flow>, path: &Path, symbol: &Symbol) -
     let bp = bps.in_file(path).find(|b| (symbol.line..=symbol.end).contains(&b.line));
     let mut note = Vec::new();
     if let Some(bp) = bp {
-        let (glyph, color) = super::breakpoints::glyph(bp, bps.active_set(), false);
-        note.push(seg(glyph, bold(color)));
+        note.extend(super::breakpoints::marks(bp, bps.active_set(), false));
         note.push(seg(format!(":{} ", bp.line), fg(DIM)));
     }
     if status.is_none() {

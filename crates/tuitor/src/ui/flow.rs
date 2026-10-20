@@ -12,7 +12,7 @@ use tuitor_core::breakpoints::Breakpoint;
 use tuitor_core::config::home_relative;
 use tuitor_core::flow::{Axis, Flow, Row, Status};
 
-use super::breakpoints::glyph;
+use super::breakpoints::{glyph, marks};
 use super::paint::{Painter, Panel, Seg, seg, truncate_left};
 use super::syntax::highlight;
 use super::theme::*;
@@ -351,8 +351,7 @@ fn next_breakpoints(tab: &Tab, view: &FlowView) -> Vec<Seg<'static>> {
         if i > 0 {
             segs.push(seg(" · ", fg(GHOST)));
         }
-        let (glyph, color) = glyph(bp, tab.engine.breakpoints().active_set(), false);
-        segs.push(seg(glyph, bold(color)));
+        segs.extend(marks(bp, tab.engine.breakpoints().active_set(), false));
         segs.push(seg(format!(" {}:{}", file_name(&row.path), bp.line), fg(FG)));
         let when = match flow.axis {
             Axis::Time(_) => format!(" in {} ms of trace", ms(at - flow.now)),
@@ -491,14 +490,13 @@ pub fn detail(p: &mut Painter<'_>, app: &App, area: Rect) {
     for n in first..first + height {
         let Some(text) = source.lines.get(usize::try_from(n - 1).unwrap_or(usize::MAX)) else { break };
         let x = inner.x;
+        let number_style = if n == focus_line { fg(FG) } else { fg(FAINT) };
+        p.text(x + 1, y, &format!("{n:>5} "), number_style, inner.right());
         if let Some(bp) = breakpoints.at(&row.path, n) {
-            let (glyph, color) = glyph(bp, breakpoints.active_set(), false);
-            p.text(x, y, glyph, bold(color), inner.right());
+            p.segs(x, y, &marks(bp, breakpoints.active_set(), false), x + if n < 10_000 { 2 } else { 1 });
         } else if row.lines.contains_key(&n) {
             p.text(x, y, "│", fg(GHOST), inner.right());
         }
-        let number_style = if n == focus_line { fg(FG) } else { fg(FAINT) };
-        p.text(x + 1, y, &format!("{n:>5} "), number_style, inner.right());
         let mut cx = x + 8;
         for (piece, style) in highlight(text, lang) {
             cx = p.text(cx, y, &piece, style, inner.right());
@@ -624,8 +622,7 @@ fn breakpoints_of(tab: &Tab, view: &FlowView, row: &Row) -> Vec<Seg<'static>> {
         if !segs.is_empty() {
             segs.push(seg(" · ", fg(GHOST)));
         }
-        let (glyph, color) = glyph(bp, tab.engine.breakpoints().active_set(), false);
-        segs.push(seg(glyph, bold(color)));
+        segs.extend(marks(bp, tab.engine.breakpoints().active_set(), false));
         segs.push(seg(format!(" :{}", bp.line), fg(FG)));
         let reached: Vec<f64> = row.lines.get(&bp.line).cloned().unwrap_or_default();
         let note = match (reached.iter().find(|at| **at > flow.now), reached.is_empty(), flow.axis) {

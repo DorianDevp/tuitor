@@ -178,9 +178,9 @@ async fn breakpoints_of_another_set_record_and_go_on() {
     // Both items that are not cancelled pass line 12; the program waits at line 14.
     pump(&mut engine, &mut rx, |e| e.session(sid).is_some_and(|s| s.live().is_some())).await;
     let session = engine.session(sid).expect("session");
-    let stops: Vec<(u32, Option<u8>, bool)> =
-        session.history.iter().map(|s| (s.top().map_or(0, |f| f.line), s.set, s.silent)).collect();
-    assert_eq!(stops, [(BREAK_LINE, Some(teal), true), (BREAK_LINE, Some(teal), true), (14, Some(rose), false)]);
+    let stops: Vec<(u32, Vec<u8>, bool)> =
+        session.history.iter().map(|s| (s.top().map_or(0, |f| f.line), s.sets.clone(), s.silent)).collect();
+    assert_eq!(stops, [(BREAK_LINE, vec![teal], true), (BREAK_LINE, vec![teal], true), (14, vec![rose], false)]);
     assert_eq!(session.history[1].local_value("$total"), Some("89.99"));
 
     engine.resume(sid, Step::Continue).expect("continue");

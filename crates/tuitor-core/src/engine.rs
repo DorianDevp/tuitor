@@ -466,14 +466,38 @@ impl Engine {
         Ok(())
     }
 
-    pub fn move_breakpoint(&mut self, id: BreakpointId, set: SetId) -> Result<()> {
-        self.breakpoints.move_to(id, set)?;
+    /// Puts breakpoint `id` in `set` too; false when it was in it already.
+    pub fn join_set(&mut self, id: BreakpointId, set: SetId) -> Result<bool> {
+        let joined = self.breakpoints.join(id, set)?;
+        self.save();
+        Ok(joined)
+    }
+
+    /// Puts the breakpoint at `line` of `path` in `set`, made there in that set alone when
+    /// there is none. Returns it and whether it is new.
+    pub fn put_in_set(&mut self, path: &Path, line: u32, set: SetId) -> Result<(BreakpointId, bool)> {
+        let path = canonical(path);
+        if let Some(id) = self.breakpoints.at(&path, line).map(|b| b.id) {
+            self.join_set(id, set)?;
+            return Ok((id, false));
+        }
+        if !self.breakpoints.sets().contains(&set) {
+            bail!("there is no such set");
+        }
+        let id = self.breakpoints.add_in(path.clone(), line, set);
+        self.breakpoints_changed(&path);
+        Ok((id, true))
+    }
+
+    /// Takes breakpoint `id` out of `set`; it stays in another.
+    pub fn leave_set(&mut self, id: BreakpointId, set: SetId) -> Result<()> {
+        self.breakpoints.leave(id, set)?;
         self.save();
         Ok(())
     }
 
-    /// Deletes `set`; its breakpoints go to `to`, or are deleted with it. Returns how many
-    /// breakpoints were deleted.
+    /// Deletes `set`; its breakpoints join `to`, if given, and those in no other set are
+    /// deleted with it. Returns how many were.
     pub fn delete_set(&mut self, set: SetId, to: Option<SetId>) -> Result<usize> {
         let removed = self.breakpoints.delete_set(set, to)?;
         let mut files: Vec<PathBuf> = removed.iter().map(|b| b.path.clone()).collect();
@@ -1122,7 +1146,7 @@ impl Engine {
         // while it was read keeps the program here.
         let passing = self.session_ref(sid).is_ok_and(|s| s.passing && !s.hold);
         let silent = passing && self.breakpoints.passes(&stop.hits);
-        let set = self.breakpoints.set_of(&stop.hits);
+        let sets = self.breakpoints.sets_of(&stop.hits);
 
         let Ok(session) = self.session_mut(sid) else { return };
         if session.passing && !silent {
@@ -1151,7 +1175,7 @@ impl Engine {
             reason: stop.reason,
             description: stop.description,
             hit_breakpoints: stop.hits,
-            set,
+            sets,
             silent,
             frames: capture.frames,
             watches: capture.watches,

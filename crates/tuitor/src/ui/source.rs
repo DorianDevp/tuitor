@@ -10,7 +10,7 @@ use tuitor_core::session::{SessionState, SourceText};
 use tuitor_core::snapshot::{Change, Frame};
 use unicode_width::UnicodeWidthChar;
 
-use super::breakpoints::glyph;
+use super::breakpoints::marks;
 use super::logo::{self, Size};
 use super::paint::{Painter, Panel, Seg, seg, truncate, truncate_left};
 use super::syntax::{Lang, highlight};
@@ -133,12 +133,6 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
         if let Some(bg) = row_bg {
             p.band(x, y, inner.width, bg);
         }
-        if let Some(bp) = breakpoints.get(&n) {
-            let (glyph, color) = glyph(bp, active, hit.contains(&bp.id));
-            p.text(x, y, glyph, bold(color), inner.right());
-        } else if reached.is_some_and(|lines| lines.contains_key(&n)) {
-            p.text(x, y, "│", fg(GHOST), inner.right());
-        }
         let number_style = if is_exec {
             bold(if exec_is_top && !in_history { AMBER } else { DIM })
         } else if n == cursor && browsing {
@@ -147,6 +141,12 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
             fg(FAINT)
         };
         p.text(x + 1, y, &format!("{n:>5} "), number_style, inner.right());
+        // Over the number's padding, which a line number of five digits does not leave.
+        if let Some(bp) = breakpoints.get(&n) {
+            p.segs(x, y, &marks(bp, active, hit.contains(&bp.id)), x + if n < 10_000 { 2 } else { 1 });
+        } else if reached.is_some_and(|lines| lines.contains_key(&n)) {
+            p.text(x, y, "│", fg(GHOST), inner.right());
+        }
         if is_exec {
             p.text(
                 x + 7,

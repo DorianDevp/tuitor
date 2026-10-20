@@ -9,6 +9,8 @@ use std::time::Duration;
 
 use serde_json::{Map, Value};
 use tokio::sync::mpsc::UnboundedReceiver;
+use tuitor_core::breakpoints::SetId;
+use tuitor_core::compare::{Delta, Recording, align, differences};
 use tuitor_core::config::{Adapters, LaunchConfig, RequestKind};
 use tuitor_core::log::OutputKind;
 use tuitor_core::session::{SessionId, SessionState};
@@ -24,13 +26,18 @@ fn have_gdb() -> bool {
 }
 
 fn build_fixture(dir: &Path) -> PathBuf {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sum.rs");
-    std::fs::copy(&src, dir.join("sum.rs")).expect("copy fixture");
-    let bin = dir.join("sum");
+    build(dir, "sum")
+}
+
+/// Builds fixture `name`.rs into `dir`, with debug information and no optimisation.
+fn build(dir: &Path, name: &str) -> PathBuf {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/{name}.rs"));
+    std::fs::copy(&src, dir.join(format!("{name}.rs"))).expect("copy fixture");
+    let bin = dir.join(name);
     let status = Command::new("rustc")
         .args(["-g", "-C", "opt-level=0", "-o"])
         .arg(&bin)
-        .arg(dir.join("sum.rs"))
+        .arg(dir.join(format!("{name}.rs")))
         .status()
         .expect("run rustc");
     assert!(status.success(), "rustc failed");
@@ -171,14 +178,17 @@ async fn breakpoints_of_another_set_record_and_go_on_with_gdb() {
     // The active set's breakpoint stops.
     pump(&mut engine, &mut rx, |e| stops(e, sid) >= 1).await;
     let first = engine.session(sid).and_then(|s| s.latest()).expect("snapshot");
-    assert_eq!((first.top().map(|f| f.line), first.set, first.silent), (Some(11), Some(rose), false));
+    assert_eq!((first.top().map(|f| f.line), first.sets.clone(), first.silent), (Some(11), vec![rose], false));
 
     // The other set's breakpoint stops once it is active...
     engine.activate_set(teal).expect("activate");
     engine.resume(sid, Step::Continue).expect("continue");
     pump(&mut engine, &mut rx, |e| e.session(sid).is_some_and(|s| s.is_stopped()) && stops(e, sid) >= 2).await;
     let second = engine.session(sid).and_then(|s| s.latest()).expect("snapshot");
-    assert_eq!((second.top().map(|f| f.line), second.set, second.silent), (Some(BREAK_LINE), Some(teal), false));
+    assert_eq!(
+        (second.top().map(|f| f.line), second.sets.clone(), second.silent),
+        (Some(BREAK_LINE), vec![teal], false)
+    );
 
     // ...and records its next hits without stopping once it is not: the program runs to its end.
     engine.activate_set(rose).expect("activate");
@@ -188,8 +198,88 @@ async fn breakpoints_of_another_set_record_and_go_on_with_gdb() {
     let passed: Vec<(bool, Option<&str>)> =
         session.history[2..].iter().map(|s| (s.silent, s.local_value("sum"))).collect();
     assert_eq!(passed, [(true, Some("10")), (true, Some("30"))]);
-    assert!(session.history[2..].iter().all(|s| s.set == Some(teal) && !s.live && s.watches.is_empty()));
+    assert!(session.history[2..].iter().all(|s| s.sets == [teal] && !s.live && s.watches.is_empty()));
     assert_eq!(session.latest_stop().map(|s| s.number), Some(2));
     assert_eq!(engine.breakpoints().get(2).map(|b| b.hits), Some(3));
     assert!(engine.output().iter().any(|l| l.text.contains("total=60")), "the program did not run to its end");
+}
+
+/// Runs `bin` with `args` in a session of its own to its end, going on from every stop.
+async fn run_to_end(
+    engine: &mut Engine,
+    rx: &mut UnboundedReceiver<EngineMsg>,
+    bin: &Path,
+    args: &[&str],
+) -> SessionId {
+    let mut arguments = Map::new();
+    arguments.insert("program".into(), Value::String(bin.display().to_string()));
+    arguments.insert("args".into(), Value::Array(args.iter().map(|a| Value::String((*a).into())).collect()));
+    let sid = engine.start(LaunchConfig::adhoc("paths", "gdb", RequestKind::Launch, arguments)).expect("start");
+    pump(engine, rx, |e| e.session(sid).is_some_and(|s| s.state == SessionState::Running)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    loop {
+        let waits_or_ended = |e: &Engine| e.session(sid).is_some_and(|s| s.live().is_some() || !s.is_alive());
+        pump(engine, rx, waits_or_ended).await;
+        if !engine.session(sid).is_some_and(|s| s.is_alive()) {
+            return sid;
+        }
+        engine.resume(sid, Step::Continue).expect("continue");
+    }
+}
+
+/// Two sets for two ways into one service, sharing the service's breakpoints: what each
+/// recorded in a run of its own lines up at the shared ones, whose values differ.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sets_that_share_breakpoints_compare_across_two_runs_with_gdb() {
+    if !have_gdb() {
+        eprintln!("gdb not installed; skipping");
+        return;
+    }
+    let tmp = TestDir::new("gdb-paths");
+    let dir = tmp.path().to_path_buf();
+    let bin = build(&dir, "paths");
+    let source = std::fs::canonicalize(dir.join("paths.rs")).expect("source path");
+    let (mut engine, mut rx) =
+        Engine::new(EngineOptions { adapters: Adapters::default(), workspace: dir.clone(), state_file: None });
+
+    // Rose: the controller's way in; teal: the command's. Both go through service and helper.
+    let rose = engine.breakpoints().active_set();
+    for line in [13, 8, 4] {
+        engine.toggle_breakpoint(&source, line);
+    }
+    let teal = engine.new_set().expect("set");
+    for line in [18, 8, 4] {
+        engine.put_in_set(&source, line, teal).expect("put in teal");
+    }
+    let shared = |line| engine.breakpoints().at(&source, line).map(|b| b.sets.clone());
+    assert_eq!((shared(8), shared(18)), (Some(vec![rose, teal]), Some(vec![teal])));
+    engine.activate_set(rose).expect("activate");
+
+    // The controller, rose active: every breakpoint on its way is rose's and stops.
+    let first = run_to_end(&mut engine, &mut rx, &bin, &[]).await;
+    // The command, rose still active: its own breakpoint, teal's alone, records and goes on;
+    // the shared ones are rose's too, and stop.
+    let second = run_to_end(&mut engine, &mut rx, &bin, &["command"]).await;
+    let stops = |sid| -> Vec<(u32, bool)> {
+        let history = engine.session(sid).map(|s| s.history.as_slice()).unwrap_or_default();
+        history.iter().map(|s| (s.top().map_or(0, |f| f.line), s.silent)).collect()
+    };
+    assert_eq!(stops(first), [(13, false), (8, false), (4, false)]);
+    assert_eq!(stops(second), [(18, true), (8, false), (4, false)]);
+    let printed = |text: &str| engine.output().iter().filter(|l| l.text.contains(text)).count();
+    assert_eq!((printed("result=41"), printed("result=61")), (1, 1));
+
+    // Rose's path in the first run against teal's in the second.
+    let recording = |sid, set: SetId| {
+        let history = engine.session(sid).map(|s| s.history.as_slice()).unwrap_or_default();
+        Recording { stops: history.iter().filter(|s| s.sets.contains(&set)).collect(), start: history[0].time }
+    };
+    let (a, b) = (recording(first, rose), recording(second, teal));
+    let entries = align(&a, &b);
+    let id = |line| engine.breakpoints().at(&source, line).map(|b| b.id).expect("breakpoint");
+    let shape: Vec<(u32, bool, bool)> = entries.iter().map(|e| (e.breakpoint, e.a.is_some(), e.b.is_some())).collect();
+    assert_eq!(shape, [(id(13), true, false), (id(18), false, true), (id(8), true, true), (id(4), true, true)]);
+    let (Some(at_a), Some(at_b)) = (entries[3].a, entries[3].b) else { panic!("helper hit on both") };
+    let n = differences(at_a, at_b).into_iter().find(|(name, _)| name == "n").map(|(_, delta)| delta);
+    assert_eq!(n, Some(Delta::Differs("20".into(), "30".into())));
 }
