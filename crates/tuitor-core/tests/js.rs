@@ -178,7 +178,7 @@ async fn breakpoints_of_another_set_record_and_go_on() {
         Engine::new(EngineOptions { adapters, workspace: dir.path().to_path_buf(), state_file: None });
     let rose = engine.breakpoints().active_set();
     engine.toggle_breakpoint(&script, 77); // `revenue += total;`
-    let teal = engine.new_set().expect("set");
+    let teal = engine.new_set();
     engine.toggle_breakpoint(&script, 39); // `return line.qty * line.price;`
     engine.activate_set(rose).expect("activate");
     let Value::Object(args) = json!({ "program": script.display().to_string(), "console": "internalConsole" }) else {

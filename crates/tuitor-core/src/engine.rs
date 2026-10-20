@@ -453,11 +453,18 @@ impl Engine {
     // Every enabled breakpoint is with the adapter whatever its set, so none of this sends
     // anything: which stops wait is decided at each stop.
 
-    /// A set in a colour no set has, made active.
-    pub fn new_set(&mut self) -> Result<SetId> {
-        let set = self.breakpoints.new_set()?;
+    /// A set in a colour of its own, apart from the others', made active.
+    pub fn new_set(&mut self) -> SetId {
+        let set = self.breakpoints.new_set();
         self.save();
-        Ok(set)
+        set
+    }
+
+    /// A set in colour `set`, made active.
+    pub fn new_set_in(&mut self, set: SetId) -> Result<()> {
+        self.breakpoints.new_set_in(set)?;
+        self.save();
+        Ok(())
     }
 
     /// Makes `set` the one whose breakpoints stop the program, from its next hit on, also

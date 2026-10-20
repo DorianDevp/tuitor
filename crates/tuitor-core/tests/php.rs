@@ -158,7 +158,7 @@ async fn breakpoints_of_another_set_record_and_go_on() {
     let (mut engine, mut rx) = Engine::new(EngineOptions { adapters, workspace: dir.clone(), state_file: None });
     let rose = engine.breakpoints().active_set();
     engine.toggle_breakpoint(&script, 14); // `return $total;`
-    let teal = engine.new_set().expect("set");
+    let teal = engine.new_set();
     engine.toggle_breakpoint(&script, BREAK_LINE);
     engine.activate_set(rose).expect("activate");
 
@@ -178,7 +178,7 @@ async fn breakpoints_of_another_set_record_and_go_on() {
     // Both items that are not cancelled pass line 12; the program waits at line 14.
     pump(&mut engine, &mut rx, |e| e.session(sid).is_some_and(|s| s.live().is_some())).await;
     let session = engine.session(sid).expect("session");
-    let stops: Vec<(u32, Vec<u8>, bool)> =
+    let stops: Vec<(u32, Vec<tuitor_core::breakpoints::SetId>, bool)> =
         session.history.iter().map(|s| (s.top().map_or(0, |f| f.line), s.sets.clone(), s.silent)).collect();
     assert_eq!(stops, [(BREAK_LINE, vec![teal], true), (BREAK_LINE, vec![teal], true), (14, vec![rose], false)]);
     assert_eq!(session.history[1].local_value("$total"), Some("89.99"));

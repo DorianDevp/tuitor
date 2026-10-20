@@ -201,7 +201,7 @@ mod tests {
             reason: "breakpoint".into(),
             description: None,
             hit_breakpoints: vec![bp],
-            sets: vec![0],
+            sets: vec![crate::breakpoints::SetId::FIRST_OF_OLD],
             silent: false,
             frames: vec![frame],
             watches: vec![],

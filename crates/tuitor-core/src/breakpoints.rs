@@ -14,16 +14,11 @@ use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use tuitor_dap::types::{self as dap, SourceBreakpoint};
 
+use crate::palette;
+pub use crate::palette::SetId;
 use crate::session::SessionId;
 
 pub type BreakpointId = u32;
-
-/// A set has no name: it is known by its colour, one of the UI's palette of [`SET_COLORS`],
-/// and this is the colour's place in it.
-pub type SetId = u8;
-
-/// How many sets there can be: as many as there are colours that stay apart on screen.
-pub const SET_COLORS: SetId = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Breakpoint {
@@ -107,25 +102,29 @@ pub struct Breakpoints {
 }
 
 impl Default for Breakpoints {
+    /// One set, in the first colour [`palette::next`] gives.
     fn default() -> Self {
-        Self { items: Vec::new(), next_id: 0, sets: vec![0], active: 0, sent: HashMap::new() }
+        let first = palette::next(&[]);
+        Self { items: Vec::new(), next_id: 0, sets: vec![first], active: first, sent: HashMap::new() }
     }
 }
 
 impl Breakpoints {
-    /// Breakpoints and sets as saved. Saved before there were sets, they are all in one, the
-    /// first colour's; a breakpoint left in no set that is in the file goes to the first set.
+    /// Breakpoints and sets as saved. Saved before there were sets, they are all in one, rose,
+    /// the first colour sets had then; with no breakpoint and no set, there is one set in the
+    /// first colour [`palette::next`] gives. A breakpoint left in no set that is in the file
+    /// goes to the first set.
     pub fn from_saved(mut items: Vec<Breakpoint>, saved_sets: &[SetId], active: Option<SetId>) -> Self {
         let mut sets: Vec<SetId> = Vec::new();
-        for set in saved_sets.iter().copied().filter(|s| *s < SET_COLORS) {
+        for set in saved_sets.iter().copied().filter(|s| s.is_known()) {
             if !sets.contains(&set) {
                 sets.push(set);
             }
         }
-        let first = *sets.first().unwrap_or(&0);
         if sets.is_empty() {
-            sets.push(first);
+            sets.push(if items.is_empty() { palette::next(&[]) } else { SetId::FIRST_OF_OLD });
         }
+        let first = sets[0];
         for bp in &mut items {
             let mut kept: Vec<SetId> = Vec::new();
             for set in bp.sets.iter().copied().filter(|s| sets.contains(s)) {
@@ -333,15 +332,27 @@ impl Breakpoints {
         self.sets[(index + delta).rem_euclid(len) as usize]
     }
 
-    /// A set in the first colour no set has, made the active one, so that the breakpoints
-    /// added next go to it.
-    pub fn new_set(&mut self) -> Result<SetId> {
-        let Some(set) = (0..SET_COLORS).find(|s| !self.sets.contains(s)) else {
-            bail!("there are {SET_COLORS} sets, one for each colour; /set delete makes room");
-        };
+    /// A set in a colour of its own, chosen to stay apart from the others' ([`palette::next`]),
+    /// made the active one, so that the breakpoints added next go to it.
+    pub fn new_set(&mut self) -> SetId {
+        let set = palette::next(&self.sets);
         self.sets.push(set);
         self.active = set;
-        Ok(set)
+        set
+    }
+
+    /// A set in colour `set`, made the active one: PATHS shows a path in the colour of its set
+    /// before the set is made.
+    pub fn new_set_in(&mut self, set: SetId) -> Result<()> {
+        if !set.is_known() {
+            bail!("{set} is not a colour");
+        }
+        if self.sets.contains(&set) {
+            bail!("there is a set of colour {set} already");
+        }
+        self.sets.push(set);
+        self.active = set;
+        Ok(())
     }
 
     /// Puts breakpoint `id` in `set` too; false when it was in it already.
@@ -519,83 +530,121 @@ mod tests {
         assert_eq!(restored.add(PathBuf::from("/a.rs"), 3), 3);
     }
 
-    #[test]
-    fn breakpoints_saved_before_sets_are_in_the_first_set() {
-        let old: Vec<Breakpoint> =
-            serde_json::from_str(r#"[{"id":1,"path":"/a.rs","line":3},{"id":2,"path":"/a.rs","line":9}]"#)
-                .expect("old");
-        let bps = Breakpoints::from_saved(old, &[], None);
-        assert_eq!((bps.sets(), bps.active_set()), (&[0][..], 0));
-        assert!(bps.iter().all(|b| b.sets == [0]));
-
-        // Sets gone from the file, or out of the palette, are left; a breakpoint in none of
-        // the sets there are goes to the first.
-        let mut saved = bps.saved().to_vec();
-        (saved[0].sets, saved[1].sets) = (vec![3, 2, 2], vec![3]);
-        let bps = Breakpoints::from_saved(saved, &[2, 2, 9], Some(4));
-        assert_eq!((bps.sets(), bps.active_set()), (&[2][..], 2));
-        assert_eq!(bps.iter().map(|b| b.sets.clone()).collect::<Vec<_>>(), [vec![2], vec![2]]);
+    /// Rose, teal, orchid, sky and gold, the colours sets had before they were chosen.
+    fn old(place: usize) -> SetId {
+        SetId::from_rgb(palette::OLD[place].0)
     }
 
     #[test]
-    fn sets_are_saved_with_their_breakpoints() {
+    fn breakpoints_saved_before_sets_are_in_rose() {
+        let old_file: Vec<Breakpoint> =
+            serde_json::from_str(r#"[{"id":1,"path":"/a.rs","line":3},{"id":2,"path":"/a.rs","line":9}]"#)
+                .expect("old");
+        let bps = Breakpoints::from_saved(old_file, &[], None);
+        let rose = old(0);
+        assert_eq!((bps.sets(), bps.active_set()), (&[rose][..], rose));
+        assert!(bps.iter().all(|b| b.sets == [rose]));
+
+        // Sets gone from the file, or not known, are left; a breakpoint in none of the sets
+        // there are goes to the first.
+        let mut saved = bps.saved().to_vec();
+        let (sky, orchid) = (old(3), old(2));
+        (saved[0].sets, saved[1].sets) = (vec![sky, orchid, orchid], vec![sky]);
+        let unknown: SetId = serde_json::from_str("9").expect("unknown");
+        let bps = Breakpoints::from_saved(saved, &[orchid, orchid, unknown], Some(old(4)));
+        assert_eq!((bps.sets(), bps.active_set()), (&[orchid][..], orchid));
+        assert_eq!(bps.iter().map(|b| b.sets.clone()).collect::<Vec<_>>(), [vec![orchid], vec![orchid]]);
+
+        // A new project has one set, in the first colour chosen.
+        let new = Breakpoints::from_saved(Vec::new(), &[], None);
+        assert_eq!(new.sets(), [palette::next(&[])]);
+        assert_eq!(Breakpoints::default().sets(), new.sets());
+    }
+
+    #[test]
+    fn sets_saved_by_their_place_among_the_old_colours_keep_those_colours() {
+        let text = r#"{"breakpoints":[{"id":1,"path":"/a.rs","line":3,"sets":[0,3]},
+            {"id":2,"path":"/a.rs","line":9,"sets":[3]}],"sets":[0,3,1],"active_set":3}"#;
+        let saved: crate::persist::Persisted = serde_json::from_str(text).expect("old file");
+        let bps = Breakpoints::from_saved(saved.breakpoints, &saved.sets, saved.active_set);
+        let (rose, teal, sky) = (old(0), old(1), old(3));
+        assert_eq!((bps.sets(), bps.active_set()), (&[rose, sky, teal][..], sky));
+        assert_eq!(bps.get(1).map(|b| b.sets.clone()), Some(vec![rose, sky]));
+        // Saved again, by colour.
+        let text = serde_json::to_string(bps.saved()).expect("save");
+        assert!(text.contains(r##""sets":["#f0909e","#7ea9ee"]"##), "{text}");
+    }
+
+    #[test]
+    fn sets_are_saved_with_their_breakpoints_and_keep_their_colours() {
         let mut bps = Breakpoints::default();
+        let first = bps.active_set();
         let a = bps.add(PathBuf::from("/a.rs"), 1);
-        let teal = bps.new_set().expect("set");
+        let teal = bps.new_set();
         let b = bps.add(PathBuf::from("/a.rs"), 2);
         bps.join(a, teal).expect("join");
         let text = serde_json::to_string(bps.saved()).expect("save");
-        let restored = Breakpoints::from_saved(serde_json::from_str(&text).expect("load"), bps.sets(), Some(teal));
-        assert_eq!((restored.sets(), restored.active_set()), (&[0, teal][..], teal));
-        assert_eq!(restored.get(a).map(|b| b.sets.clone()), Some(vec![0, teal]));
+        let sets: Vec<SetId> = serde_json::from_str(&serde_json::to_string(bps.sets()).expect("save")).expect("load");
+        let restored = Breakpoints::from_saved(serde_json::from_str(&text).expect("load"), &sets, Some(teal));
+        assert_eq!((restored.sets(), restored.active_set()), (&[first, teal][..], teal));
+        assert_eq!(restored.get(a).map(|b| b.sets.clone()), Some(vec![first, teal]));
         assert_eq!(restored.get(b).map(|b| b.sets.clone()), Some(vec![teal]));
     }
 
     #[test]
-    fn new_breakpoints_go_to_the_active_set_and_sets_take_the_free_colours() {
+    fn new_breakpoints_go_to_the_active_set_and_sets_take_colours_apart() {
         let mut bps = Breakpoints::default();
+        let zero = bps.active_set();
         let first = bps.add(PathBuf::from("/a.rs"), 1);
-        let (one, two) = (bps.new_set().expect("set"), bps.new_set().expect("set"));
-        assert_eq!((one, two, bps.active_set()), (1, 2, 2));
+        let (one, two) = (bps.new_set(), bps.new_set());
+        assert_eq!((one, two, bps.active_set()), (palette::next(&[zero]), palette::next(&[zero, one]), two));
         let second = bps.add(PathBuf::from("/a.rs"), 2);
         let third = bps.add_in(PathBuf::from("/a.rs"), 3, one);
-        assert_eq!(bps.get(first).map(|b| b.sets.clone()), Some(vec![0]));
-        assert_eq!(bps.get(second).map(|b| b.sets.clone()), Some(vec![2]));
+        assert_eq!(bps.get(first).map(|b| b.sets.clone()), Some(vec![zero]));
+        assert_eq!(bps.get(second).map(|b| b.sets.clone()), Some(vec![two]));
         assert_eq!(bps.get(third).map(|b| b.sets.clone()), Some(vec![one]));
-        // A deleted set's colour is free again; then there is one set per colour, and no more.
-        bps.delete_set(one, Some(0)).expect("delete");
-        assert_eq!(bps.new_set().expect("set"), 1);
-        while bps.sets().len() < usize::from(SET_COLORS) {
-            bps.new_set().expect("set");
+        // A deleted set's colour is free again, and the next set takes it.
+        bps.delete_set(one, Some(zero)).expect("delete");
+        assert_eq!(bps.new_set(), one);
+        // There is no end to sets.
+        for _ in 0..40 {
+            bps.new_set();
         }
-        assert!(bps.new_set().is_err());
+        assert_eq!(bps.sets().len(), 43);
         assert_eq!(bps.neighbour(bps.sets()[0], -1), *bps.sets().last().expect("sets"));
+        // A set in a colour given, as PATHS makes them; not twice.
+        let given = SetId::from_rgb(0x123456);
+        bps.new_set_in(given).expect("new");
+        assert_eq!(bps.active_set(), given);
+        assert!(bps.new_set_in(given).is_err());
     }
 
     #[test]
     fn a_breakpoint_joins_and_leaves_sets_but_stays_in_one() {
         let mut bps = Breakpoints::default();
+        let first = bps.active_set();
         let id = bps.add(PathBuf::from("/a.rs"), 1);
-        let teal = bps.new_set().expect("set");
+        let teal = bps.new_set();
         assert!(bps.join(id, teal).expect("join"));
         assert!(!bps.join(id, teal).expect("again"), "already in it");
-        assert!(bps.join(id, 4).is_err(), "no such set");
+        assert!(bps.join(id, SetId::from_rgb(0x123456)).is_err(), "no such set");
         assert_eq!(bps.members(teal).map(|b| b.id).collect::<Vec<_>>(), [id]);
-        bps.leave(id, 0).expect("leave");
+        bps.leave(id, first).expect("leave");
         assert!(bps.leave(id, teal).is_err(), "the last set it is in");
-        assert!(bps.leave(id, 0).is_err(), "not in it");
+        assert!(bps.leave(id, first).is_err(), "not in it");
         assert_eq!(bps.get(id).map(|b| b.sets.clone()), Some(vec![teal]));
     }
 
     #[test]
     fn a_breakpoint_stops_when_it_is_in_the_active_set_and_passes_only_when_it_is_not() {
         let mut bps = Breakpoints::default();
+        let first = bps.active_set();
         let rose = bps.add(PathBuf::from("/a.rs"), 1);
-        let teal_set = bps.new_set().expect("set");
+        let teal_set = bps.new_set();
         let teal = bps.add(PathBuf::from("/a.rs"), 2);
         let shared = bps.add(PathBuf::from("/a.rs"), 3);
-        bps.join(shared, 0).expect("join");
-        bps.activate(0).expect("activate");
+        bps.join(shared, first).expect("join");
+        bps.activate(first).expect("activate");
         assert!(bps.passes(&[teal]));
         assert!(!bps.passes(&[rose]));
         assert!(!bps.passes(&[shared]), "in the active set, and in another");
@@ -604,14 +653,14 @@ mod tests {
         assert!(!bps.passes(&[99]), "nor does one at a breakpoint that is gone");
         assert!(bps.any_passing());
         // The set it is shown in first: the active one when it is in it.
-        assert_eq!(bps.sets_of(&[99, shared]), [0, teal_set]);
+        assert_eq!(bps.sets_of(&[99, shared]), [first, teal_set]);
         assert_eq!(bps.sets_of(&[teal]), [teal_set]);
-        assert_eq!(bps.get(shared).map(|b| b.shown_set(0)), Some(0));
+        assert_eq!(bps.get(shared).map(|b| b.shown_set(first)), Some(first));
 
         // Switching sets turns it around, with nothing sent to the adapter.
         bps.activate(teal_set).expect("activate");
         assert!(bps.passes(&[rose]) && !bps.passes(&[teal]) && !bps.passes(&[shared]));
-        assert_eq!(bps.sets_of(&[shared]), [teal_set, 0]);
+        assert_eq!(bps.sets_of(&[shared]), [teal_set, first]);
         // A disabled breakpoint, which the adapter does not have, cannot be hit.
         bps.update(rose, |b| b.enabled = false);
         assert!(!bps.any_passing());
@@ -620,25 +669,26 @@ mod tests {
     #[test]
     fn a_deleted_set_takes_along_only_the_breakpoints_in_no_other() {
         let mut bps = Breakpoints::default();
-        let teal = bps.new_set().expect("set");
+        let first = bps.active_set();
+        let teal = bps.new_set();
         let a = bps.add(PathBuf::from("/a.rs"), 1);
-        let orchid = bps.new_set().expect("set");
+        let orchid = bps.new_set();
         let b = bps.add(PathBuf::from("/b.rs"), 2);
         let shared = bps.add(PathBuf::from("/c.rs"), 3);
-        bps.join(shared, 0).expect("join");
+        bps.join(shared, first).expect("join");
         assert!(bps.delete_set(teal, Some(teal)).is_err());
-        assert!(bps.delete_set(teal, Some(4)).is_err());
+        assert!(bps.delete_set(teal, Some(SetId::from_rgb(0x123456))).is_err());
 
         assert!(bps.delete_set(teal, Some(orchid)).expect("move").is_empty());
         assert_eq!(bps.get(a).map(|b| b.sets.clone()), Some(vec![orchid]));
-        assert_eq!(bps.sets(), [0, orchid]);
+        assert_eq!(bps.sets(), [first, orchid]);
 
         // The active set going leaves the first one active; the breakpoints in no other set
         // go with it, the shared one stays.
         let gone = bps.delete_set(orchid, None).expect("delete");
         assert_eq!(gone.iter().map(|b| b.id).collect::<Vec<_>>(), [a, b]);
-        assert_eq!((bps.sets(), bps.active_set(), bps.len()), (&[0][..], 0, 1));
-        assert_eq!(bps.get(shared).map(|b| b.sets.clone()), Some(vec![0]));
-        assert!(bps.delete_set(0, None).is_err(), "the last set stays");
+        assert_eq!((bps.sets(), bps.active_set(), bps.len()), (&[first][..], first, 1));
+        assert_eq!(bps.get(shared).map(|b| b.sets.clone()), Some(vec![first]));
+        assert!(bps.delete_set(first, None).is_err(), "the last set stays");
     }
 }

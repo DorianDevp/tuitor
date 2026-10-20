@@ -61,12 +61,10 @@ pub fn draw(p: &mut Painter<'_>, app: &App, paths: &Paths, screen: Rect) {
                 let area = Rect::new(inner.x, rule + 1, inner.width, notes_y.saturating_sub(rule + 1));
                 detail(p, app, paths, path, area);
             }
-            let marked = paths.marked.iter().filter(|m| **m).count();
-            let enter = match (marked, paths.sets.len()) {
-                (_, 0) => "no set colour is free: D in BREAKPOINTS deletes a set".to_owned(),
-                (0, _) => "mark a path first".to_owned(),
-                (1, _) => "a breakpoint set for the path marked".to_owned(),
-                (n, free) => format!("a breakpoint set for each of the {n} paths marked ({free} colours free)"),
+            let enter = match paths.marked.iter().flatten().count() {
+                0 => "mark a path first".to_owned(),
+                1 => "a breakpoint set for the path marked".to_owned(),
+                n => format!("a breakpoint set for each of the {n} paths marked"),
             };
             footer(p, inner, &[("⏎", &enter), ("space", "mark"), ("↑/↓", "select"), ("esc", "close")]);
         }

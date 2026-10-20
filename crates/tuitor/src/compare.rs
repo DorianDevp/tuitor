@@ -11,9 +11,8 @@ use tuitor_core::snapshot::Snapshot;
 use crate::app::{App, Outcome, Pane};
 use crate::command::View;
 use crate::flow::RunRef;
-use crate::sets::parse_set;
+use crate::sets::{name, parse_set};
 use crate::tab::Tab;
-use crate::ui::theme::set_name;
 
 /// One side: a set, in a run given by its session and first stop, or `None` for the latest
 /// run that recorded the set.
@@ -117,14 +116,15 @@ impl Tab {
 
 /// `rose`, or `rose@3` for run #3.
 fn parse_side(tab: &Tab, text: &str) -> Result<Side, String> {
-    let (name, run) = match text.split_once('@') {
-        Some((name, run)) => (name, Some(run.parse::<u32>().map_err(|_| format!("expected a run number: {text}"))?)),
+    let (set_name, run) = match text.split_once('@') {
+        Some((set, run)) => (set, Some(run.parse::<u32>().map_err(|_| format!("expected a run number: {text}"))?)),
         None => (text, None),
     };
-    let set = parse_set(name)?;
+    let bps = tab.engine.breakpoints();
+    let set = parse_set(bps, set_name)?;
     let Some(number) = run else { return Ok(Side { set, run: None }) };
     let found = tab.runs_of(set).into_iter().find(|r| r.number == Some(number));
-    let run = found.ok_or_else(|| format!("{} recorded nothing in run #{number} of this tuitor", set_name(set)))?;
+    let run = found.ok_or_else(|| format!("{} recorded nothing in run #{number} of this tuitor", name(bps, set)))?;
     Ok(Side { set, run: Some((run.session, run.stops.start)) })
 }
 
@@ -176,7 +176,8 @@ impl App {
         let sessions = tab.engine.sessions();
         let both = compared.entries.iter().filter(|e| e.both()).count();
         let only = |a: bool| compared.entries.iter().filter(|e| !e.both() && e.a.is_some() == a).count();
-        let side = |path: &Path<'_>| format!("{} {}", set_name(path.set), path.run.label(sessions));
+        let bps = tab.engine.breakpoints();
+        let side = |path: &Path<'_>| format!("{} {}", name(bps, path.set), path.run.label(sessions));
         Ok(format!(
             "{} against {}: {both} hits on both, {} on the first alone, {} on the second alone",
             side(&compared.a),

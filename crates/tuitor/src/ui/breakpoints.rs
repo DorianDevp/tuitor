@@ -180,31 +180,62 @@ pub fn stop_marks(sets: &[SetId], glyph: &'static str) -> Vec<Seg<'static>> {
     segs
 }
 
-/// The sets a breakpoint is in, a dot each, once there is more than one set.
+/// Dots a breakpoint's row has for its sets at most; past that, a count of the rest.
+const DOTS: usize = 4;
+/// Sets the title shows all of; past that, the active one and its neighbours.
+const CHIPS: usize = 7;
+/// Sets on each side of the active one in the title when there are more than [`CHIPS`].
+const NEIGHBOURS: isize = 2;
+
+/// The sets a breakpoint is in, a dot each in the order the sets were made, once there is
+/// more than one set. Past [`DOTS`], the active set's first and `+n` for those left out.
 fn memberships(bp: &Breakpoint, tab: &Tab) -> Vec<Seg<'static>> {
     let bps = tab.engine.breakpoints();
     if bps.sets().len() < 2 {
         return Vec::new();
     }
-    let dots = bps.sets().iter().filter(|s| bp.in_set(**s));
-    let mut segs: Vec<Seg<'static>> = dots.map(|s| seg("●", fg(set_color(*s, *s == bps.active_set())))).collect();
+    let active = bps.active_set();
+    let mut sets: Vec<SetId> = bps.sets().iter().copied().filter(|s| bp.in_set(*s)).collect();
+    let mut more = None;
+    if sets.len() > DOTS {
+        sets.sort_by_key(|s| *s != active);
+        more = Some(sets.len() - (DOTS - 1));
+        sets.truncate(DOTS - 1);
+    }
+    let mut segs: Vec<Seg<'static>> = sets.iter().map(|s| seg("●", fg(set_color(*s, *s == active)))).collect();
+    segs.extend(more.map(|n| seg(format!("+{n}"), fg(FAINT))));
     segs.push(seg(" ", fg(GHOST)));
     segs
 }
 
 /// The sets, once there is more than one: the active one named on a band, as the view on
-/// screen is in the header, the others by their colour.
+/// screen is in the header, the others by their colour. Of more than [`CHIPS`], the active
+/// one between the sets `A` and `/set prev` go to, and its place among them all.
 fn set_chips(bps: &Breakpoints) -> Vec<Seg<'static>> {
-    if bps.sets().len() < 2 {
+    let sets = bps.sets();
+    if sets.len() < 2 {
         return Vec::new();
     }
-    let mut segs = Vec::new();
-    for &set in bps.sets() {
-        if set == bps.active_set() {
-            segs.push(seg(format!(" ● {} ", set_name(set)), bold(set_color(set, true)).bg(SEL2)));
+    let active = bps.active_set();
+    let chip = |set: SetId| {
+        if set == active {
+            seg(format!(" ● {} ", crate::sets::name(bps, set)), bold(set_color(set, true)).bg(SEL2))
         } else {
-            segs.push(seg(" ● ", fg(set_color(set, false))));
+            seg(" ● ", fg(set_color(set, false)))
         }
+    };
+    let mut segs: Vec<Seg<'static>> = Vec::new();
+    if sets.len() <= CHIPS {
+        segs.extend(sets.iter().map(|set| chip(*set)));
+    } else {
+        // Closer together, so that the scope after them keeps its room.
+        let dot = |delta: isize| seg("●", fg(set_color(bps.neighbour(active, delta), false)));
+        segs.push(seg(" ", fg(GHOST)));
+        segs.extend((-NEIGHBOURS..0).map(dot));
+        segs.push(chip(active));
+        segs.extend((1..=NEIGHBOURS).map(dot));
+        let place = sets.iter().position(|s| *s == active).unwrap_or(0) + 1;
+        segs.push(seg(format!(" {place}/{}", sets.len()), fg(FAINT)));
     }
     segs.push(seg("  ", fg(GHOST)));
     segs

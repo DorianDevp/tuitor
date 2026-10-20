@@ -1,5 +1,5 @@
 //! Popups that take over the keyboard: the command palette, the fuzzy finder, the
-//! open-project picker, DOCTOR, INSTALL and PATHS.
+//! open-project picker, DOCTOR, INSTALL, PATHS and the list of breakpoint sets.
 
 use std::path::{Path, PathBuf};
 
@@ -14,6 +14,7 @@ use crate::doctor::Doctor;
 use crate::keymap::Keymap;
 use crate::picker::Picker;
 use crate::search::Prompt;
+use crate::sets::SetPick;
 
 const MAX_FILES: usize = 100_000;
 const MAX_HITS: usize = 40;
@@ -29,6 +30,8 @@ pub enum Overlay {
     Search(Prompt),
     /// The call paths to a line; dropped, it stops asking.
     Paths(Paths),
+    /// The breakpoint sets, to make one active.
+    Sets(SetPick),
 }
 
 /// Score and matched character positions, or `None` when the pattern does not match.
