@@ -101,6 +101,16 @@ D = "set delete"
 "[" = "compare older"
 "]" = "compare newer"
 
+[pane.paths]
+# PATHS (P), the call trees through the SOURCE line: j k move, h l fold and unfold, q closes.
+m = "paths mark"
+space = "paths stage"
+b = "paths branch"
+u = "paths unmark"
+"]" = "paths next"
+"[" = "paths prev"
+enter = "paths take"
+
 [pane.watch]
 d = "watch delete"
 

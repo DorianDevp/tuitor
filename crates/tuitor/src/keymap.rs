@@ -307,6 +307,30 @@ mod tests {
     }
 
     #[test]
+    fn paths_has_keys_of_its_own_and_moves_as_everywhere() {
+        let map = Keymap::defaults();
+        for (key, command) in [
+            ("m", "paths mark"),
+            ("space", "paths stage"),
+            ("b", "paths branch"),
+            ("u", "paths unmark"),
+            ("]", "paths next"),
+            ("[", "paths prev"),
+            ("enter", "paths take"),
+            ("j", "down"),
+            ("h", "left"),
+            ("l", "right"),
+            ("q", "close"),
+        ] {
+            assert!(matches!(map.lookup("paths", &keys(key)), Lookup::Command(c) if c == command), "{key}");
+        }
+        // Elsewhere those keys keep what they do.
+        assert!(matches!(map.lookup("source", &keys("b")), Lookup::Command("bp toggle")));
+        assert!(matches!(map.lookup("source", &keys("[")), Lookup::Command("history prev")));
+        assert_eq!(map.key_for("paths", "paths take").as_deref(), Some("⏎"));
+    }
+
+    #[test]
     fn user_file_overrides_and_unbinds() {
         let mut map = Keymap::defaults();
         map.merge("[global]\nc = \"\"\nm = \"continue\"\n").expect("merge");

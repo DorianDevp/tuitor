@@ -623,6 +623,12 @@ fn hints(p: &mut Painter<'_>, app: &App, area: Rect) {
         }
         return;
     }
+    if let Some(Overlay::Paths(paths)) = &app.ui.overlay {
+        if paths.tree().is_some() {
+            paths_hints(p, app, area);
+        }
+        return;
+    }
     let pane = app.focus();
     let specific: &[(&str, &str)] = match pane {
         _ if app.tab().project.is_none() => &[("tab open", "open a project")],
@@ -711,6 +717,32 @@ fn hints(p: &mut Painter<'_>, app: &App, area: Rect) {
     if !app.ui.pending.is_empty() {
         let pending = crate::keymap::label(&app.ui.pending);
         p.segs_right(area.right() - 1, area.y, &[seg(format!("{pending} …"), bold(AMBER))], x);
+    }
+}
+
+/// PATHS's keys, as `[pane.paths]` binds them over `[global]`.
+fn paths_hints(p: &mut Painter<'_>, app: &App, area: Rect) {
+    let keys = [
+        ("paths mark", "mark the path"),
+        ("paths stage", "stage in/out"),
+        ("paths branch", "branch in/out"),
+        ("paths unmark", "unmark"),
+        ("paths prev", "mark before"),
+        ("paths next", "mark after"),
+        ("left", "fold"),
+        ("right", "unfold"),
+        ("paths take", "make the sets"),
+        ("close", "close"),
+    ];
+    let mut x = 1;
+    for (command, label) in keys {
+        let Some(key) = app.keymap.key_for(crate::app::PATHS_PANE, command) else { continue };
+        let width = paint::width(&[seg(key.clone(), fg(KEY)), seg(format!(" {label}   "), fg(FAINT))]);
+        if x + width > area.right() {
+            break;
+        }
+        x = p.text(x, area.y, &key, bold(KEY), area.right());
+        x = p.text(x, area.y, &format!(" {label}   "), fg(FAINT), area.right());
     }
 }
 
