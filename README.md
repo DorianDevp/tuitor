@@ -9,7 +9,10 @@ client covers many languages: it knows vscode-php-debug with Xdebug, js-debug, D
 lldb-dap and CodeLLDB, and `adapters.toml` adds others. It shows a stopped program on one
 screen: source with values inline, stack, locals with what changed since the previous
 stop, watches, breakpoints, output and protocol events. Every stop is recorded, so you can
-step back through them and see when a value went wrong.
+step back through them and see when a value went wrong. Breakpoints go in sets told apart by
+colour: one set stops the program, the others record the stop and let it go on. COMPARE lines
+up what two sets recorded in two runs, and PATHS makes sets of the chains of calls that a
+language server finds to a line.
 
 It exists because there is no standalone, language-agnostic debugging client: a debugger
 is either part of an IDE or made for one language or runtime (pdb for Python, Delve for
@@ -29,8 +32,8 @@ It is also small. Sizes measured on 2026-10-20, x86_64 Linux (Arch), in MB of 10
 
 | | version | MB |
 |---|---|---:|
-| tuitor, `cargo build --release` (x86_64-unknown-linux-gnu, symbols kept) | 0.1.0 | 10.2 |
-| tuitor, after `strip` | 0.1.0 | 8.0 |
+| tuitor, `cargo build --release` (x86_64-unknown-linux-gnu, symbols kept) | 0.1.0 | 11.3 |
+| tuitor, after `strip` | 0.1.0 | 8.9 |
 | vscode-php-debug, unpacked | 1.40.2 | 5.8 |
 | Xdebug, `xdebug.so` (Arch package) | 3.5.3 | 0.4 |
 | js-debug DAP server, unpacked | 1.140.0 | 2.6 |
@@ -40,7 +43,7 @@ It is also small. Sizes measured on 2026-10-20, x86_64 Linux (Arch), in MB of 10
 | VS Code, Linux x64 `.tar.gz` from code.visualstudio.com | 1.142.0 | 345.7 |
 | VS Code, unpacked | 1.142.0 | 1016.5 |
 
-Debugging PHP and JavaScript with tuitor takes 19 MB on top of Node.js, which both
+Debugging PHP and JavaScript with tuitor takes 20 MB on top of Node.js, which both
 adapters run on and most development machines already have. VS Code needs the
 same adapters: its PHP Debug extension is vscode-php-debug, and its JavaScript debugger is
 js-debug (VS Code 1.142.0 ships js-debug 1.140.0).
@@ -79,14 +82,16 @@ know, are in [docs/adapters.md](docs/adapters.md).
 ## Quick start
 
 [`examples/`](examples) has one small program, which totals three orders, for each kind of
-project, with a `.vscode/launch.json`, a README that walks through a first session, and a
-`run.sh` that checks what the example needs, offers to install js-debug, vscode-php-debug
-or Delve when they are missing, builds tuitor from this repository and starts it on the
-example:
+project, and `php-paths`, a PHP application with two controllers through one service, for
+PATHS, sets and COMPARE. Each has a `.vscode/launch.json`, a README that walks through a
+first session, and a `run.sh` that checks what the example needs, offers to install
+js-debug, vscode-php-debug or Delve when they are missing, builds tuitor from this
+repository and starts it on the example:
 
 | example | debugged through | run |
 |---|---|---|
 | [`php`](examples/php) | Xdebug and vscode-php-debug, on the host or in Docker | `./run.sh`, `PHP=/path/to/php ./run.sh`, `TRACE=1 ./run.sh` |
+| [`php-paths`](examples/php-paths) | Xdebug and vscode-php-debug, two requests; intelephense for PATHS | `./run.sh`, `PHP=/path/to/php ./run.sh` |
 | [`js`](examples/js) | js-debug, in Node.js | `./run.sh` |
 | [`typescript`](examples/typescript) | js-debug, in Node.js, through `tsc`'s source map | `./run.sh` |
 | [`web`](examples/web) | js-debug, a page from disk in Chromium | `./run.sh`, `HEADLESS=1 ./run.sh` |
@@ -152,7 +157,7 @@ the live one; an older stop is shown read-only, and nothing is read from the pro
 again. HISTORY (`g h`) is every variable at every stop, with a chart of the value under
 the cursor and the full snapshot of the stop.
 
-![HISTORY of seven stops of the PHP example: $total and a watch per stop, a bar chart of $total, and the snapshot of stop #5](assets/screenshots/history.png)
+![HISTORY of seven stops of the PHP example: $total and a watch per stop, TIMELINE of the two, a bar chart of $total, and the snapshot of stop #5](assets/screenshots/history.png)
 
 Below the table, TIMELINE has a row for each value that changed, a watch or a variable of
 the top frame, with a mark at each stop where it changed, in the colour of the breakpoint
@@ -162,6 +167,8 @@ last stop in the same function, since watches too are read in the top frame. `j`
 pick a value, `h` and `l` show the stop of its change before or after the one on view, with
 what it was and became, and `enter` opens that stop in OVERVIEW. TIMELINE shows changes,
 not whether they are wrong.
+
+![TIMELINE in the php-paths example: the invoice request's stops in rose, the order request's in teal, ↷ where breakpoints of orchid recorded and the program went on; h went to the change of $total at stop #28, 8900 → 36830](assets/screenshots/timeline.png)
 
 ### FLOW
 
@@ -228,116 +235,69 @@ PROJECT (`g p`) has BREAKPOINTS and CONFIG side by side. A breakpoint can stop o
 condition holds (`e`), stop on some hits only (`h`, in the adapter's terms: `>= 3` in
 js-debug, `% 2` in vscode-php-debug, `> 2` in Delve, and for gdb the number of hits to
 pass over), or log a message instead of stopping (`l`, `{expr}` is interpolated). `space`
-turns one off, `a` lists those of every tab. Breakpoints and watches are kept per project
-in `~/.local/state/tuitor/`, outside the repository.
+turns one off, `a` lists those of every tab. The shape of a breakpoint is what it does: `●`
+stops, `◐` has a condition or a hit count, `◆` logs, `○` is disabled, `◌` was not taken by
+the adapter, and `◉` is the one the stop on view hit. Breakpoints and watches are kept per
+project in `~/.local/state/tuitor/`, outside the repository.
 
 ![PROJECT in the Go example: a condition, a hit count and a logpoint, and a configuration of tuitor's own beside launch.json's](assets/screenshots/project.png)
 
-CONFIG lists the project's launch configurations from two places: `.vscode/launch.json`,
-read as VS Code reads it and never written, and tuitor's own, kept outside the repository
-in `~/.config/tuitor/projects.toml` by project path. `enter` starts one, or edits the field
-under the cursor; tuitor's own change with these commands and are saved at once:
-
-```
-/config set port 9010                JSON when it reads as JSON, text otherwise
-/config unset stopOnEntry            (u)
-/config map /var/www/app=./api       pathMappings; /var/www/app= removes it (m)
-/config mappings-from-compose [svc]  pathMappings from a compose service's bind mounts (M)
-/config add rust                     a kind, or a type: php, gdb, lldb, go, pwa-chrome, pwa-node… (a)
-/config delete                       (d)
-/config start                        (S)
-```
-
-A project with no configuration gets one for its kind when it is opened, and opens on
-CONFIG to adjust what a default cannot know:
-
-| kind | found by | configuration |
-|---|---|---|
-| PHP | `composer.json`, `*.php` | listen for Xdebug on port 9003 |
-| Rust | `Cargo.toml` | gdb launch of `target/debug/<package>` |
-| Go | `go.mod` | Delve builds and launches the package |
-| C | `Makefile`, `CMakeLists.txt`, `*.c` | gdb launch of an executable built in the directory |
-| JS/TS | `package.json`, `angular.json`, `tsconfig.json` | `pwa-chrome` on `http://localhost:4200`, in the browser found on `PATH` |
+CONFIG lists the project's launch configurations: those of `.vscode/launch.json`, read as
+VS Code reads it and never written, and tuitor's own, kept outside the repository in
+`~/.config/tuitor/projects.toml` and changed with `/config` (`set`, `unset`, `map`,
+`mappings-from-compose`, `add`, `delete`). A project with none gets one for its kind when it
+is opened. The commands and the defaults are in [docs/configuration.md](docs/configuration.md).
 
 ### Breakpoint sets
 
-Every breakpoint is in one set or more. Sets have no names, only a colour each: rose, teal,
-orchid, sky and gold. One set is active, and the breakpoints in it stop the program. A
-breakpoint only in other sets records the stop as every stop is recorded, with the stack, the
-top frame's variables read ahead and the watches, and the program goes on by itself. Sets
-share breakpoints: two ways into one service, a controller and a command, can each have a
-set, both with the service's breakpoints. Every enabled breakpoint stays with the adapter,
-so a new active set takes effect at its next hit, also while the program runs. A step that
-ends on a breakpoint of another set stops there as asked.
+Every breakpoint is in one set or more, and a set has no name but a colour: rose, teal,
+orchid, sky or gold. The breakpoints of the active set stop the program. A breakpoint only in
+other sets records the stop, with the stack, the top frame's variables and the watches, and
+the program goes on by itself. Sets share breakpoints: two ways into one service can each have
+a set, both with the service's breakpoints. `N` makes a set and `A` makes the next one active,
+also while the program runs; `M` puts the breakpoint selected, or on the SOURCE line, in the
+active set or takes it out, `D` in BREAKPOINTS deletes a set, and `b` adds to the active set.
 
-`N` makes a set, active from then on, with the breakpoint selected in BREAKPOINTS or on the
-SOURCE line in it, if there is one; `/set new orders.php:61 orders.php:68` makes one with
-those, made where there are none. Breakpoints added with `b` go to the active set. `A` makes
-the next set active, `/set active teal` a given one. `M` puts the breakpoint selected, or on
-the SOURCE line, in the active set, or takes it out; `/set add teal orders.php:68` and
-`/set remove teal` name the set and the breakpoints. A breakpoint stays in one set at least.
-`D` in BREAKPOINTS deletes the set the selected breakpoint is shown in: its breakpoints in no
-other set go with it once asked again, and `/set delete teal rose` puts them in rose. Sets are
-kept with the breakpoints in `~/.local/state/tuitor/`; breakpoints from before there were
-sets are in rose.
+![OVERVIEW in the php-paths example at a breakpoint in OrderService of rose, the active set, which teal shares (the small teal dot); in BREAKPOINTS those only in teal or orchid record only, and each breakpoint has a dot for every set it is in](assets/screenshots/sets.png)
 
 A breakpoint has the colour of the active set when it is in it, else of the first set it
-joined, in SOURCE, BREAKPOINTS, FLOW, OUTLINE, HISTORY and the context line: full when it
-stops the program, dimmer when it only records. A smaller `•` after it, in another set's
-colour, says it is in more sets, and BREAKPOINTS has a dot for each set it is in. The shape
-is what it does: `●` stops, `◐` has a condition or a hit count, `◆` logs, `○` is disabled,
-`◌` was not taken by the adapter, and `◉` is the one the stop on view hit. HISTORY marks the
-stops the program went on from with `↷`.
-
-A breakpoint of another set costs what reading a stop costs. tuitor asks for the variables
-of a stop together, a level at a time. Measured per hit on the C, PHP and JavaScript
-examples: 3 to 14 ms with gdb, 3 ms with Xdebug and vscode-php-debug, and about 275 ms with
-js-debug, which takes 45 to 130 ms to answer each `variables` request.
+joined: full when it stops the program, dimmer when it only records, with a smaller `•` in
+another set's colour when it is in more sets. HISTORY marks the stops the program went on from
+with `↷`. A hit that only records costs what reading the stop costs, for which tuitor asks for
+the variables and the watches together, a level at a time: measured per hit on the C, PHP and
+JavaScript examples, 4 to 6 ms with gdb, 3 to 5 ms with Xdebug and about 260 ms with js-debug.
+The commands and the details are in [docs/sets.md](docs/sets.md).
 
 ### Comparing sets
 
-COMPARE (`g d`) lines up what two sets recorded, each the stops at its breakpoints in one
-run: set A in one request, set B in another. A stop lines up with the stop at the same
-breakpoint that is the same hit of it on the other path: the first with the first, the
-second with the second. These are hits of breakpoints the sets share, and for them the values
-each stop read, the watches and the top frame's variables at every level read, are compared:
-the row counts those that differ, appear and disappear, and VALUES below lists them for the
-hit under the cursor. A hit only one path has, at a breakpoint of one set or one the other
-path did not reach, is listed with what it read. Hits on both keep the order of the first
-path, and the others follow the last of those before them by time, so two sets of one run
-are in the order things happened.
+COMPARE (`g d`, `/compare`) lines up what two sets recorded, each in a run of its own, such as
+one set in one request and another in the next. A hit of a breakpoint the sets share lines up
+with the same hit on the other side, and its row counts the values that differ, appear or
+disappear; VALUES lists them for the hit under the cursor. A hit only one side has is listed
+with what it read. `/compare rose teal` names the sets and `/compare rose@3 rose@5` one set in
+two of FLOW's runs; `[` and `]` take a side from an older or newer run, and `enter` opens the
+breakpoint in CODE or a side's stop in HISTORY.
 
-Each set is compared in its own run: the latest in which it was the active set and stopped
-the program, else the latest that recorded it. `/compare` alone compares the active set with
-the other set whose own run is the latest, or with one set, its latest run with the run
-before. `/compare teal` compares the active set with teal, `/compare rose teal` two sets, and
-`/compare rose@3 rose@5` one set in FLOW's runs 3 and 5. In COMPARE, `h` and `l` pick the
-breakpoint or a side, `[` and `]` take that side, or on the breakpoint both, from an older or
-newer run, and `enter` opens the breakpoint in CODE or the side's stop in HISTORY. Only the
-runs of the tuitor that is running can be compared: FLOW remembers earlier ones by their
-stacks, without values.
+![COMPARE in the php-paths example: rose in the invoice request against teal in the order request, which share the breakpoints in OrderService and Money; each controller's hits are on one side alone, and VALUES lists the six values that differ at the first hit of OrderService.php:23](assets/screenshots/compare.png)
 
 ### Paths to a line
 
-`P` (`/paths`) asks the project's language server who calls the function the SOURCE line is
-in, and who calls those, up to where execution starts: a controller, `main`, a test, a
-script's top level, or a function no code calls, which a framework, a container or an event
-does. PATHS lists each chain, entry point first, with the lines on it worth a breakpoint: the
-entry of each function, its call into the next one, before that call the last write of each
-variable and the last call into the project's other functions (three at most), and the line
-asked about. `enter` makes each path marked a breakpoint set of its own, in the colour its
-mark has, and the first of them the active set: a line several paths share is one breakpoint
-in each of their sets, and COMPARE lines up two paths at the lines they share. As many paths
-are marked as there are sets for, a set with no breakpoint or a colour no set has; `space`
-marks others and unmarks.
+`P` (`/paths`) asks the project's language server for the chains of calls to the function the
+SOURCE line is in, from where execution starts: a controller, `main`, a test, a script's top
+level, or a function no code calls, which a framework or an event does. PATHS lists them, with
+the lines on each worth a breakpoint: the entry of each function, its call into the next one,
+the last writes and calls into the project before that call, and the line asked about. Calls
+no server can see, such as an event dispatcher's, come from the stacks of the runs FLOW
+remembers and show as `⇢`. `enter` makes each path marked a set of its own, so that a line two
+paths share is one breakpoint in both sets, where COMPARE lines the paths up.
 
-Calls no server can see, such as a container's, an event's or one through an interface, come
-from the stacks of the runs FLOW remembers, and show as `⇢`. tuitor runs intelephense (PHP),
-typescript-language-server (TypeScript, JavaScript, Angular), rust-analyzer (Rust) and gopls
-(Go) from `PATH`, or as `config.toml` says, once per project when first asked, and ends them
-with the tab; PATHS shows what a server reports while it reads the project. intelephense
-answers no call hierarchy, so for PHP the callers are its references that call. Other
-language servers are welcome as contributions.
+![PATHS to the helper Money::lineTotal in the php-paths example: both controllers through OrderService, both again through the event dispatcher to a listener, a call FLOW saw at run time (⇢), and the test, unmarked](assets/screenshots/paths.png)
+
+tuitor runs intelephense (PHP), typescript-language-server (TypeScript, JavaScript, Angular),
+rust-analyzer (Rust) and gopls (Go), from `PATH` or as the `[lsp]` table of
+[`config.toml`](docs/configuration.md#configtoml) says, once per project when first asked, and
+ends them with the tab. Support for other language servers is welcome as a contribution:
+[`crates/tuitor-code`](crates/tuitor-code) is the one crate that speaks LSP.
 
 ### Commands
 
@@ -346,7 +306,7 @@ Every key runs a command line. `/` opens the command line (`:` too, and in SOURC
 each takes and lists the recent command lines; a number alone goes to that line of SOURCE
 (`:42`). `?` lists every command with its key.
 
-![The command line with /bp typed: the matching commands, their arguments and keys, and the recent command lines](assets/screenshots/palette.png)
+![The command line, opened with : in SOURCE, with set typed: the set commands, their arguments and keys, and the recent command lines](assets/screenshots/palette.png)
 
 - `f` finds files and breakpoints (`name:line`).
 - `/` in SOURCE, as in vim, and `ctrl-f` anywhere search the file in SOURCE as you type,
@@ -411,52 +371,8 @@ library frames or files; WATCH `d` delete; OUTPUT `C` clear; SOURCE `/` search, 
 | `~/.local/share/tuitor/adapters/` | what `tuitor install` unpacks |
 
 The directories follow `$XDG_CONFIG_HOME`, `$XDG_STATE_HOME` and `$XDG_DATA_HOME` (macOS:
-`~/Library/Application Support/tuitor`). `TUITOR_LOG=dap=trace` logs the protocol.
-
-A binding is a key, or a sequence of keys, and a command line; `""` unbinds:
-
-```toml
-# keys.toml
-[global]
-m = "continue"
-c = ""
-"g n" = "find"
-
-[pane.locals]
-enter = "open"
-```
-
-A table in `adapters.toml` replaces the built-in adapter of that name; `transport` is
-`stdio` (the default), `server` (the adapter listens on `${port}`) or `tcp` (tuitor
-connects to `address`):
-
-```toml
-# adapters.toml
-[php]
-command = "node"
-args = ["/opt/vscode-php-debug/extension/out/phpDebug.js"]
-extensions = ["php"]        # breakpoints in these files go to this adapter
-```
-
-```toml
-# config.toml: split at spaces, {file} and {line} replaced in each word
-editor = "code --goto {file}:{line}"
-editor_terminal = false     # it has a window of its own; true (the default) hands it the terminal
-
-# The language server of each language, if not the one on PATH: command, args and the
-# server's initializationOptions; a field left out keeps the default.
-[lsp.php]                   # intelephense --stdio
-initialization_options = { licenceKey = "/home/me/intelephense/licence.txt" }
-
-[lsp.rust]                  # rust-analyzer, with { checkOnSave = false }
-command = "mise"
-args = ["exec", "--", "rust-analyzer"]
-
-[lsp.typescript]            # typescript-language-server --stdio
-
-[lsp.go]                    # gopls
-```
-
+`~/Library/Application Support/tuitor`). `TUITOR_LOG=dap=trace` logs the protocol. The
+formats of the files, with examples, are in [docs/configuration.md](docs/configuration.md).
 
 ## Architecture
 
@@ -504,6 +420,10 @@ way.
 - VS Code's `preLaunchTask` is not run: start a dev server or a build yourself.
 - STACK shows the thread that stopped; there is no list of threads to switch to.
 - No function or data breakpoints, disassembly, memory view, or setting a variable.
+- COMPARE has values only for the runs of the tuitor that is running: recorded stops are not
+  saved, and FLOW remembers earlier runs by their stacks alone.
+- PATHS asks one of four language servers, so it covers PHP, TypeScript and JavaScript, Rust
+  and Go; C and C++ have none.
 - tuitor draws with truecolour and Unicode symbols; a terminal or console font without
   them shows approximate colours and missing glyphs.
 - Developed and tested on Linux; macOS and Windows are untested.
