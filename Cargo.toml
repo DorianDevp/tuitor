@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/tuitor-dap", "crates/tuitor-core", "crates/tuitor"]
+members = ["crates/tuitor-dap", "crates/tuitor-core", "crates/tuitor-code", "crates/tuitor"]
 # Each example is a project of its own, built from its directory.
 exclude = ["examples"]
 
@@ -12,6 +12,7 @@ license = "MIT"
 [workspace.dependencies]
 tuitor-dap = { path = "crates/tuitor-dap" }
 tuitor-core = { path = "crates/tuitor-core" }
+tuitor-code = { path = "crates/tuitor-code" }
 
 anyhow = "1"
 bytes = "1"
