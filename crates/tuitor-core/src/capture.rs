@@ -1,14 +1,21 @@
 //! Reads the program state at a stop: stack, scopes of the top frame, variables
 //! (including paths the user keeps expanded) and watch expressions; and the scopes of
 //! another frame, once it is picked.
+//!
+//! Requests that do not depend on each other's answers go out together: every one is
+//! written before the first answer is awaited, and the answers are taken in the order
+//! asked, so a snapshot comes out the same as if they had been asked one by one. An adapter
+//! that answers slowly (js-debug: 45 to 90 ms a `variables`) then costs a round per level.
 
 use std::path::{Path, PathBuf};
 
+use serde::de::DeserializeOwned;
 use tuitor_dap::requests::{Evaluate, Scopes, StackTrace, Threads, Variables};
 use tuitor_dap::types::{
-    Empty, EvaluateArguments, Scope, ScopesArguments, StackFrame, StackTraceArguments, Variable, VariablesArguments,
+    Empty, EvaluateArguments, EvaluateResponse, Scope, ScopesArguments, StackFrame, StackTraceArguments, Variable,
+    VariablesArguments,
 };
-use tuitor_dap::{Client, Error};
+use tuitor_dap::{Client, Error, Pending};
 
 use crate::snapshot::{Frame, ScopeVars, Var, VarPath, WatchValue, is_library_path};
 
@@ -53,8 +60,10 @@ pub(crate) async fn capture(
     let mut watch_values = Vec::with_capacity(watches.len());
     if let Some(top) = frames.first_mut() {
         top.scopes = Some(scopes(&client, top.id, &expanded, &seen_scopes).await?);
-        for expr in watches {
-            let value = evaluate(&client, &expr, Some(top.id), "watch").await.map_err(|e| short_error(&e));
+        // After the variables, all at once: a watch that calls a function may change them.
+        let asked: Vec<_> = watches.iter().map(|expr| evaluation(&client, expr, Some(top.id), "watch")).collect();
+        for (expr, asked) in watches.into_iter().zip(asked) {
+            let value = answer(asked).await.map(|r| r.result).map_err(|e| short_error(&e));
             watch_values.push(WatchValue { expr, value });
         }
     }
@@ -72,39 +81,52 @@ pub(crate) async fn scopes(
     seen_scopes: &[String],
 ) -> Result<Vec<ScopeVars>, Error> {
     let response = client.request::<Scopes>(ScopesArguments { frame_id }).await?;
-    let mut scopes = Vec::new();
-    let mut prefetch_budget = PREFETCH_REQUESTS;
-    for (index, scope) in response.scopes.into_iter().enumerate() {
-        let path = vec![scope.name.clone()];
-        let default_open = is_default_scope(&scope, index);
-        let wanted = (default_open && !seen_scopes.contains(&scope.name)) || expanded.contains(&path);
-        let vars = if wanted {
-            let mut vars = fetch_vars(client, scope.variables_reference).await.unwrap_or_default();
-            expand_paths(client, &scope.name, &mut vars, expanded).await;
-            if default_open {
-                prefetch_children(client, &mut vars, &mut prefetch_budget).await;
-                // Paths kept expanded under a collapsed variable are reachable now that its
-                // children were read ahead, and are part of this stop when it is reopened.
-                expand_paths(client, &scope.name, &mut vars, expanded).await;
-            }
-            Some(vars)
-        } else {
-            None
-        };
-        scopes.push(ScopeVars {
-            default_open,
+    let mut scopes: Vec<ScopeVars> = response
+        .scopes
+        .into_iter()
+        .enumerate()
+        .map(|(index, scope)| ScopeVars {
+            default_open: is_default_scope(&scope, index),
             name: scope.name,
             reference: scope.variables_reference,
             expensive: scope.expensive,
-            vars,
-        });
+            vars: None,
+        })
+        .collect();
+    let wanted: Vec<usize> = (0..scopes.len())
+        .filter(|&i| {
+            let scope = &scopes[i];
+            (scope.default_open && !seen_scopes.contains(&scope.name)) || expanded.contains(&vec![scope.name.clone()])
+        })
+        .collect();
+    let references: Vec<i64> = wanted.iter().map(|&i| scopes[i].reference).collect();
+    for (&i, vars) in wanted.iter().zip(fetch_all(client, &references).await) {
+        scopes[i].vars = Some(vars.unwrap_or_default());
     }
+    expand_paths(client, &mut scopes, expanded).await;
+    prefetch_children(client, &mut scopes).await;
+    // Paths kept expanded under a collapsed variable are reachable now that its children
+    // were read ahead, and are part of this stop when it is reopened.
+    expand_paths(client, &mut scopes, expanded).await;
     Ok(scopes)
 }
 
-pub(crate) async fn fetch_vars(client: &Client, reference: i64) -> Result<Vec<Var>, Error> {
-    let response = client.request::<Variables>(VariablesArguments { variables_reference: reference }).await?;
-    Ok(response.variables.into_iter().map(var).collect())
+/// The variables under each of `references`, asked for together, in the same order.
+async fn fetch_all(client: &Client, references: &[i64]) -> Vec<Result<Vec<Var>, Error>> {
+    let asked: Vec<_> = references
+        .iter()
+        .map(|&reference| client.call::<Variables>(VariablesArguments { variables_reference: reference }))
+        .collect();
+    let mut out = Vec::with_capacity(asked.len());
+    for asked in asked {
+        out.push(answer(asked).await.map(|r| r.variables.into_iter().map(var).collect()));
+    }
+    out
+}
+
+/// The answer to a request [`Client::call`] wrote, or why it could not be written.
+async fn answer<T: DeserializeOwned>(asked: Result<Pending<T>, Error>) -> Result<T, Error> {
+    asked?.await
 }
 
 /// A variable as a snapshot keeps it; its children are read separately.
@@ -130,8 +152,18 @@ pub(crate) async fn evaluate(
     frame_id: Option<i64>,
     context: &str,
 ) -> Result<String, Error> {
+    Ok(answer(evaluation(client, expr, frame_id, context)).await?.result)
+}
+
+/// Writes an `evaluate` request now.
+fn evaluation(
+    client: &Client,
+    expr: &str,
+    frame_id: Option<i64>,
+    context: &str,
+) -> Result<Pending<EvaluateResponse>, Error> {
     let args = EvaluateArguments { expression: expr.to_owned(), frame_id, context: context.to_owned() };
-    Ok(client.request::<Evaluate>(args).await?.result)
+    client.call::<Evaluate>(args)
 }
 
 /// Arguments and locals are read at every stop; registers, globals, superglobals
@@ -157,38 +189,80 @@ pub(crate) fn short_error(err: &Error) -> String {
     text.lines().next().unwrap_or_default().to_owned()
 }
 
-/// Loads children for every expanded path inside this scope, parents first.
-async fn expand_paths(client: &Client, scope: &str, vars: &mut [Var], expanded: &[VarPath]) {
-    let mut paths: Vec<&[String]> = expanded.iter().filter(|p| p.len() > 1 && p[0] == scope).map(|p| &p[1..]).collect();
+/// Reads the children of every path in `expanded` that are not read, a level at a time,
+/// parents first, each level's together.
+async fn expand_paths(client: &Client, scopes: &mut [ScopeVars], expanded: &[VarPath]) {
+    let mut paths: Vec<&VarPath> = expanded.iter().filter(|p| p.len() > 1).collect();
     paths.sort_by_key(|p| p.len());
-    for path in paths {
-        let Some(var) = find_mut(vars, path) else { continue };
-        if var.reference > 0 && var.children.is_none() {
-            var.children = fetch_vars(client, var.reference).await.ok();
+    for level in paths.chunk_by(|a, b| a.len() == b.len()) {
+        let unread: Vec<(&VarPath, i64)> = level
+            .iter()
+            .filter_map(|path| {
+                let var = find_var(scopes, path)?;
+                (var.reference > 0 && var.children.is_none()).then_some((*path, var.reference))
+            })
+            .collect();
+        let references: Vec<i64> = unread.iter().map(|(_, reference)| *reference).collect();
+        for ((path, _), children) in unread.iter().zip(fetch_all(client, &references).await) {
+            if let Some(var) = find_var(scopes, path) {
+                var.children = children.ok();
+            }
         }
     }
 }
 
-/// Reads one level of children of top-level variables that are not expanded, so that
-/// `diff` can mark an object whose fields changed even while it is collapsed. Children
-/// are shown only when the user expands the variable. Each read takes one request out
-/// of `budget`, in order, so the cost per stop stays bounded.
-async fn prefetch_children(client: &Client, vars: &mut [Var], budget: &mut usize) {
-    for var in vars.iter_mut().filter(|v| worth_prefetching(v)) {
-        if !take(budget) {
-            return;
-        }
-        var.children = fetch_vars(client, var.reference).await.ok();
-        // A pointer or reference has one child, what it points to (gdb: `*p` or `value`).
-        // Its fields are read too, so a change made through a pointer shows like one in
-        // a struct.
-        if let Some([pointee]) = var.children.as_deref_mut()
-            && worth_prefetching(pointee)
-            && take(budget)
-        {
-            pointee.children = fetch_vars(client, pointee.reference).await.ok();
+/// Reads one level of children of the top-level variables of the scopes shown by default
+/// that are not expanded, so that `diff` can mark an object whose fields changed even while
+/// it is collapsed. Children are shown only when the user expands the variable. Each read
+/// takes one request out of a budget, in order, so the cost per stop stays bounded.
+async fn prefetch_children(client: &Client, scopes: &mut [ScopeVars]) {
+    let mut budget = PREFETCH_REQUESTS;
+    let mut read: Vec<(usize, usize)> = Vec::new();
+    for (s, scope) in scopes.iter().enumerate().filter(|(_, scope)| scope.default_open) {
+        for (v, var) in scope.vars.iter().flatten().enumerate() {
+            if worth_prefetching(var) && take(&mut budget) {
+                read.push((s, v));
+            }
         }
     }
+    read_children(client, scopes, &read, false).await;
+    // A pointer or reference has one child, what it points to (gdb: `*p` or `value`). Its
+    // fields are read too, so a change made through a pointer shows like one in a struct.
+    let mut pointers = Vec::new();
+    for (s, v) in read {
+        let one = top_var(scopes, s, v, false).is_some_and(|var| matches!(var.children.as_deref(), Some([_])));
+        if one && top_var(scopes, s, v, true).is_some_and(|pointee| worth_prefetching(pointee)) && take(&mut budget) {
+            pointers.push((s, v));
+        }
+    }
+    read_children(client, scopes, &pointers, true).await;
+}
+
+/// Reads the children of top-level variables `at` (scope, variable), or with `pointee`
+/// those of their one child, together.
+async fn read_children(client: &Client, scopes: &mut [ScopeVars], at: &[(usize, usize)], pointee: bool) {
+    let mut references = Vec::with_capacity(at.len());
+    for &(s, v) in at {
+        references.extend(top_var(scopes, s, v, pointee).map(|var| var.reference));
+    }
+    for (&(s, v), children) in at.iter().zip(fetch_all(client, &references).await) {
+        if let Some(var) = top_var(scopes, s, v, pointee) {
+            var.children = children.ok();
+        }
+    }
+}
+
+/// Top-level variable `v` of scope `s`, or with `pointee` its only child.
+fn top_var(scopes: &mut [ScopeVars], s: usize, v: usize, pointee: bool) -> Option<&mut Var> {
+    let var = scopes.get_mut(s)?.vars.as_mut()?.get_mut(v)?;
+    if pointee { var.children.as_mut()?.first_mut() } else { Some(var) }
+}
+
+/// The variable at `path`, from its scope's name down.
+fn find_var<'a>(scopes: &'a mut [ScopeVars], path: &[String]) -> Option<&'a mut Var> {
+    let (scope, names) = path.split_first()?;
+    let vars = scopes.iter_mut().find(|s| &s.name == scope)?.vars.as_deref_mut()?;
+    find_mut(vars, names)
 }
 
 fn worth_prefetching(var: &Var) -> bool {

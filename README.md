@@ -289,9 +289,10 @@ it does: `●` stops, `◐` has a condition or a hit count, `◆` logs, `○` is
 not taken by the adapter, and `◉` is the one the stop on view hit. HISTORY marks the stops
 the program went on from with `↷`.
 
-A breakpoint of another set costs what reading a stop costs. Measured per hit on the C, PHP
-and JavaScript examples: 6 to 14 ms with gdb, 3 ms with Xdebug and vscode-php-debug, and
-about 400 ms with js-debug, which takes 45 to 90 ms for each `variables` request.
+A breakpoint of another set costs what reading a stop costs. tuitor asks for the variables
+of a stop together, a level at a time. Measured per hit on the C, PHP and JavaScript
+examples: 3 to 14 ms with gdb, 3 ms with Xdebug and vscode-php-debug, and about 275 ms with
+js-debug, which takes 45 to 130 ms to answer each `variables` request.
 
 ### Comparing sets
 
