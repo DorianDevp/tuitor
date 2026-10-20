@@ -102,11 +102,13 @@ pub struct Breakpoints {
     sets: Vec<SetId>,
     /// The set whose breakpoints stop the program.
     active: SetId,
+    /// The number of the latest `setBreakpoints` sent to a session for a file.
+    sent: HashMap<(SessionId, PathBuf), u64>,
 }
 
 impl Default for Breakpoints {
     fn default() -> Self {
-        Self { items: Vec::new(), next_id: 0, sets: vec![0], active: 0 }
+        Self { items: Vec::new(), next_id: 0, sets: vec![0], active: 0, sent: HashMap::new() }
     }
 }
 
@@ -136,7 +138,7 @@ impl Breakpoints {
         items.sort_by(|a, b| (&a.path, a.line).cmp(&(&b.path, b.line)));
         let next_id = items.iter().map(|b| b.id).max().unwrap_or(0);
         let active = active.filter(|a| sets.contains(a)).unwrap_or(first);
-        Self { items, next_id, sets, active }
+        Self { items, next_id, sets, active, sent: HashMap::new() }
     }
 
     pub fn saved(&self) -> &[Breakpoint] {
@@ -240,8 +242,28 @@ impl Breakpoints {
             .unzip()
     }
 
-    /// Records the adapter's answer to `setBreakpoints` (same order as sent).
-    pub fn bind(&mut self, session: SessionId, path: &Path, ids: &[BreakpointId], results: &[dap::Breakpoint]) {
+    /// Numbers a `setBreakpoints` of `path` about to go to `session`, for [`Breakpoints::bind`].
+    pub fn sending(&mut self, session: SessionId, path: &Path) -> u64 {
+        let latest = self.sent.entry((session, path.to_path_buf())).or_default();
+        *latest += 1;
+        *latest
+    }
+
+    /// Records the adapter's answer to `setBreakpoints` `request` (same order as sent), if
+    /// no later one for the file has gone out since. Answers may be handled out of the order
+    /// they were asked in, and an earlier one names ids the adapter has since dropped, which
+    /// would leave a breakpoint it stops at unverified.
+    pub fn bind(
+        &mut self,
+        session: SessionId,
+        path: &Path,
+        request: u64,
+        ids: &[BreakpointId],
+        results: &[dap::Breakpoint],
+    ) {
+        if self.sent.get(&(session, path.to_path_buf())) != Some(&request) {
+            return;
+        }
         for bp in self.items.iter_mut().filter(|b| b.path == path) {
             bp.bindings.remove(&session);
         }
@@ -441,10 +463,32 @@ mod tests {
         assert_eq!(payload[0].line, 141);
 
         let reply = dap::Breakpoint { id: Some(7), verified: true, ..Default::default() };
-        bps.bind(1, &file, &ids, &[reply]);
+        let request = bps.sending(1, &file);
+        bps.bind(1, &file, request, &ids, &[reply]);
         assert_eq!(bps.by_adapter_id(1, 7), Some(second));
         assert_eq!(bps.get(second).and_then(Breakpoint::verified), Some(true));
         assert_eq!(bps.get(first).and_then(Breakpoint::verified), None);
+    }
+
+    #[test]
+    fn only_the_answer_to_the_latest_request_binds() {
+        let mut bps = Breakpoints::default();
+        let file = PathBuf::from("/src/Money.php");
+        let entry = bps.add(file.clone(), 14);
+        let (one, _) = bps.for_adapter(&file, true);
+        let first = bps.sending(1, &file);
+        let rebate = bps.add(file.clone(), 16);
+        let (both, _) = bps.for_adapter(&file, true);
+        let second = bps.sending(1, &file);
+        let reply = |id| dap::Breakpoint { id: Some(id), verified: true, ..Default::default() };
+
+        // The answer to the second request is handled first; the adapter dropped id 11.
+        bps.bind(1, &file, second, &both, &[reply(12), reply(13)]);
+        bps.bind(1, &file, first, &one, &[reply(11)]);
+        assert_eq!((bps.by_adapter_id(1, 12), bps.by_adapter_id(1, 13)), (Some(entry), Some(rebate)));
+        assert_eq!(bps.by_adapter_id(1, 11), None);
+        // Another session numbers its own requests.
+        assert_eq!(bps.sending(2, &file), 1);
     }
 
     #[test]
