@@ -21,6 +21,7 @@ mod sets;
 mod signals;
 mod sources;
 mod tab;
+mod timeline;
 mod ui;
 
 use std::io::{BufRead, IsTerminal, Write};

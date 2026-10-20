@@ -226,6 +226,8 @@ pub struct TabUi {
     pub output_back: usize,
     pub events: Cursor,
     pub history_col: usize,
+    /// The value under TIMELINE's cursor.
+    pub timeline: Cursor,
     /// Row of CONFIG under the cursor.
     pub config: Cursor,
     /// The configuration CONFIG shows the fields of; `S` starts it.
@@ -264,6 +266,7 @@ impl Default for TabUi {
             output_back: 0,
             events: Cursor::default(),
             history_col: 0,
+            timeline: Cursor::default(),
             config: Cursor::default(),
             config_sel: 0,
             flow: Cursor::default(),
