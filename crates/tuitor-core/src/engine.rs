@@ -409,29 +409,6 @@ impl Engine {
         toggle
     }
 
-    /// Puts a breakpoint at each of `places` (a file and a line) that has none, and sends each
-    /// file's to its sessions once. Returns the breakpoint of each place, and whether it is new.
-    pub fn add_breakpoints(&mut self, places: &[(PathBuf, u32)]) -> Vec<(BreakpointId, bool)> {
-        let mut changed: Vec<PathBuf> = Vec::new();
-        let mut added = Vec::new();
-        for (path, line) in places {
-            let path = canonical(path);
-            match self.breakpoints.at(&path, *line) {
-                Some(existing) => added.push((existing.id, false)),
-                None => {
-                    added.push((self.breakpoints.add(path.clone(), *line), true));
-                    if !changed.contains(&path) {
-                        changed.push(path);
-                    }
-                }
-            }
-        }
-        for path in changed {
-            self.breakpoints_changed(&path);
-        }
-        added
-    }
-
     pub fn update_breakpoint(&mut self, id: BreakpointId, change: impl FnOnce(&mut Breakpoint)) -> Result<()> {
         let path = self
             .breakpoints

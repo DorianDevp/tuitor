@@ -23,7 +23,7 @@ pub fn parse_set(name: &str) -> Result<SetId, String> {
 }
 
 /// "teal stops · rose, orchid record only": what each set does now.
-fn roles(engine: &Engine) -> String {
+pub(crate) fn roles(engine: &Engine) -> String {
     let bps = engine.breakpoints();
     let active = bps.active_set();
     let others: Vec<&str> = bps.sets().iter().filter(|s| **s != active).map(|s| set_name(*s)).collect();
@@ -35,7 +35,7 @@ fn roles(engine: &Engine) -> String {
 }
 
 /// The names of `sets`: "rose", "rose and teal", "rose, teal and sky".
-fn names(sets: &[SetId]) -> String {
+pub(crate) fn names(sets: &[SetId]) -> String {
     let names: Vec<&str> = sets.iter().map(|s| set_name(*s)).collect();
     match names.split_last() {
         Some((last, [])) => (*last).to_owned(),
