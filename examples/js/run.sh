@@ -9,7 +9,6 @@ repo=$(cd "$here/../.." && pwd)
 install_help="see \"Installing adapters\" in $repo/README.md"
 adapter="${XDG_DATA_HOME:-$HOME/.local/share}/tuitor/adapters/js-debug"
 js_debug_version=1.140.0 # the release README.md installs
-tuitor_pid=
 
 step() { echo "==> $*"; }
 
@@ -19,37 +18,6 @@ die() {
     for line in "$@"; do echo "    $line" >&2; done
     exit 1
 }
-
-# Every process below $1: js-debug and the Node it started.
-descendants() {
-    local child
-    for child in $(pgrep -P "$1"); do
-        echo "$child"
-        descendants "$child"
-    done
-}
-
-cleanup() {
-    # Interrupted while tuitor runs: stop it and everything below it. Listed first, since
-    # a process whose parent was killed can no longer be found from tuitor.
-    if [[ -n $tuitor_pid ]] && kill -0 "$tuitor_pid" 2>/dev/null; then
-        local pids
-        pids=$(descendants "$tuitor_pid")
-        # shellcheck disable=SC2086 # one pid per word
-        kill $pids "$tuitor_pid" 2>/dev/null || true
-        wait "$tuitor_pid" 2>/dev/null || true
-    fi
-    # tuitor puts the terminal back when it quits; killed, it leaves it raw and on the
-    # alternate screen.
-    if [[ -t 0 && $(stty -a) == *-icanon* ]]; then
-        printf '\e[?1049l\e[?25h'
-        stty sane
-    fi
-}
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-trap 'exit 129' HUP
 
 # 1. Prerequisites.
 step "checking Node.js and js-debug"
@@ -88,9 +56,7 @@ if [[ -z ${TUITOR:-} ]]; then
     tuitor="${CARGO_TARGET_DIR:-$repo/target}/debug/tuitor"
 fi
 
-# 4. Debug. tuitor runs in the background so that a signal to this script reaches the trap
-# at once; <&0 keeps the terminal as its input.
+# 4. Debug. However tuitor ends, by Q or by SIGINT, SIGTERM or SIGHUP, it ends js-debug and
+# Node and puts the terminal back.
 step "starting tuitor on configuration \"orders\" (Q quits)"
-"$tuitor" -C "$here" orders "$@" <&0 &
-tuitor_pid=$!
-wait "$tuitor_pid"
+exec "$tuitor" -C "$here" orders "$@"
