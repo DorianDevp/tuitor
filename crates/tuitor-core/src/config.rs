@@ -204,8 +204,8 @@ impl fmt::Display for Missing {
     }
 }
 
-/// Where to send someone whose adapter is missing.
-pub const INSTALL_HELP: &str = "see README, \"Installing adapters\"";
+/// Where to send someone whose adapter is missing, in tuitor.
+pub const INSTALL_HELP: &str = "/doctor says what is missing and what installs it";
 
 /// `~/…` for paths under the home directory: shorter on a one-line status, and still
 /// something a shell understands.

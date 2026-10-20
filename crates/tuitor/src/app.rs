@@ -10,6 +10,7 @@ use crossterm::event::KeyEvent;
 use tokio::sync::mpsc::UnboundedSender;
 use tuitor_core::breakpoints::Toggle;
 use tuitor_core::config::{Adapters, LaunchConfig, home_relative};
+use tuitor_core::doctor::{Fix, Options, ProjectInput, listen_port};
 use tuitor_core::flow::Row;
 use tuitor_core::project::{Project, parse_value};
 use tuitor_core::session::SessionId;
@@ -18,6 +19,7 @@ use tuitor_core::{Engine, EngineMsg, Level, Step, persist};
 
 use crate::clipboard;
 use crate::command::{self, Action, Arg, BpScope, Location, View};
+use crate::doctor::Doctor;
 use crate::editor::{Editor, Settings};
 use crate::flow::{Item, first_symbol, items};
 use crate::keymap::{self, Key, Keymap, Lookup};
@@ -382,6 +384,17 @@ impl App {
                     );
                 }
             }
+            Overlay::Doctor(doctor) => {
+                if key.is("up") || key.is("k") || key.is("ctrl-p") {
+                    doctor.select(-1);
+                } else if key.is("down") || key.is("j") || key.is("ctrl-n") {
+                    doctor.select(1);
+                } else if key.is("enter") {
+                    self.doctor_fix();
+                } else if key.is("q") {
+                    self.ui.overlay = None;
+                }
+            }
             Overlay::Picker(picker) => {
                 if key.is("enter") {
                     // When nothing matches, opening what was typed says why it cannot be opened.
@@ -402,6 +415,13 @@ impl App {
                     picker.refresh();
                 }
             }
+        }
+    }
+
+    /// Takes in what finished in the background: DOCTOR's checks.
+    pub fn poll(&mut self) {
+        if let Some(Overlay::Doctor(doctor)) = &mut self.ui.overlay {
+            doctor.poll();
         }
     }
 
@@ -680,6 +700,10 @@ impl App {
                 tab.ui.output_back = 0;
                 Ok(String::new())
             }
+            Action::Doctor(only) => {
+                self.open_doctor(only);
+                Ok(String::new())
+            }
             Action::Palette(text) => {
                 let mut input = text.unwrap_or_default();
                 if let Some((spec, None)) = command::split(&input)
@@ -699,6 +723,56 @@ impl App {
                 Ok("bye".into())
             }
         }
+    }
+
+    /// DOCTOR, for every adapter, or the one named, and the projects of every tab.
+    fn open_doctor(&mut self, only: Option<String>) {
+        let projects = self.tabs.iter().filter_map(|(_, tab)| tab.project.as_ref().map(ProjectInput::of)).collect();
+        // Ports this tuitor listens on are not in the way of its sessions.
+        let sessions = self.tabs.iter().flat_map(|(_, tab)| tab.engine.sessions());
+        let own_ports = sessions.filter(|s| s.is_alive()).filter_map(|s| listen_port(&s.config)).collect();
+        let only = only.iter().flat_map(|names| names.split_whitespace()).map(str::to_owned).collect();
+        let options = Options { only, php: None, own_ports };
+        self.ui.overlay = Some(Overlay::Doctor(Doctor::start(self.adapters.clone(), projects, options)));
+    }
+
+    /// `enter` in DOCTOR: a tuitor command goes to the command line, to be checked and run, with
+    /// the configuration it is for selected; a shell command is copied, as tuitor runs none.
+    fn doctor_fix(&mut self) {
+        let Some(Overlay::Doctor(doctor)) = &self.ui.overlay else { return };
+        let Some((section, finding)) = doctor.selection() else { return };
+        let (dir, subject) = (section.dir.clone(), finding.subject.clone());
+        let message = match finding.fix.clone() {
+            Some(Fix::Command(line)) => {
+                self.ui.overlay = None;
+                self.select_configuration(dir, &subject);
+                self.open_palette(format!("/{line}"));
+                return;
+            }
+            Some(Fix::Shell(command)) => {
+                let copied = if self.headless { Ok(()) } else { clipboard::copy(&command) };
+                match copied {
+                    Ok(()) => format!("copied `{command}`; tuitor runs no shell commands"),
+                    Err(err) => err.to_string(),
+                }
+            }
+            Some(Fix::Text(_)) | None => return,
+        };
+        self.ui.status = Some(Status { key: None, command: Some("/doctor".into()), message, level: Level::Info });
+    }
+
+    /// Shows configuration `name` of the project in `dir` in CONFIG, selected.
+    fn select_configuration(&mut self, dir: Option<PathBuf>, name: &str) {
+        let tab = self.tabs.iter().find(|(_, tab)| tab.project.as_ref().is_some_and(|p| Some(&p.dir) == dir.as_ref()));
+        let Some(id) = tab.map(|(id, _)| id) else { return };
+        self.tabs.activate(id);
+        let tab = self.tab_mut();
+        if let Some(index) = tab.project.as_ref().and_then(|p| p.find(name)) {
+            tab.ui.config_sel = index;
+            tab.ui.config.pos = index;
+        }
+        tab.ui.view = View::Project;
+        tab.set_focus(Pane::Config);
     }
 
     fn open_palette(&mut self, input: String) {

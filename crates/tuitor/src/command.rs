@@ -124,6 +124,7 @@ pub enum Action {
     ConfigAdd(Option<String>),
     ConfigDelete,
     ClearOutput,
+    Doctor(Option<String>),
     Palette(Option<String>),
     Help,
     Quit,
@@ -556,6 +557,13 @@ pub static COMMANDS: &[Spec] = &[
         help: "clear the OUTPUT pane",
         group: Group::App,
         parse: simple!(Action::ClearOutput),
+    },
+    Spec {
+        name: "doctor",
+        arg: Arg::Optional("‹adapter…›"),
+        help: "check what debugging needs: adapters, Xdebug, ports, browsers",
+        group: Group::App,
+        parse: |a| Ok(Action::Doctor(text(a))),
     },
     Spec {
         name: "palette",

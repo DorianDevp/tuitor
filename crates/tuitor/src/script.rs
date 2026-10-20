@@ -165,6 +165,7 @@ async fn pump_for(app: &mut App, rx: &mut Inbox, duration: Duration) {
         drain(app, rx);
     }
     app.after_engine();
+    app.poll();
 }
 
 fn drain(app: &mut App, rx: &mut Inbox) {

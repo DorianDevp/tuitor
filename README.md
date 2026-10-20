@@ -26,6 +26,7 @@ tuitor -C ~/shop/api --open ~/shop/web               # two projects, each in a t
 tuitor listen --port 9003 --map /var/www/app=./api   # PHP, no configuration needed
 tuitor exec ./target/debug/app -- --flag              # native program through gdb
 tuitor configs                 # what tuitor sees: projects, configurations and adapters
+tuitor doctor                  # what debugging needs here, and what is missing
 ```
 
 `-C <dir>` sets the project directory (default: the current directory) and
@@ -277,7 +278,7 @@ Every key runs a command; `/` opens the command line with the same commands and
 | `j` `k` `h` `l`, arrows | move, collapse, expand | | `q` / `esc` | back out (zoom → history → browsing) |
 | `<` `>` | previous / next tab (`g T` `g t`) | | `O` / `T` | open a project / in a new tab |
 | `g s` `g S` | next / previous session of the tab | | `ctrl-w` | close the tab |
-| `E` | open the SOURCE line or the selected breakpoint in your editor | | | |
+| `E` | open the SOURCE line or the selected breakpoint in your editor | | `!` | doctor: what debugging needs here |
 
 In BREAKPOINTS: `a` session/all, `e` condition, `l` logpoint, `space` on/off, `d` delete.
 In CONFIG: `enter` start or edit, `a` add, `m` map a path, `u` unset a field, `d` delete.
@@ -373,8 +374,33 @@ Programs are looked up on `PATH` only. Adapters released as VS Code extensions
 are unpacked from their official `.vsix` (js-debug: its DAP server's
 `.tar.gz`) into `<adapters>`:
 `${XDG_DATA_HOME:-~/.local/share}/tuitor/adapters` (macOS:
-`~/Library/Application Support/tuitor/adapters`). `tuitor configs` shows what
+`~/Library/Application Support/tuitor/adapters`). `tuitor doctor` shows what
 is installed and what is missing.
+
+### Doctor
+
+`tuitor doctor`, and `/doctor` (`!`) in tuitor, checks what debugging needs on
+this machine. For each adapter: the program it runs, the script of one that
+runs on Node.js and that Node.js (vscode-php-debug needs 20.18 or newer), that
+gdb answers as a DAP server, that Delve is on `PATH`, a browser for
+`pwa-chrome`, and Xdebug in the `php` on `PATH`. For each configuration of the
+project, and in tuitor of every open project: that its adapter is ready, that
+the port to listen for Xdebug on is free, that the PHP vscode-php-debug starts
+for a `program` loads Xdebug 3 (for PHP that something else starts, php-fpm or
+a container, it notes what the `php` here lacks, and one that maps paths runs
+elsewhere, where tuitor cannot look), the browser it starts and the program it
+debugs. Whatever is missing comes with
+the command that fixes it; in DOCTOR, `enter` puts a tuitor command on the
+command line and copies a shell command, which tuitor never runs itself.
+
+```sh
+tuitor doctor                  # every adapter, and this directory's project
+tuitor doctor php gdb          # these adapters, and this directory's project
+tuitor doctor --php /opt/php/bin/php -C ~/shop/api
+```
+
+It exits with 1 when something the project, or an adapter named, needs is
+missing, so that scripts can check before they start tuitor.
 
 Override or add in `~/.config/tuitor/adapters.toml`:
 
