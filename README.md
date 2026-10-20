@@ -151,8 +151,9 @@ its fields then go to the adapter as they are.
 
 ## Screen
 
-Views: **overview** (everything), **code** (source + full stack + breakpoints),
-**history** (every variable at every stop), **project** (every breakpoint, and
+Views: **overview** (everything), **code** (source + full stack + breakpoints,
+with FLOW and OUTLINE beside them), **history** (every variable at every stop),
+**flow** (the files of the run, below), **project** (every breakpoint, and
 CONFIG). Any pane can be maximised with `z`. BREAKPOINTS lists those of the
 active session or, after `a`, all of them: of every session and every tab,
 grouped by tab.
@@ -181,6 +182,68 @@ adapters by file path, and it has none here. A path that is not on this
 machine, as a program in a container reports one, comes with the `/config map`
 that maps it to the project.
 
+### FLOW
+
+FLOW (`g f`) lists the files of a run in the order execution first reached them,
+from its first stop, with the functions seen in each: `✓` ran, `▶` executes at
+the stop on view, `▷` is further down its stack, `◇` is predicted. Each file has
+a bar over stop numbers, or over time when a trace has it, with the stop on view
+marked `▼` and breakpoints where the evidence reaches their lines. Library files
+of one package that follow one another are one line (`v` lists them). SELECTED
+shows what is known of the file under the cursor, and its code; EVIDENCE where
+the rows come from:
+
+- **This run**: every file on the stack of every recorded stop, for any adapter.
+- **An earlier run**: tuitor keeps the files of recent runs in
+  `~/.local/state/tuitor/flows/`. A run that started at the same first stop
+  (and, once this run has hit a breakpoint, stopped there too) predicts the
+  files it reached after the point this run is at, lined up at the stop where it
+  was where this run is. While vscode-php-debug listens, each request is a run.
+- **An Xdebug function trace** (PHP): the newest finished trace in the
+  configuration's `xdebugTraceDir` that passes through the stack of the stop on
+  view. It times every file and shows what the request does after the stop.
+  Times count from the request's first call, without debugger stops (gaps of
+  over 0.1 s outside PHP's own functions).
+
+A file is predicted only when a trace or an earlier run reached it after this
+point. `enter` opens the file in CODE where the stack is in it, else at its
+first function; `b` toggles a breakpoint on that function's first line.
+
+In CODE the list is on the left, above OUTLINE: the functions of the file in
+SOURCE, found by reading it (PHP, JavaScript and TypeScript, Rust, C, Go),
+whether each ran, where the one at the cursor was called from and what it calls.
+SOURCE marks with `│` the lines a stop or the trace reached.
+
+Xdebug writes traces in `trace` mode, in the computerized format tuitor reads:
+
+```ini
+xdebug.mode = debug,trace
+xdebug.start_with_request = trigger    ; XDEBUG_TRIGGER (cookie, query, environment) starts both
+xdebug.trace_format = 1
+xdebug.output_dir = /tmp/xdebug
+xdebug.trace_output_name = trace.%u.%R ; a file per request: the time and the URI
+```
+
+`/config set xdebugTraceDir /tmp/xdebug` tells tuitor where they are (a field of
+tuitor's own; the adapter ignores it). A trace is complete once its request has
+finished: trace a request, then debug the next one that takes the same path. In
+a container, mount the directory and map it like the code:
+
+```yaml
+services:
+  php:
+    volumes: [".:/var/www/app", "./var/xdebug:/tmp/xdebug"]
+    environment:
+      XDEBUG_MODE: debug,trace
+      XDEBUG_CONFIG: client_host=host.docker.internal client_port=9003 output_dir=/tmp/xdebug
+```
+
+`XDEBUG_CONFIG` does not take `trace_format` or `trace_output_name`: set them in
+an ini file of the image (`/usr/local/etc/php/conf.d/` in the official ones).
+With `/config map /tmp/xdebug=./var/xdebug`, tuitor finds the directory and the
+files the traces name through `pathMappings`. `TRACE=1 ./run.sh` in
+[`examples/php`](examples/php) traces its run.
+
 ## Keys
 
 Every key runs a command; `/` opens the command line with the same commands and
@@ -195,7 +258,7 @@ Every key runs a command; `/` opens the command line with the same commands and
 | `p` / `X` / `R` | pause / stop / restart | | `y` | copy the selection (OSC 52) |
 | `S` | start the configuration selected in CONFIG | | `.` | SOURCE follows execution again |
 | `[` `]` `}` | older stop / newer / live | | `tab` | next pane |
-| `g o` `g c` `g h` `g p` | views (`g b`: PROJECT at BREAKPOINTS) | | `z` | zoom pane |
+| `g o` `g c` `g h` `g f` `g p` | views (`g b`: PROJECT at BREAKPOINTS) | | `z` | zoom pane |
 | `j` `k` `h` `l`, arrows | move, collapse, expand | | `q` / `esc` | back out (zoom → history → browsing) |
 | `<` `>` | previous / next tab (`g T` `g t`) | | `O` / `T` | open a project / in a new tab |
 | `g s` `g S` | next / previous session of the tab | | `ctrl-w` | close the tab |
@@ -204,6 +267,8 @@ Every key runs a command; `/` opens the command line with the same commands and
 In BREAKPOINTS: `a` session/all, `e` condition, `l` logpoint, `space` on/off, `d` delete.
 In CONFIG: `enter` start or edit, `a` add, `m` map a path, `u` unset a field, `d` delete.
 In STACK: `v` library frames. In OUTPUT: `C` clear.
+In FLOW: `enter` open in CODE, `b` breakpoint where the file is entered, `v` library files.
+In OUTLINE: `enter` go to the function, `b` breakpoint on its first line.
 
 ### Changing keys
 
@@ -214,7 +279,7 @@ binding is a key and a command line; `""` unbinds:
 [global]
 m = "continue"
 c = ""
-"g f" = "find"
+"g n" = "find"
 
 [pane.locals]
 enter = "open"
@@ -404,10 +469,10 @@ export PATH="$PATH:$(go env GOPATH)/bin"
 
 tuitor names that directory when `dlv` is there but not on `PATH`.
 
-Breakpoints and watches are remembered per project in
-`~/.local/state/tuitor/`, outside the repository, and so are the projects opened
-recently. Logs: `~/.local/state/tuitor/tuitor.log` (`TUITOR_LOG=dap=trace`
-records the protocol).
+Breakpoints and watches are remembered per project in `~/.local/state/tuitor/`,
+outside the repository, and so are the projects opened recently and the files of
+recent runs, for FLOW. Logs: `~/.local/state/tuitor/tuitor.log`
+(`TUITOR_LOG=dap=trace` records the protocol).
 
 ## Code
 
@@ -438,5 +503,4 @@ TUITOR_DLV="$(go env GOPATH)/bin/dlv" cargo test -p tuitor-core --test go -- --i
 
 ## Not there yet
 
-- FLOW (file waterfall from the first breakpoint) from the mockups
 - `runInTerminal`: programs that need a terminal of their own (`"console": "integratedTerminal"`)
