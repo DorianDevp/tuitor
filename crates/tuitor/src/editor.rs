@@ -89,9 +89,10 @@ impl Editor {
                 (vec!["nvim".into(), "--server".into(), server, "--remote-expr".into(), expr], false)
             }
             (None, None) => {
-                let editor = env("VISUAL")
-                    .or_else(|| env("EDITOR"))
-                    .filter(|e| !e.trim().is_empty())
+                // An empty $VISUAL counts as none, and $EDITOR is next.
+                let set = |name| env(name).filter(|value: &String| !value.trim().is_empty());
+                let editor = set("VISUAL")
+                    .or_else(|| set("EDITOR"))
                     .ok_or("no editor: set $VISUAL or $EDITOR, or `editor` in ~/.config/tuitor/config.toml")?;
                 // `+line file`, as vi, Vim, Neovim, Emacs, nano, micro and Kakoune take it.
                 let mut words: Vec<String> = editor.split_whitespace().map(str::to_owned).collect();
@@ -210,6 +211,8 @@ mod tests {
         assert_eq!((vim.program.as_str(), vim.terminal), ("emacs", true));
         assert_eq!(vim.args, ["-nw", "+48", "/src/my app/orders.c"]);
         assert_eq!(editor(&Settings::default(), &[("EDITOR", "nano")]).expect("editor").program, "nano");
+        let empty = editor(&Settings::default(), &[("VISUAL", ""), ("EDITOR", "nano")]);
+        assert_eq!(empty.expect("editor").program, "nano");
         assert!(editor(&Settings::default(), &[]).is_err());
     }
 
