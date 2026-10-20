@@ -317,6 +317,25 @@ newer run, and `enter` opens the breakpoint in CODE or the side's stop in HISTOR
 runs of the tuitor that is running can be compared: FLOW remembers earlier ones by their
 stacks, without values.
 
+### Paths to a line
+
+`P` (`/paths`) asks the project's language server who calls the function the SOURCE line is
+in, and who calls those, up to where execution starts: a controller, `main`, a test, a
+script's top level, or a function no code calls, which a framework, a container or an event
+does. PATHS lists each chain, entry point first, with the lines on it worth a breakpoint: the
+entry of each function, its call into the next one, before that call the last write of each
+variable and the last call into the project's other functions (three at most), and the line
+asked about. `space` marks paths, `enter` puts breakpoints on the lines of those marked; a
+line several paths share gets one.
+
+Calls no server can see, such as a container's, an event's or one through an interface, come
+from the stacks of the runs FLOW remembers, and show as `⇢`. tuitor runs intelephense (PHP),
+typescript-language-server (TypeScript, JavaScript, Angular), rust-analyzer (Rust) and gopls
+(Go) from `PATH`, or as `config.toml` says, once per project when first asked, and ends them
+with the tab; PATHS shows what a server reports while it reads the project. intelephense
+answers no call hierarchy, so for PHP the callers are its references that call. Other
+language servers are welcome as contributions.
+
 ### Commands
 
 Every key runs a command line. `/` opens the command line (`:` too, and in SOURCE only
@@ -358,6 +377,7 @@ named (`tuitor doctor php gdb`), needs is missing.
 |---|---|---|---|
 | `c` `n` `s` `o` | continue, step over, in, out | `b` | toggle a breakpoint on the SOURCE line |
 | `N` `A` | new breakpoint set, next set active | `M` | breakpoint in or out of the active set |
+| `P` | paths to the SOURCE line, with their breakpoints | | |
 | `p` `X` `R` | pause, stop, restart | `f` | find files and breakpoints |
 | `S` | start the configuration selected in CONFIG | `ctrl-f`, in SOURCE `/` | search SOURCE |
 | `[` `]` `}` | older stop, newer, live | `w` `x` | watch, evaluate |
@@ -383,7 +403,7 @@ library frames or files; WATCH `d` delete; OUTPUT `C` clear; SOURCE `/` search, 
 | `~/.config/tuitor/keys.toml` | key bindings over the [defaults](crates/tuitor/src/default_keys.toml) |
 | `~/.config/tuitor/adapters.toml` | adapters: replace a built-in one, or add one |
 | `~/.config/tuitor/projects.toml` | tuitor's own launch configurations, by project path; written by `/config` |
-| `~/.config/tuitor/config.toml` | the editor `E` runs |
+| `~/.config/tuitor/config.toml` | the editor `E` runs; the language servers `P` asks |
 | `~/.local/state/tuitor/` | breakpoints and their sets, watches, recent projects and runs; `tuitor.log` |
 | `~/.local/share/tuitor/adapters/` | what `tuitor install` unpacks |
 
@@ -419,6 +439,19 @@ extensions = ["php"]        # breakpoints in these files go to this adapter
 # config.toml: split at spaces, {file} and {line} replaced in each word
 editor = "code --goto {file}:{line}"
 editor_terminal = false     # it has a window of its own; true (the default) hands it the terminal
+
+# The language server of each language, if not the one on PATH: command, args and the
+# server's initializationOptions; a field left out keeps the default.
+[lsp.php]                   # intelephense --stdio
+initialization_options = { licenceKey = "/home/me/intelephense/licence.txt" }
+
+[lsp.rust]                  # rust-analyzer, with { checkOnSave = false }
+command = "mise"
+args = ["exec", "--", "rust-analyzer"]
+
+[lsp.typescript]            # typescript-language-server --stdio
+
+[lsp.go]                    # gopls
 ```
 
 
@@ -428,6 +461,8 @@ editor_terminal = false     # it has a window of its own; true (the default) han
 crates/tuitor-dap    DAP framing, message types, async client. Knows nothing about tuitor.
 crates/tuitor-core   Engine: sessions, breakpoints, snapshots, deltas, flows and traces,
                      doctor, install. No terminal.
+crates/tuitor-code   Language servers: the call paths to a line and the lines on them. The
+                     only crate that speaks LSP.
 crates/tuitor        The TUI: tabs, commands, keymap, views.
 ```
 
@@ -447,6 +482,9 @@ cargo test -p tuitor-core --test php -- --ignored
 TUITOR_JS_ADAPTER=~/.local/share/tuitor/adapters/js-debug/js-debug/src/dapDebugServer.js \
 cargo test -p tuitor-core --test js -- --ignored
 TUITOR_DLV="$(go env GOPATH)/bin/dlv" cargo test -p tuitor-core --test go -- --ignored
+TUITOR_GOPLS=gopls TUITOR_RUST_ANALYZER=rust-analyzer TUITOR_INTELEPHENSE=intelephense \
+TUITOR_TYPESCRIPT_LANGUAGE_SERVER=typescript-language-server \
+cargo test -p tuitor-code --test servers -- --ignored
 ```
 
 `tuitor --script file` runs command lines and `@` directives without a terminal and saves
