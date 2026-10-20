@@ -6,7 +6,11 @@ services:
     working_dir: /app
     extra_hosts: ["host.docker.internal:host-gateway"]   # needed on Linux
     environment:
-      XDEBUG_MODE: debug
+      # XDEBUG_MODE=debug,trace docker compose run --rm php also writes a function trace to
+      # traces/ (in /app, so it shows up here; mkdir -p traces first) for FLOW.
+      XDEBUG_MODE: ${XDEBUG_MODE:-debug}
       XDEBUG_SESSION: "1"
-      XDEBUG_CONFIG: client_host=host.docker.internal client_port=9003
-    command: ["php", "orders.php"]
+      XDEBUG_TRIGGER: "1"
+      XDEBUG_CONFIG: client_host=host.docker.internal client_port=9003 output_dir=/app/traces
+    # The format tuitor reads, and a file name per run; XDEBUG_CONFIG cannot set these.
+    command: ["php", "-dxdebug.trace_format=1", "-dxdebug.trace_output_name=trace.%u.%s", "orders.php"]
