@@ -40,11 +40,14 @@ pub struct Settings {
     /// Whether that command runs in tuitor's terminal, which tuitor hands it until it exits.
     /// `false` for an editor with a window of its own, which tuitor stays on screen beside.
     pub editor_terminal: bool,
+    /// The language servers `paths` asks, by language: `[lsp.php]`, `[lsp.typescript]`,
+    /// `[lsp.rust]`, `[lsp.go]`.
+    pub lsp: tuitor_code::Servers,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { editor: None, editor_terminal: true }
+        Settings { editor: None, editor_terminal: true, lsp: tuitor_code::Servers::default() }
     }
 }
 
@@ -187,7 +190,11 @@ mod tests {
 
     #[test]
     fn the_configured_command_wins_and_takes_the_file_and_line_in_any_word() {
-        let settings = Settings { editor: Some("code --goto {file}:{line}".into()), editor_terminal: false };
+        let settings = Settings {
+            editor: Some("code --goto {file}:{line}".into()),
+            editor_terminal: false,
+            lsp: tuitor_code::Servers::default(),
+        };
         let code = editor(&settings, &[("NVIM", "/run/nvim.sock"), ("EDITOR", "vim")]).expect("editor");
         assert_eq!((code.program.as_str(), code.terminal), ("code", false));
         assert_eq!(code.args, ["--goto", "/src/my app/orders.c:48"]);
@@ -232,5 +239,9 @@ mod tests {
         let settings: Settings = toml::from_str("").expect("defaults");
         assert!(settings.editor.is_none() && settings.editor_terminal);
         assert!(toml::from_str::<Settings>("edtior = \"vim\"").is_err(), "a misspelt key is an error");
+        let settings: Settings =
+            toml::from_str("[lsp.rust]\ncommand = \"mise\"\nargs = [\"exec\", \"--\", \"rust-analyzer\"]\n")
+                .expect("lsp");
+        assert_eq!(settings.lsp.command(tuitor_code::Language::Rust).program, "mise");
     }
 }

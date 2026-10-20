@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tuitor_code::{Code, Servers};
 use tuitor_core::config::Adapters;
 use tuitor_core::project::Project;
 use tuitor_core::session::SessionId;
@@ -291,24 +292,28 @@ pub struct Tab {
     /// Files for the finder, listed on first use.
     pub files: Option<Vec<String>>,
     pub flows: FlowState,
+    /// The project's language servers, which `paths` starts when it first needs them.
+    pub code: Code,
 }
 
 impl Tab {
     pub fn empty(adapters: &Adapters) -> Tab {
         let options = EngineOptions { adapters: adapters.clone(), workspace: PathBuf::new(), state_file: None };
         let (engine, _) = Engine::new(options);
-        Tab { project: None, engine, ui: TabUi::default(), files: None, flows: FlowState::default() }
+        let code = Code::new(PathBuf::new(), Servers::default());
+        Tab { project: None, engine, ui: TabUi::default(), files: None, flows: FlowState::default(), code }
     }
 
     /// A tab for `project`, and the channel its engine reports on.
-    pub fn open(project: Project, adapters: &Adapters) -> (Tab, UnboundedReceiver<EngineMsg>) {
+    pub fn open(project: Project, adapters: &Adapters, servers: &Servers) -> (Tab, UnboundedReceiver<EngineMsg>) {
         let (engine, rx) = Engine::new(EngineOptions {
             adapters: adapters.clone(),
             workspace: project.dir.clone(),
             state_file: persist::state_file(&project.dir),
         });
         let flows = FlowState::open(&project.dir);
-        (Tab { project: Some(project), engine, ui: TabUi::default(), files: None, flows }, rx)
+        let code = Code::new(project.dir.clone(), servers.clone());
+        (Tab { project: Some(project), engine, ui: TabUi::default(), files: None, flows, code }, rx)
     }
 
     /// The line of FLOW under the cursor among `items`: the file where execution is until
@@ -317,6 +322,11 @@ impl Tab {
         let flow = self.flow();
         let followed = flow.as_ref().filter(|_| self.ui.flow_follow).and_then(|view| executing(&view.flow, items));
         followed.unwrap_or(self.ui.flow.pos).min(items.len().saturating_sub(1))
+    }
+
+    /// Ends what the tab runs: its debug sessions and its language servers.
+    pub async fn shutdown(&mut self) {
+        futures::future::join(self.engine.shutdown(), self.code.shutdown()).await;
     }
 
     /// The project's directory name; tabs are told apart by it.

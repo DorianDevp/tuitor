@@ -1558,6 +1558,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "tuitor-code",
  "tuitor-core",
  "unicode-width",
 ]

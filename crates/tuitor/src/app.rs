@@ -20,6 +20,7 @@ use tuitor_core::session::SessionId;
 use tuitor_core::store::Store;
 use tuitor_core::{Engine, EngineMsg, Level, Step, persist};
 
+use crate::callpaths::{self, Paths};
 use crate::clipboard;
 use crate::command::{self, Action, Arg, BpScope, Location, View};
 use crate::doctor::Doctor;
@@ -240,7 +241,7 @@ impl App {
             (None, Ok(None)) => Ok(String::new()),
         };
         let unconfigured = project.configurations.is_empty();
-        let (mut tab, rx) = Tab::open(project, &self.adapters);
+        let (mut tab, rx) = Tab::open(project, &self.adapters, &self.settings.lsp);
         if let Ok(Some(index)) = created {
             tab.ui.config_sel = index;
             tab.ui.config.pos = index;
@@ -315,10 +316,10 @@ impl App {
         }
     }
 
-    /// Disconnects every tab's sessions; used when quitting.
+    /// Disconnects every tab's sessions and ends its language servers; used when quitting.
     pub async fn shutdown(&mut self) {
-        let engines = self.tabs.iter_mut().map(|(_, tab)| tab.engine.shutdown());
-        futures::future::join_all(engines).await;
+        let tabs = self.tabs.iter_mut().map(|(_, tab)| tab.shutdown());
+        futures::future::join_all(tabs).await;
     }
 
     // ---- input ------------------------------------------------------------------------
@@ -427,6 +428,19 @@ impl App {
                 }
             }
             Overlay::Install => self.installer_key(key),
+            Overlay::Paths(paths) => {
+                if key.is("up") || key.is("k") || key.is("ctrl-p") {
+                    paths.select(-1);
+                } else if key.is("down") || key.is("j") || key.is("ctrl-n") {
+                    paths.select(1);
+                } else if key.is("space") {
+                    paths.toggle();
+                } else if key.is("enter") {
+                    self.take_paths();
+                } else if key.is("q") {
+                    self.ui.overlay = None;
+                }
+            }
             // Its keys are `search_key`'s.
             Overlay::Search(_) => {}
             Overlay::Picker(picker) => {
@@ -487,8 +501,10 @@ impl App {
     /// of a compose file.
     pub fn poll(&mut self) {
         let cwd = self.base_dir();
-        if let Some(Overlay::Doctor(doctor)) = &mut self.ui.overlay {
-            doctor.poll();
+        match &mut self.ui.overlay {
+            Some(Overlay::Doctor(doctor)) => doctor.poll(),
+            Some(Overlay::Paths(paths)) => paths.poll(),
+            _ => {}
         }
         if let Some((job, result)) = self.compose.as_ref().and_then(mappings::Running::poll) {
             self.compose = None;
@@ -657,6 +673,7 @@ impl App {
                     BpScope::All => "breakpoints of every session and tab".into(),
                 })
             }
+            Action::Paths => self.paths(),
             Action::BpClear => {
                 let engine = &mut self.tab_mut().engine;
                 let n = engine.breakpoints().len();
@@ -850,6 +867,49 @@ impl App {
                 Ok("bye".into())
             }
         }
+    }
+
+    /// `/paths`: asks the project's language server for the call paths to the SOURCE line, in
+    /// PATHS, with the calls the runs FLOW remembers.
+    fn paths(&mut self) -> Outcome {
+        self.tab().project.as_ref().ok_or(NO_PROJECT)?;
+        let path = self.breakpoint_file()?;
+        let line = self.tab().ui.source.cursor.max(1);
+        let place = format!("{}:{line}", path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default());
+        let observed = self.tab().flows.observed();
+        let tab = self.tabs.active_id();
+        let query = self.tab_mut().code.paths(path, line, observed)?;
+        self.ui.overlay = Some(Overlay::Paths(Paths::new(tab, place, query)));
+        Ok(String::new())
+    }
+
+    /// `enter` in PATHS: breakpoints on the lines of the marked paths, in the tab asked about.
+    fn take_paths(&mut self) {
+        let Some(Overlay::Paths(paths)) = &self.ui.overlay else { return };
+        let chosen: Vec<_> = paths.chosen().into_iter().cloned().collect();
+        let tab = paths.tab;
+        if chosen.is_empty() {
+            return;
+        }
+        self.ui.overlay = None;
+        let outcome = match self.tabs.get_mut(tab) {
+            Some(tab) => {
+                let taken = callpaths::take(&mut tab.engine, &chosen.iter().collect::<Vec<_>>());
+                let s = |n: usize| if n == 1 { "" } else { "s" };
+                let (added, paths) = (taken.added, taken.paths.len());
+                let mut message = format!("{added} breakpoint{} along {paths} path{}", s(added), s(paths));
+                if taken.existing > 0 {
+                    message.push_str(&format!("; {} line{} had one already", taken.existing, s(taken.existing)));
+                }
+                Ok(message)
+            }
+            None => Err("that tab is closed".into()),
+        };
+        let (message, level) = match outcome {
+            Ok(message) => (message, Level::Info),
+            Err(Refusal { level, message }) => (message, level),
+        };
+        self.ui.status = Some(Status { key: None, command: Some("/paths".into()), message, level });
     }
 
     /// DOCTOR, for every adapter, or the one named, and the projects of every tab.
@@ -1371,8 +1431,9 @@ impl App {
         }
         self.ui.closing = None;
         let adapters = self.adapters.clone();
-        if let Some(mut closed) = self.tabs.close(id, || Tab::empty(&adapters)) {
-            tokio::spawn(async move { closed.engine.shutdown().await });
+        // What runs goes on its own; the rest of the tab stays on this thread.
+        if let Some(Tab { mut engine, mut code, .. }) = self.tabs.close(id, || Tab::empty(&adapters)) {
+            tokio::spawn(async move { futures::future::join(engine.shutdown(), code.shutdown()).await });
         }
         Ok(format!("closed {name}"))
     }
