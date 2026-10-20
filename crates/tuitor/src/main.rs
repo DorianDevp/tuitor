@@ -12,6 +12,7 @@ mod outline;
 mod overlay;
 mod paths;
 mod picker;
+mod places;
 mod runner;
 mod script;
 mod search;

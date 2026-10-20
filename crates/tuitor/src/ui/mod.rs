@@ -607,7 +607,7 @@ fn hints(p: &mut Painter<'_>, app: &App, area: Rect) {
             ("bp delete", "delete"),
             ("edit", "editor"),
         ],
-        Pane::Output => &[("clear output", "clear")],
+        Pane::Output => &[("open", "go to its file:line"), ("copy", "copy"), ("clear output", "clear")],
         Pane::Config => &[
             ("config start", "start"),
             ("open", "edit"),
@@ -619,7 +619,7 @@ fn hints(p: &mut Painter<'_>, app: &App, area: Rect) {
             ("install", "install"),
             ("doctor", "doctor"),
         ],
-        Pane::Events => &[],
+        Pane::Events => &[("open", "go to its file:line")],
         Pane::History => &[("open", "open stop"), ("right", "column")],
         Pane::Flow => &[("open", "open in code"), ("bp toggle", "bp on entry"), ("vendor", "library files")],
         Pane::Outline => &[("open", "jump"), ("bp toggle", "bp on entry")],
