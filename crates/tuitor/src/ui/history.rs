@@ -8,7 +8,7 @@ use super::paint::{Painter, Panel, Seg, seg, truncate};
 use super::theme::*;
 use super::watch::number;
 use crate::tab::Tab;
-use crate::timeline::{Track, cell, tracks};
+use crate::timeline::{Track, cell};
 
 const MAX_CELL: u16 = 16;
 
@@ -244,11 +244,10 @@ pub fn value(p: &mut Painter<'_>, tab: &Tab, area: Rect) {
     }
 }
 
-/// Rows TIMELINE takes for `tracks` values: the stops, a row each, the change under the
-/// cursor, and its frame.
+/// The rows TIMELINE would take: the stops, one for each value that changed, the change
+/// under the cursor, and its frame.
 pub fn timeline_height(tab: &Tab) -> u16 {
-    let history: &[Snapshot] = tab.active().map(|s| s.history.as_slice()).unwrap_or_default();
-    let values = tracks(history, tab.engine.watches()).len().max(1);
+    let values = tab.timeline_tracks().len().max(1);
     u16::try_from(values).unwrap_or(u16::MAX).saturating_add(4)
 }
 
@@ -258,7 +257,7 @@ pub fn timeline_height(tab: &Tab) -> u16 {
 /// is the lighter column, and below is what changed there.
 pub fn timeline(p: &mut Painter<'_>, tab: &Tab, area: Rect, focus: bool) {
     let history: &[Snapshot] = tab.active().map(|s| s.history.as_slice()).unwrap_or_default();
-    let tracks = tracks(history, tab.engine.watches());
+    let tracks = tab.timeline_tracks();
     let count: usize = tracks.iter().map(|t| t.changes.len()).sum();
     let sub = vec![seg("what changed, where and when", fg(DIM))];
     let right = vec![seg(format!("{count} changes of {} values", tracks.len()), fg(DIM))];
@@ -343,7 +342,7 @@ fn change_line(snapshot: &Snapshot, track: &Track) -> Vec<Seg<'static>> {
 
 /// Why the program stopped: a breakpoint by its set's colour, `●` where it waited and `↷`
 /// where it went on by itself, or the adapter's reason.
-pub fn reason(snapshot: &Snapshot) -> Vec<Seg<'static>> {
+fn reason(snapshot: &Snapshot) -> Vec<Seg<'static>> {
     match (snapshot.hit_breakpoints.first(), snapshot.set) {
         (Some(id), Some(set)) => {
             let (glyph, text) = if snapshot.silent { ("↷", fg(FAINT)) } else { ("●", fg(DIM)) };
