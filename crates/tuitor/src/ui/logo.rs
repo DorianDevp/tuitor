@@ -3,9 +3,11 @@
 //! over the lower one's. The pixels are assets/logo_white.svg sampled on the
 //! 9.954-unit grid its wordmark is drawn on.
 //!
-//! The logo appears in full only where no data is shown. The header gets a mark
-//! three rows tall: the same logo at a third of the height, one pixel row per
-//! stripe, its stripes coming out of the "t" of a pixel wordmark.
+//! The logo appears in full only where no data is shown. The header gets a mark two
+//! rows tall, drawn with octants: the wordmark from the top of the "t" to the base,
+//! with four stripes, one per half row, running into it. While nothing waits to be
+//! read their colours sweep through the logo's, from its top stripe to its bottom
+//! one and back.
 
 use std::f32::consts::TAU;
 use std::ops::Range;
@@ -73,34 +75,69 @@ const PERIOD_MS: u128 = 2800;
 const AMPLITUDE: f32 = 1.5;
 /// Phase lag between neighbouring stripes, so the sway runs down the stack.
 const LAG: f32 = 0.7;
-/// Time between frames while the logo sways: its edges glide, so every frame
-/// differs. Nothing animated is redrawn more often.
+/// Time between frames while the logo sways or the mark's colours roll: both glide,
+/// so every frame differs. Nothing animated is redrawn more often.
 pub const FRAME: Duration = Duration::from_millis(80);
 
-/// The header's wordmark, a third of the big one's height: one pixel row per
-/// stripe, the same letters with stems two pixels wide, the heart a dot. The
-/// stripes run in the columns before the "t".
-const MARK: [&str; 6] = [
-    ".......#........##...#............",
-    "......##............##............",
-    ".....####.##.##.##.####..###..##.#",
-    "......##..##.##.##..##..##.##.####",
-    "......##..##.##.##..##..##.##.##..",
-    ".......##..####.##...##..###..##..",
+/// The header's wordmark, eight pixels from the top of the "t" to the base: the
+/// big one's letters with stems two pixels wide, the heart a dot over the "i".
+/// A pixel is an octant, half a column by a quarter of a row.
+const MARK: [&str; 8] = [
+    ".........#..........##....#...............",
+    "........##...............##...............",
+    "......######.##..##.##.######..####..##.##",
+    "......######.##..##.##.######.##..##.#####",
+    "........##...##..##.##...##...##..##.##..#",
+    "........##...##..##.##...##...##..##.##...",
+    "........###..##..##.##...###..##..##.##...",
+    ".........###..#####.##....###..####..##...",
 ];
-/// The mark's 6 pixel rows for the big logo's 19 from the top of the "t" to the base.
-const MARK_SCALE: f32 = 6.0 / 19.0;
-/// The mark's stripes end under its "t", which hides their right edges.
-const MARK_STRIPE_END: i32 = 7;
+/// Where the mark's four stripes start, top to bottom, one per half row: the logo's
+/// stepped edge in whole columns, as a cell holds only two colours.
+const MARK_LEFTS: [i32; 4] = [2, 0, 2, 4];
+/// The stripes run up to the stem of the "t"; its crossbar covers the second one's end.
+const MARK_STEM: i32 = 8;
+/// Each stripe's place among the stripes' colours at rest: the colour the logo has
+/// at that height.
+const MARK_COLOURS: [f32; 4] = [0.0, 2.0, 3.0, 5.0];
 /// Columns of the mark's "t" and the stripes left of it.
-const MARK_T: u16 = 9;
-/// The mark sways half as far as the big logo, rounded to whole pixels: each
-/// stripe steps one pixel out and back, so it stays crisp and calm.
-const MARK_SWAY: f32 = 0.5;
-/// How finely the header looks ahead for the mark's next step.
-const STEP: Duration = Duration::from_millis(10);
-/// Rows of the header's mark.
+const MARK_T: u16 = 6;
+/// Pixel rows free above the mark, so that it stands centred beside three rows of text.
+const MARK_TOP: i32 = 2;
+/// Rows of the header's mark: its two rows and half a row free above and below.
 pub const MARK_ROWS: u16 = 3;
+/// One sweep of the mark's colours down the logo's stripes and back, in milliseconds.
+const ROLL_MS: u128 = 6000;
+/// Block elements that Unicode encodes outside the octants, by the octants they
+/// fill: bit `n` is octant `n + 1`, left to right and top to bottom.
+const NOT_OCTANTS: [(u8, char); 26] = [
+    (0x00, ' '),
+    (0x01, '\u{1CEA8}'),
+    (0x02, '\u{1CEAB}'),
+    (0x03, '\u{1FB82}'),
+    (0x05, '▘'),
+    (0x0A, '▝'),
+    (0x0F, '▀'),
+    (0x14, '\u{1FBE6}'),
+    (0x28, '\u{1FBE7}'),
+    (0x3F, '\u{1FB85}'),
+    (0x40, '\u{1CEA3}'),
+    (0x50, '▖'),
+    (0x55, '▌'),
+    (0x5A, '▞'),
+    (0x5F, '▛'),
+    (0x80, '\u{1CEA0}'),
+    (0xA0, '▗'),
+    (0xA5, '▚'),
+    (0xAA, '▐'),
+    (0xAF, '▜'),
+    (0xC0, '▂'),
+    (0xF0, '▄'),
+    (0xF5, '▙'),
+    (0xFA, '▟'),
+    (0xFC, '▆'),
+    (0xFF, '█'),
+];
 
 /// The header's logo.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,10 +149,10 @@ pub enum Mark {
 }
 
 impl Mark {
-    /// Columns of the mark, without the column left of it that a stripe sways into.
+    /// Columns of the mark.
     pub fn width(self) -> u16 {
         match self {
-            Mark::Word => MARK[0].len() as u16,
+            Mark::Word => (MARK[0].len() / 2) as u16,
             Mark::T => MARK_T,
         }
     }
@@ -203,46 +240,110 @@ pub fn draw(p: &mut Painter<'_>, x: u16, y: u16, size: Size, t: Option<Duration>
     }
 }
 
-/// Draws the header's mark with its first column at `x`; a stripe may sway one column left of it.
+/// Draws the header's mark with its first column at `x`.
 pub fn mark(p: &mut Painter<'_>, x: u16, y: u16, mark: Mark, t: Option<Duration>) {
-    let shifts = shifts(t);
     for row in 0..MARK_ROWS {
-        let upper = 2 * i32::from(row);
-        for col in -1..i32::from(mark.width()) {
-            let (Some(cx), Some(cy)) = (x.checked_add_signed(col as i16), y.checked_add(row)) else { continue };
-            put(p, cx, cy, mark_pixel(mark, col, upper, &shifts), mark_pixel(mark, col, upper + 1, &shifts));
+        for col in 0..mark.width() {
+            let (Some(cx), Some(cy)) = (x.checked_add(col), y.checked_add(row)) else { continue };
+            let pixels: [Option<Color>; 8] = std::array::from_fn(|i| {
+                let (px, py) = (2 * i32::from(col) + (i % 2) as i32, 4 * i32::from(row) + (i / 2) as i32);
+                mark_pixel(mark, px, py - MARK_TOP, t)
+            });
+            let Some(fg) = pixels.iter().flatten().next().copied() else { continue };
+            let bits = (0..8).filter(|&i| pixels[i] == Some(fg)).fold(0, |bits, i| bits | 1 << i);
+            let Some(cell) = p.buf.cell_mut((cx, cy)) else { continue };
+            cell.set_char(octant(bits)).set_fg(fg);
+            // A second colour is the background; the mark never puts a third in a cell.
+            if let Some(&bg) = pixels.iter().flatten().find(|&&c| c != fg) {
+                cell.set_bg(bg);
+            }
         }
     }
 }
 
-/// How far each of the mark's stripes is from rest at time `t`, in whole pixels:
-/// the big logo's sway, scaled down and rounded. `None` is the still mark.
-fn shifts(t: Option<Duration>) -> [i32; STRIPES.len()] {
-    std::array::from_fn(|stripe| (sway(stripe, t) * MARK_SWAY).round() as i32)
-}
-
-/// How long after `t` the mark next changes, but at least a frame. It moves in
-/// steps, so the loop redraws only for one.
-pub fn next_step(t: Duration) -> Duration {
-    let now = shifts(Some(t));
-    let period = Duration::from_millis(PERIOD_MS as u64);
-    let mut after = FRAME;
-    while after < period && shifts(Some(t + after)) == now {
-        after += STEP;
-    }
-    after
-}
-
-/// Colour of the mark's pixel (x, y) with its stripes shifted by `shifts`.
-fn mark_pixel(mark: Mark, x: i32, y: i32, shifts: &[i32; STRIPES.len()]) -> Option<Color> {
-    let row = usize::try_from(y).ok()?;
+/// Colour of the mark's pixel (x, y) at time `t`, or `None` where the background shows.
+fn mark_pixel(mark: Mark, x: i32, y: i32, t: Option<Duration>) -> Option<Color> {
+    let (Ok(col), Ok(row)) = (usize::try_from(x), usize::try_from(y)) else { return None };
     let pixels = MARK.get(row)?.as_bytes();
-    if usize::try_from(x).is_ok_and(|col| x < i32::from(mark.width()) && pixels[col] == b'#') {
+    if col >= 2 * usize::from(mark.width()) {
+        return None;
+    }
+    if pixels.get(col) == Some(&b'#') {
         return Some(WHITE);
     }
-    let stripe = &STRIPES[row];
-    let left = (stripe.left * MARK_SCALE).round() as i32 + shifts[row];
-    (left..MARK_STRIPE_END).contains(&x).then_some(stripe.color)
+    let stripe = row / 2;
+    (MARK_LEFTS[stripe]..MARK_STEM).contains(&x).then(|| roll(stripe, t))
+}
+
+/// Colour of the mark's stripe `stripe` at time `t`. The colours sweep down the
+/// logo's stripes and back every `ROLL_MS`, blending each only into the one next to
+/// it, as the stripes lie in the logo; `None` holds them at rest.
+fn roll(stripe: usize, t: Option<Duration>) -> Color {
+    let last = (STRIPES.len() - 1) as f32;
+    // The remainder keeps the phase exact however long tuitor has been open.
+    let shift = t.map_or(0.0, |t| (t.as_millis() % ROLL_MS) as f32 / ROLL_MS as f32 * 2.0 * last);
+    let at = (MARK_COLOURS[stripe] - shift).rem_euclid(2.0 * last);
+    let at = if at > last { 2.0 * last - at } else { at };
+    let from = (at as usize).min(STRIPES.len() - 2);
+    blend(STRIPES[from].color, STRIPES[from + 1].color, at - from as f32)
+}
+
+/// `mix` around the colour wheel: hue, saturation and lightness each move from `a`
+/// to `b`, the hue the short way, so that no step between two bright colours greys.
+fn blend(a: Color, b: Color, amount: f32) -> Color {
+    if amount <= 0.0 {
+        return a;
+    }
+    if amount >= 1.0 {
+        return b;
+    }
+    let ((h1, s1, l1), (h2, s2, l2)) = (hsl(a), hsl(b));
+    let turn = (h2 - h1 + 540.0) % 360.0 - 180.0;
+    from_hsl((h1 + turn * amount).rem_euclid(360.0), s1 + (s2 - s1) * amount, l1 + (l2 - l1) * amount)
+}
+
+/// Hue in degrees, saturation and lightness of an RGB colour.
+fn hsl(color: Color) -> (f32, f32, f32) {
+    let Color::Rgb(r, g, b) = color else { return (0.0, 0.0, 1.0) };
+    let [r, g, b] = [r, g, b].map(|v| f32::from(v) / 255.0);
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    let (lightness, chroma) = ((max + min) / 2.0, max - min);
+    if chroma == 0.0 {
+        return (0.0, 0.0, lightness);
+    }
+    let hue = if max == r {
+        ((g - b) / chroma).rem_euclid(6.0)
+    } else if max == g {
+        (b - r) / chroma + 2.0
+    } else {
+        (r - g) / chroma + 4.0
+    };
+    (hue * 60.0, chroma / (1.0 - (2.0 * lightness - 1.0).abs()), lightness)
+}
+
+fn from_hsl(hue: f32, saturation: f32, lightness: f32) -> Color {
+    let chroma = (1.0 - (2.0 * lightness - 1.0).abs()) * saturation;
+    let x = chroma * (1.0 - ((hue / 60.0) % 2.0 - 1.0).abs());
+    let (r, g, b) = match (hue / 60.0) as u8 {
+        0 => (chroma, x, 0.0),
+        1 => (x, chroma, 0.0),
+        2 => (0.0, chroma, x),
+        3 => (0.0, x, chroma),
+        4 => (x, 0.0, chroma),
+        _ => (chroma, 0.0, x),
+    };
+    let channel = |v: f32| ((v + lightness - chroma / 2.0) * 255.0).round().clamp(0.0, 255.0) as u8;
+    Color::Rgb(channel(r), channel(g), channel(b))
+}
+
+/// The character that fills the octants in `bits` (see `NOT_OCTANTS`).
+fn octant(bits: u8) -> char {
+    if let Some(&(_, c)) = NOT_OCTANTS.iter().find(|(b, _)| *b == bits) {
+        return c;
+    }
+    // U+1CD00 on holds the rest in the order of their bits.
+    let before = NOT_OCTANTS.iter().filter(|(b, _)| *b < bits).count() as u32;
+    char::from_u32(0x1CD00 + u32::from(bits) - before).unwrap_or(' ')
 }
 
 /// Colour of pixel (x, y), or `None` where the background shows.
@@ -366,124 +467,118 @@ mod tests {
     }
 
     fn render_mark(mark: Mark, t: Option<Duration>) -> Buffer {
-        let mut buf = Buffer::empty(Rect::new(0, 0, 1 + MARK[0].len() as u16 + 1, MARK_ROWS));
-        super::mark(&mut Painter { buf: &mut buf }, 1, 0, mark, t);
+        let mut buf = Buffer::empty(Rect::new(0, 0, Mark::Word.width() + 1, MARK_ROWS));
+        super::mark(&mut Painter { buf: &mut buf }, 0, 0, mark, t);
         buf
     }
 
-    /// The mark's stripe pixels, left to right, in row `y`.
-    fn stripe_run(mark: Mark, y: i32, shifts: &[i32; STRIPES.len()]) -> Vec<i32> {
-        (-2..i32::from(mark.width()) + 2)
-            .filter(|&x| mark_pixel(mark, x, y, shifts).is_some_and(|c| c != WHITE))
-            .collect()
+    #[test]
+    fn octants_have_a_character_each() {
+        let chars: std::collections::HashSet<char> = (0..=255).map(octant).collect();
+        assert_eq!(chars.len(), 256);
+        assert_eq!((octant(0x00), octant(0x0F), octant(0xF0), octant(0xFF)), (' ', '▀', '▄', '█'));
+        // The first and last octant: 3 alone, and all but 1.
+        assert_eq!((octant(0x04), octant(0xFE)), ('\u{1CD00}', '\u{1CDE5}'));
+        let octants = (0..=255).filter(|b| NOT_OCTANTS.iter().all(|(n, _)| n != b));
+        assert!(octants.map(octant).all(|c| ('\u{1CD00}'..='\u{1CDE5}').contains(&c)));
     }
 
     #[test]
-    fn mark_is_the_logo_at_a_third_of_its_height() {
+    fn mark_is_the_wordmark_with_four_stripes_as_tall() {
         assert!(MARK.iter().all(|row| row.len() == MARK[0].len() && row.bytes().all(|b| b"#.".contains(&b))));
-        assert_eq!(MARK.len(), STRIPES.len());
-        assert_eq!((Mark::Word.width(), Mark::T.width(), MARK_ROWS), (34, 9, 3));
-        // The stripes keep the big logo's stepped left edge, scaled down.
-        let lefts: Vec<i32> = (0..6).map(|y| stripe_run(Mark::Word, y, &[0; 6])[0]).collect();
-        assert_eq!(lefts, [2, 1, 0, 1, 2, 3]);
-        // The "t" starts where the big one's crossbar does, scaled down, and stands
-        // the full height; the narrow mark ends with it.
-        let first_white = |y: usize| MARK[y].find('#');
-        assert_eq!(first_white(2), Some((15.0 * MARK_SCALE).round() as usize));
-        assert!((0..6).all(|y| first_white(y).is_some_and(|x| x < usize::from(MARK_T))));
-        assert!(MARK.iter().all(|row| row[usize::from(MARK_T)..].starts_with('.')));
+        assert_eq!(MARK.len(), 2 * MARK_LEFTS.len());
+        assert_eq!((Mark::Word.width(), Mark::T.width(), MARK_ROWS), (21, 6, 3));
+        assert_eq!(2 * usize::from(Mark::Word.width()), MARK[0].len());
+        // The narrow mark ends with the "t".
+        assert!(MARK.iter().all(|row| row[2 * usize::from(MARK_T)..].starts_with('.')));
+        for y in 0..8 {
+            // A stripe in every row from the top of the "t" to the base, with the
+            // logo's stepped edge, running unbroken into the "t".
+            let run: Vec<i32> = (0..2 * i32::from(MARK_T))
+                .filter(|&x| mark_pixel(Mark::Word, x, y, None).is_some_and(|c| c != WHITE))
+                .collect();
+            assert_eq!(run[0], MARK_LEFTS[y as usize / 2], "row {y}");
+            assert!(run.windows(2).all(|w| w[1] == w[0] + 1), "row {y}");
+            let next = (run[run.len() - 1] + 1..).find_map(|x| mark_pixel(Mark::Word, x, y, None));
+            assert_eq!(next, Some(WHITE), "row {y}");
+        }
     }
 
     #[test]
-    fn mark_stripes_come_out_of_the_t_however_they_sway() {
-        for shift in -1..=1 {
+    fn mark_puts_at_most_two_colours_in_a_cell() {
+        for ms in (0..ROLL_MS as u64).step_by(100) {
             for mark in [Mark::Word, Mark::T] {
-                for y in 0..6 {
-                    let run = stripe_run(mark, y, &[shift; 6]);
-                    // One unbroken stripe that runs up to the "t", which covers its end.
-                    let t = MARK[y as usize].find('#').map_or(-1, |x| x as i32);
-                    assert!(!run.is_empty() && run.windows(2).all(|w| w[1] == w[0] + 1), "row {y}");
-                    assert_eq!(run.last(), Some(&(t - 1)), "row {y}, shift {shift}");
-                    assert!((t..MARK_STRIPE_END).all(|x| mark_pixel(mark, x, y, &[shift; 6]) == Some(WHITE)));
-                    assert!(run[0] >= -1, "the sway stays inside the column left of the mark");
+                for row in 0..i32::from(MARK_ROWS) {
+                    for col in 0..i32::from(mark.width()) {
+                        let mut colours: Vec<Option<Color>> = (0..8)
+                            .map(|i| mark_pixel(mark, 2 * col + i % 2, 4 * row + i / 2 - MARK_TOP, at(ms)))
+                            .collect();
+                        colours.sort_by_key(|c| format!("{c:?}"));
+                        colours.dedup();
+                        assert!(colours.len() <= 2, "({col}, {row}) at {ms} ms: {colours:?}");
+                    }
                 }
             }
         }
     }
 
     #[test]
-    fn mark_sways_with_the_logo_one_pixel_each_way() {
-        assert_eq!(shifts(None), [0; 6]);
-        let period = PERIOD_MS as u64;
-        let mut seen = [[false; 3]; 6];
-        for ms in (0..period).step_by(10) {
-            let now = shifts(at(ms));
-            assert_eq!(now, shifts(at(ms + 1000 * period)));
-            for (s, shift) in now.into_iter().enumerate() {
-                assert!((-1..=1).contains(&shift), "{now:?} at {ms} ms");
-                // In step with the big logo: out when its edge is out, in when it is in.
-                assert!(shift == 0 || shift.signum() as f32 == sway(s, at(ms)).signum());
-                seen[s][(shift + 1) as usize] = true;
+    fn mark_colours_sweep_down_the_logo_stripes_and_back() {
+        let rest: Vec<Color> = (0..4).map(|s| roll(s, None)).collect();
+        assert_eq!(rest, [0, 2, 3, 5].map(|s| STRIPES[s].color));
+        let period = ROLL_MS as u64;
+        // Half a sweep on, the colours stand the other way round.
+        assert_eq!((0..4).map(|s| roll(s, at(period / 2))).collect::<Vec<_>>(), [5, 3, 2, 0].map(|s| STRIPES[s].color));
+        let frames = period / FRAME.as_millis() as u64;
+        for s in 0..4 {
+            let colour = |frame: u64| roll(s, at(frame * FRAME.as_millis() as u64));
+            for frame in 0..frames {
+                assert_eq!(colour(frame), roll(s, at(frame * FRAME.as_millis() as u64 + 1000 * period)));
+                // Between neighbouring stripes of the logo nothing greys.
+                assert!(hsl(colour(frame)).1 > 0.8, "stripe {s}, frame {frame}: {:?}", colour(frame));
             }
+            // The colours glide: they change every frame but where a sweep turns.
+            let held = (0..frames).filter(|&f| colour(f) == colour(f + 1)).count();
+            assert!(held <= 2, "stripe {s} holds its colour over {held} frames");
         }
-        assert_eq!(seen, [[true; 3]; 6]);
-        // The steps run down the stack.
-        let first_out = |s: usize| (1..period).find(|&ms| shifts(at(ms))[s] == 1 && shifts(at(ms - 1))[s] == 0);
-        assert!((0..5).all(|s| first_out(s) < first_out(s + 1)), "{:?}", (0..6).map(first_out).collect::<Vec<_>>());
     }
 
     #[test]
-    fn mark_is_redrawn_only_when_it_steps() {
-        let period = Duration::from_millis(PERIOD_MS as u64);
-        for ms in (0..PERIOD_MS as u64).step_by(30) {
-            let t = Duration::from_millis(ms);
-            let after = next_step(t);
-            assert!((FRAME..period).contains(&after), "{after:?} at {ms} ms");
-            assert_ne!(shifts(Some(t + after)), shifts(Some(t)), "at {ms} ms");
-            if after > FRAME {
-                assert_eq!(shifts(Some(t + after - STEP)), shifts(Some(t)), "late at {ms} ms");
-            }
-            assert_ne!(render_mark(Mark::Word, Some(t + after)), render_mark(Mark::Word, Some(t)));
-        }
-        // Six stripes, each out and back both ways: under the frames the big logo draws.
-        let (mut t, mut redraws) = (Duration::ZERO, 0);
-        while t < period {
-            t += next_step(t);
-            redraws += 1;
-        }
-        assert!(redraws <= 24 && redraws < period.as_millis() / FRAME.as_millis(), "{redraws} redraws");
-    }
-
-    #[test]
-    fn mark_draws_three_rows_of_half_blocks_and_rests_in_the_logo_shape() {
+    fn mark_stands_centred_in_three_rows_and_only_its_stripes_change() {
         let still = render_mark(Mark::Word, None);
-        let yellow = STRIPES[2].color;
-        // Yellow reaches furthest left, over nothing: its row's upper half.
-        assert_eq!((still[(1, 1)].symbol(), still[(1, 1)].fg), ("▀", yellow));
-        // Pink over red at the top, where the stripes meet the point of the "t".
-        let top = &still[(1 + 7, 0)];
-        assert_eq!((top.symbol(), top.fg, top.bg), ("▀", WHITE, WHITE));
-        let edge = &still[(1 + 6, 0)];
-        assert_eq!((edge.symbol(), edge.fg, edge.bg), ("▀", STRIPES[0].color, WHITE));
-        // Nothing sways at rest, and the narrow mark is the wide one cut after its "t".
-        assert_eq!(still[(0, 1)].symbol(), " ");
+        let (pink, yellow, orange) = (STRIPES[0].color, STRIPES[2].color, STRIPES[3].color);
+        // Half a row free above: the top stripe is the first row's lower half.
+        assert_eq!((still[(1, 0)].symbol(), still[(1, 0)].fg), ("▄", pink));
+        // The second stripe reaches furthest left, over nothing.
+        assert_eq!((still[(0, 1)].symbol(), still[(0, 1)].fg), ("▀", yellow));
+        let two = &still[(1, 1)];
+        assert_eq!((two.symbol(), two.fg, two.bg), ("▀", yellow, orange));
+        // The crossbar of the "t" over the third stripe.
+        let bar = &still[(3, 1)];
+        assert_eq!((bar.symbol(), bar.fg, bar.bg), ("▀", WHITE, orange));
+        // Half a row free below: the bottom stripe is the last row's upper half.
+        assert_eq!((still[(2, 2)].symbol(), still[(2, 2)].fg), ("▀", STRIPES[5].color));
+        // The narrow mark is the wide one cut after its "t".
         let narrow = render_mark(Mark::T, None);
         for y in 0..MARK_ROWS {
             for x in 0..still.area.width {
-                if x <= MARK_T {
+                if x < MARK_T {
                     assert_eq!(narrow[(x, y)], still[(x, y)], "({x}, {y})");
                 } else {
                     assert_eq!(narrow[(x, y)].symbol(), " ", "({x}, {y})");
                 }
             }
         }
-        // Swaying moves only the stripes' left edges.
-        let moved = render_mark(Mark::Word, at(700));
+        // Rolling changes the stripes' colours only.
+        let rolled = render_mark(Mark::Word, at(700));
+        assert_ne!(rolled, still);
         for y in 0..MARK_ROWS {
-            for x in 1 + MARK_STRIPE_END as u16..still.area.width {
-                assert_eq!(moved[(x, y)], still[(x, y)]);
+            for x in 0..still.area.width {
+                assert_eq!(rolled[(x, y)].symbol(), still[(x, y)].symbol(), "({x}, {y})");
+                if x >= MARK_T {
+                    assert_eq!(rolled[(x, y)], still[(x, y)], "({x}, {y})");
+                }
             }
         }
-        assert_ne!(moved, still);
     }
 }

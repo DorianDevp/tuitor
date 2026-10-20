@@ -190,7 +190,7 @@ fn history_value_area(body: Rect) -> Rect {
     Rect::new(body.x, body.y + table_h, body.width / 2, body.height - table_h)
 }
 
-/// Where the logo starts; a swaying stripe reaches the column left of it.
+/// Where the logo starts, after a margin column.
 const LOGO_X: u16 = 1;
 /// Columns between the logo and the rows beside it.
 const LOGO_GAP: u16 = 2;
@@ -199,7 +199,7 @@ const SESSION_ROOM: u16 = 24;
 /// Shortest a project name gets before tabs are left out.
 const MIN_NAME: usize = 3;
 
-/// The logo on the left, three rows tall. Beside it the views and the clock; the
+/// The logo on the left, centred on three rows. Beside it the views and the clock; the
 /// active session and the project tabs, each with the state of its own active
 /// session; and the context line.
 fn header(p: &mut Painter<'_>, app: &App, area: Rect) {
@@ -402,15 +402,15 @@ fn tabs_width(tabs: &[(usize, bool)], name: usize) -> u16 {
     tabs.iter().map(|(width, glyph)| (width.min(&name) + 2 + if *glyph { 2 } else { 0 }) as u16).sum()
 }
 
-/// Time for the header's logo, or `None` to rest it. It sways while nothing waits
+/// Time for the header's logo, or `None` to rest it. Its colours roll while nothing waits
 /// to be read: with no session, or while the active one starts, runs or has ended,
 /// so it also quietly shows a running program. It rests while that is stopped or
 /// something is open over it.
 fn logo_clock(app: &App) -> Option<Duration> {
     let stopped = app.tab().active().is_some_and(|s| s.state == SessionState::Stopped);
     let clock = app.ui.clock.filter(|_| !stopped && app.ui.overlay.is_none());
-    if let Some(t) = clock {
-        app.ui.animate(logo::next_step(t));
+    if clock.is_some() {
+        app.ui.animate(logo::FRAME);
     }
     clock
 }
