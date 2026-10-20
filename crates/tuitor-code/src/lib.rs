@@ -1,5 +1,6 @@
-//! Code integration through language servers. From a line of code, the call paths that lead
-//! to it, from where execution starts, and on each the lines worth a breakpoint.
+//! Code integration through language servers. From a line of code, the trees of calls through
+//! it, from where execution starts down past it into what each function calls, and in each
+//! call the lines worth a breakpoint.
 //!
 //! The rest of tuitor speaks DAP; this crate alone speaks LSP, to the servers of
 //! [`config::Servers`], started the first time a project asks and kept for its next questions.
@@ -12,6 +13,7 @@ mod rpc;
 mod select;
 mod server;
 mod text;
+mod tree;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -23,8 +25,9 @@ use tokio::sync::{OnceCell, mpsc};
 use tokio::task::JoinHandle;
 
 pub use config::{Language, Servers};
-pub use paths::{CallPath, Entry, Found, Observed, Root, Step, Stop};
-pub use select::Why;
+pub use paths::Observed;
+pub use select::{Facts, Why};
+pub use tree::{Cut, Entry, Found, Function, Root, Stage, Stop};
 
 use crate::paths::{Ask, Limits, Question};
 use crate::server::Server;
@@ -76,7 +79,7 @@ impl Code {
         Code { root, servers, running: HashMap::new() }
     }
 
-    /// Starts looking for the paths to `line` (1-based) of `file`, with the calls earlier
+    /// Starts looking for the paths through `line` (1-based) of `file`, with the calls earlier
     /// runs showed. Fails at once for a file no server tuitor knows reads.
     pub fn paths(&mut self, file: PathBuf, line: u32, observed: Vec<Observed>) -> Result<Query, String> {
         let language = Language::of(&file).ok_or_else(|| {

@@ -9,7 +9,6 @@ use std::time::Duration;
 use crossterm::event::KeyEvent;
 use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
-use tuitor_code::CallPath;
 use tuitor_core::breakpoints::{Breakpoint, SetId, Toggle};
 use tuitor_core::compose;
 use tuitor_core::config::{Adapters, LaunchConfig, home_relative, project_relative};
@@ -123,6 +122,24 @@ impl Ui {
 
 /// Rows `page down` and `page up` move by.
 const PAGE: isize = 15;
+
+/// The table of the keymap PATHS reads its keys from, over `[global]`.
+pub const PATHS_PANE: &str = "paths";
+/// Commands of `[global]` that work in PATHS besides its own.
+const IN_PATHS: &[&str] = &[
+    "up",
+    "down",
+    "left",
+    "right",
+    "top",
+    "bottom",
+    "page up",
+    "page down",
+    "scroll up",
+    "scroll down",
+    "close",
+    "quit",
+];
 
 pub struct App {
     pub tabs: Tabs<Tab>,
@@ -429,19 +446,7 @@ impl App {
                 }
             }
             Overlay::Install => self.installer_key(key),
-            Overlay::Paths(paths) => {
-                if key.is("up") || key.is("k") || key.is("ctrl-p") {
-                    paths.select(-1);
-                } else if key.is("down") || key.is("j") || key.is("ctrl-n") {
-                    paths.select(1);
-                } else if key.is("space") {
-                    paths.toggle();
-                } else if key.is("enter") {
-                    self.take_paths();
-                } else if key.is("q") {
-                    self.ui.overlay = None;
-                }
-            }
+            Overlay::Paths(_) => self.paths_key(key),
             Overlay::Sets(pick) => {
                 let len = self.tabs.get(pick.tab).map_or(0, |tab| tab.engine.breakpoints().sets().len());
                 if key.is("up") || key.is("k") || key.is("ctrl-p") {
@@ -481,6 +486,26 @@ impl App {
                     picker.refresh();
                 }
             }
+        }
+    }
+
+    /// A key in PATHS, as `[pane.paths]` of the keymap binds it over `[global]`: PATHS's own
+    /// commands, moving and folding, closing. Other commands wait until PATHS is closed.
+    fn paths_key(&mut self, key: Key) {
+        self.ui.pending.push(key);
+        let pending = self.ui.pending.clone();
+        let command = match self.keymap.lookup(PATHS_PANE, &pending) {
+            Lookup::Command(command) => command.to_owned(),
+            Lookup::Prefix => return,
+            Lookup::None => {
+                self.ui.pending.clear();
+                return;
+            }
+        };
+        self.ui.pending.clear();
+        let name = command::split(&command).map(|(spec, _)| spec.name).unwrap_or_default();
+        if name.starts_with("paths ") || IN_PATHS.contains(&name) {
+            self.execute(&command, Some(keymap::label(&pending)));
         }
     }
 
@@ -619,6 +644,9 @@ impl App {
         if !matches!(action, Action::SetDelete(_)) {
             self.ui.deleting = None;
         }
+        if let Some(outcome) = self.in_paths(&action) {
+            return outcome;
+        }
         match action {
             Action::Continue => self.step(Step::Continue),
             Action::Next => self.step(Step::Over),
@@ -692,6 +720,16 @@ impl App {
                 })
             }
             Action::Paths => self.paths(),
+            Action::PathsMark => self.paths_mark(),
+            Action::PathsStage => self.paths_choose(false),
+            Action::PathsBranch => self.paths_choose(true),
+            Action::PathsUnmark => {
+                let name = self.open_paths()?.unmark().ok_or("nothing marked")?;
+                Ok(format!("{name} unmarked"))
+            }
+            Action::PathsNext => self.paths_cycle(1),
+            Action::PathsPrev => self.paths_cycle(-1),
+            Action::PathsTake => self.take_paths(),
             Action::BpClear => {
                 let engine = &mut self.tab_mut().engine;
                 let n = engine.breakpoints().len();
@@ -897,42 +935,82 @@ impl App {
         let observed = self.tab().flows.observed();
         let tab = self.tabs.active_id();
         let query = self.tab_mut().code.paths(path, line, observed)?;
-        self.ui.overlay = Some(Overlay::Paths(Paths::new(tab, place, query, &self.tab().engine)));
+        self.ui.overlay = Some(Overlay::Paths(Box::new(Paths::new(tab, place, query, &self.tab().engine))));
         Ok(String::new())
     }
 
-    /// `enter` in PATHS: a breakpoint set for each path marked, in the tab asked about.
-    fn take_paths(&mut self) {
-        let Some(Overlay::Paths(paths)) = &self.ui.overlay else { return };
-        let chosen: Vec<(CallPath, SetId)> = paths.chosen().into_iter().map(|(p, set)| (p.clone(), set)).collect();
+    /// PATHS, when it is open.
+    fn open_paths(&mut self) -> Result<&mut Paths, Refusal> {
+        match &mut self.ui.overlay {
+            Some(Overlay::Paths(paths)) => Ok(paths.as_mut()),
+            _ => Err(Refusal::warn("PATHS is not open: P asks for the paths through the SOURCE line".into())),
+        }
+    }
+
+    /// Moving, folding and closing while PATHS is open, which act on PATHS; `None` for the
+    /// rest.
+    fn in_paths(&mut self, action: &Action) -> Option<Outcome> {
+        let Some(Overlay::Paths(paths)) = &mut self.ui.overlay else { return None };
+        match action {
+            Action::Up => paths.select(-1),
+            Action::Down => paths.select(1),
+            Action::PageUp | Action::ScrollUp => paths.select(-PAGE),
+            Action::PageDown | Action::ScrollDown => paths.select(PAGE),
+            Action::Top => paths.select(isize::MIN / 2),
+            Action::Bottom => paths.select(isize::MAX / 2),
+            Action::Left => paths.fold(false),
+            Action::Right => paths.fold(true),
+            Action::Close => self.ui.overlay = None,
+            _ => return None,
+        }
+        Some(Ok(String::new()))
+    }
+
+    /// `/paths mark`: the end-to-end path through the stage under the cursor, a set to be.
+    fn paths_mark(&mut self) -> Outcome {
+        let paths = self.open_paths()?;
+        let (set, stages, through) = paths.mark().map_err(Refusal::warn)?;
+        let passes = if through { "" } else { "; it does not pass the function asked about" };
+        Ok(format!("{} marked: the path through here, {stages} stages{passes}", paths.name(set)))
+    }
+
+    /// `/paths stage`, `/paths branch`.
+    fn paths_choose(&mut self, all: bool) -> Outcome {
+        self.open_paths()?.choose(all).map_err(Refusal::warn)
+    }
+
+    fn paths_cycle(&mut self, delta: isize) -> Outcome {
+        let name = self.open_paths()?.cycle(delta).ok_or("nothing marked")?;
+        Ok(format!("{name} is the current mark"))
+    }
+
+    /// `/paths take`: a breakpoint set for each mark, in the tab asked about.
+    fn take_paths(&mut self) -> Outcome {
+        let paths = self.open_paths()?;
+        let chosen = paths.chosen();
         let tab = paths.tab;
         if chosen.is_empty() {
-            return;
+            let key = |command: &str| self.keymap.key_for(PATHS_PANE, command).unwrap_or_else(|| format!("/{command}"));
+            return Err(Refusal::warn(format!(
+                "nothing marked: {} marks the path through the stage under the cursor, {} a stage, {} a branch",
+                key("paths mark"),
+                key("paths stage"),
+                key("paths branch")
+            )));
         }
         self.ui.overlay = None;
-        let outcome = match self.tabs.get_mut(tab) {
-            Some(tab) => {
-                let chosen: Vec<(&CallPath, SetId)> = chosen.iter().map(|(path, set)| (path, *set)).collect();
-                callpaths::take(&mut tab.engine, &chosen).map_err(|e| format!("{e:#}")).map(|taken| {
-                    let s = |n: usize| if n == 1 { "" } else { "s" };
-                    let (added, existing) = (taken.added, taken.existing);
-                    let had = if existing == 0 { String::new() } else { format!(", {existing} there already") };
-                    format!(
-                        "{} for the path{}, {added} breakpoint{} new{had} · {}",
-                        sets::names(tab.engine.breakpoints(), &taken.sets),
-                        s(taken.sets.len()),
-                        s(added),
-                        sets::roles(&tab.engine)
-                    )
-                })
-            }
-            None => Err("that tab is closed".to_owned()),
-        };
-        let (message, level) = match outcome {
-            Ok(message) => (message, Level::Info),
-            Err(message) => (message, Level::Error),
-        };
-        self.ui.status = Some(Status { key: None, command: Some("/paths".into()), message, level });
+        let tab = self.tabs.get_mut(tab).ok_or("that tab is closed")?;
+        let taken = callpaths::take(&mut tab.engine, &chosen).map_err(|e| format!("{e:#}"))?;
+        let s = |n: usize| if n == 1 { "" } else { "s" };
+        let (added, existing) = (taken.added, taken.existing);
+        let had = if existing == 0 { String::new() } else { format!(", {existing} there already") };
+        Ok(format!(
+            "{} for the mark{}, {added} breakpoint{} new{had} · {}",
+            sets::names(tab.engine.breakpoints(), &taken.sets),
+            s(taken.sets.len()),
+            s(added),
+            sets::roles(&tab.engine)
+        ))
     }
 
     /// DOCTOR, for every adapter, or the one named, and the projects of every tab.

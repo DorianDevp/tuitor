@@ -104,8 +104,20 @@ pub enum Action {
     Compare(Option<String>),
     CompareOlder,
     CompareNewer,
-    /// Breakpoints along the call paths that lead to the SOURCE line.
+    /// The call trees through the SOURCE line, in PATHS.
     Paths,
+    /// In PATHS: the end-to-end path through the stage under the cursor, marked as a set.
+    PathsMark,
+    /// In PATHS: the stage under the cursor in the current mark, or out of it.
+    PathsStage,
+    /// In PATHS: the stage under the cursor and every stage below it in the current mark, or
+    /// out of it.
+    PathsBranch,
+    PathsUnmark,
+    PathsNext,
+    PathsPrev,
+    /// In PATHS: a breakpoint set for each mark.
+    PathsTake,
     WatchAdd(Option<String>),
     WatchDelete,
     Eval(Option<String>),
@@ -433,9 +445,58 @@ pub static COMMANDS: &[Spec] = &[
     Spec {
         name: "paths",
         arg: Arg::None,
-        help: "breakpoints along the call paths to the SOURCE line, from a language server",
+        help: "the call trees through the SOURCE line, from a language server, to make breakpoint sets of",
         group: Group::Breakpoints,
         parse: simple!(Action::Paths),
+    },
+    Spec {
+        name: "paths mark",
+        arg: Arg::None,
+        help: "in PATHS, mark the end-to-end path through the stage under the cursor as a new set",
+        group: Group::Breakpoints,
+        parse: simple!(Action::PathsMark),
+    },
+    Spec {
+        name: "paths stage",
+        arg: Arg::None,
+        help: "in PATHS, the stage under the cursor in the current mark or out (no mark: a new one)",
+        group: Group::Breakpoints,
+        parse: simple!(Action::PathsStage),
+    },
+    Spec {
+        name: "paths branch",
+        arg: Arg::None,
+        help: "in PATHS, the stage under the cursor and all below it in the current mark or out",
+        group: Group::Breakpoints,
+        parse: simple!(Action::PathsBranch),
+    },
+    Spec {
+        name: "paths unmark",
+        arg: Arg::None,
+        help: "in PATHS, drop the current mark",
+        group: Group::Breakpoints,
+        parse: simple!(Action::PathsUnmark),
+    },
+    Spec {
+        name: "paths next",
+        arg: Arg::None,
+        help: "in PATHS, make the next mark current",
+        group: Group::Breakpoints,
+        parse: simple!(Action::PathsNext),
+    },
+    Spec {
+        name: "paths prev",
+        arg: Arg::None,
+        help: "in PATHS, make the previous mark current",
+        group: Group::Breakpoints,
+        parse: simple!(Action::PathsPrev),
+    },
+    Spec {
+        name: "paths take",
+        arg: Arg::None,
+        help: "in PATHS, make each mark a breakpoint set on the lines of its stages, the first one active",
+        group: Group::Breakpoints,
+        parse: simple!(Action::PathsTake),
     },
     Spec {
         name: "watch add",

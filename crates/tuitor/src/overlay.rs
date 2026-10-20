@@ -28,8 +28,8 @@ pub enum Overlay {
     Install,
     /// The search being typed; it shows on the status line, over SOURCE.
     Search(Prompt),
-    /// The call paths to a line; dropped, it stops asking.
-    Paths(Paths),
+    /// The call trees through a line; dropped, it stops asking.
+    Paths(Box<Paths>),
     /// The breakpoint sets, to make one active.
     Sets(SetPick),
 }
