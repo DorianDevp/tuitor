@@ -325,8 +325,11 @@ script's top level, or a function no code calls, which a framework, a container 
 does. PATHS lists each chain, entry point first, with the lines on it worth a breakpoint: the
 entry of each function, its call into the next one, before that call the last write of each
 variable and the last call into the project's other functions (three at most), and the line
-asked about. `space` marks paths, `enter` puts breakpoints on the lines of those marked; a
-line several paths share gets one.
+asked about. `enter` makes each path marked a breakpoint set of its own, in the colour its
+mark has, and the first of them the active set: a line several paths share is one breakpoint
+in each of their sets, and COMPARE lines up two paths at the lines they share. As many paths
+are marked as there are sets for, a set with no breakpoint or a colour no set has; `space`
+marks others and unmarks.
 
 Calls no server can see, such as a container's, an event's or one through an interface, come
 from the stacks of the runs FLOW remembers, and show as `⇢`. tuitor runs intelephense (PHP),

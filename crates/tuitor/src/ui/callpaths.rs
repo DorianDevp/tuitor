@@ -61,10 +61,11 @@ pub fn draw(p: &mut Painter<'_>, app: &App, paths: &Paths, screen: Rect) {
                 detail(p, app, paths, path, area);
             }
             let marked = paths.marked.iter().filter(|m| **m).count();
-            let enter = match marked {
-                0 => "mark a path first".to_owned(),
-                1 => "add the breakpoints of 1 path".to_owned(),
-                n => format!("add the breakpoints of {n} paths"),
+            let enter = match (marked, paths.sets.len()) {
+                (_, 0) => "no set colour is free: D in BREAKPOINTS deletes a set".to_owned(),
+                (0, _) => "mark a path first".to_owned(),
+                (1, _) => "a breakpoint set for the path marked".to_owned(),
+                (n, free) => format!("a breakpoint set for each of the {n} paths marked ({free} colours free)"),
             };
             footer(p, inner, &[("⏎", &enter), ("space", "mark"), ("↑/↓", "select"), ("esc", "close")]);
         }
@@ -104,8 +105,11 @@ fn list(p: &mut Painter<'_>, paths: &Paths, area: Rect) {
             p.band(area.x, y, area.width, SEL2);
             p.text(area.x + 1, y, "›", bold(AMBER), area.right());
         }
-        let marked = paths.marked.get(i).copied().unwrap_or(false);
-        p.text(area.x + 3, y, if marked { "■" } else { "□" }, fg(if marked { AMBER } else { FAINT }), area.right());
+        // A path marked in the colour of the set it is to be.
+        match paths.set_of(i) {
+            Some(set) => p.text(area.x + 3, y, "■", fg(set_color(set, true)), area.right()),
+            None => p.text(area.x + 3, y, "□", fg(FAINT), area.right()),
+        };
         p.text(area.x + 5, y, &format!("{:>2}", i + 1), fg(FAINT), area.right());
         p.text(area.x + 8, y, root(path.root), fg(DIM), area.right());
         let lines = format!("{} lines", path.stops.len());

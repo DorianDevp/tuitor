@@ -9,6 +9,7 @@ use std::time::Duration;
 use crossterm::event::KeyEvent;
 use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
+use tuitor_code::CallPath;
 use tuitor_core::breakpoints::{Breakpoint, SetId, Toggle};
 use tuitor_core::compose;
 use tuitor_core::config::{Adapters, LaunchConfig, home_relative};
@@ -34,7 +35,7 @@ use crate::overlay::{Finder, Overlay, Palette};
 use crate::picker::Picker;
 use crate::places;
 use crate::search::{self, Prompt, Search};
-use crate::sets::Membership;
+use crate::sets::{self, Membership};
 use crate::sources::Sources;
 use crate::tab::{Tab, TabId, TabUi, Tabs, forward};
 
@@ -434,7 +435,10 @@ impl App {
                 } else if key.is("down") || key.is("j") || key.is("ctrl-n") {
                     paths.select(1);
                 } else if key.is("space") {
-                    paths.toggle();
+                    if let Err(message) = paths.toggle() {
+                        let command = Some("/paths".into());
+                        self.ui.status = Some(Status { key: None, command, message, level: Level::Warn });
+                    }
                 } else if key.is("enter") {
                     self.take_paths();
                 } else if key.is("q") {
@@ -877,16 +881,17 @@ impl App {
         let line = self.tab().ui.source.cursor.max(1);
         let place = format!("{}:{line}", path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default());
         let observed = self.tab().flows.observed();
+        let sets = callpaths::free_sets(&self.tab().engine);
         let tab = self.tabs.active_id();
         let query = self.tab_mut().code.paths(path, line, observed)?;
-        self.ui.overlay = Some(Overlay::Paths(Paths::new(tab, place, query)));
+        self.ui.overlay = Some(Overlay::Paths(Paths::new(tab, place, query, sets)));
         Ok(String::new())
     }
 
-    /// `enter` in PATHS: breakpoints on the lines of the marked paths, in the tab asked about.
+    /// `enter` in PATHS: a breakpoint set for each path marked, in the tab asked about.
     fn take_paths(&mut self) {
         let Some(Overlay::Paths(paths)) = &self.ui.overlay else { return };
-        let chosen: Vec<_> = paths.chosen().into_iter().cloned().collect();
+        let chosen: Vec<(CallPath, SetId)> = paths.chosen().into_iter().map(|(p, set)| (p.clone(), set)).collect();
         let tab = paths.tab;
         if chosen.is_empty() {
             return;
@@ -894,20 +899,25 @@ impl App {
         self.ui.overlay = None;
         let outcome = match self.tabs.get_mut(tab) {
             Some(tab) => {
-                let taken = callpaths::take(&mut tab.engine, &chosen.iter().collect::<Vec<_>>());
-                let s = |n: usize| if n == 1 { "" } else { "s" };
-                let (added, paths) = (taken.added, taken.paths.len());
-                let mut message = format!("{added} breakpoint{} along {paths} path{}", s(added), s(paths));
-                if taken.existing > 0 {
-                    message.push_str(&format!("; {} line{} had one already", taken.existing, s(taken.existing)));
-                }
-                Ok(message)
+                let chosen: Vec<(&CallPath, SetId)> = chosen.iter().map(|(path, set)| (path, *set)).collect();
+                callpaths::take(&mut tab.engine, &chosen).map_err(|e| format!("{e:#}")).map(|taken| {
+                    let s = |n: usize| if n == 1 { "" } else { "s" };
+                    let (added, existing) = (taken.added, taken.existing);
+                    let had = if existing == 0 { String::new() } else { format!(", {existing} there already") };
+                    format!(
+                        "{} for the path{}, {added} breakpoint{} new{had} · {}",
+                        sets::names(&taken.sets),
+                        s(taken.sets.len()),
+                        s(added),
+                        sets::roles(&tab.engine)
+                    )
+                })
             }
-            None => Err("that tab is closed".into()),
+            None => Err("that tab is closed".to_owned()),
         };
         let (message, level) = match outcome {
             Ok(message) => (message, Level::Info),
-            Err(Refusal { level, message }) => (message, level),
+            Err(message) => (message, Level::Error),
         };
         self.ui.status = Some(Status { key: None, command: Some("/paths".into()), message, level });
     }
