@@ -17,6 +17,7 @@ use tuitor_core::{Engine, EngineMsg, Level, Step, persist};
 
 use crate::clipboard;
 use crate::command::{self, Action, Arg, BpScope, Location, View};
+use crate::editor::{Editor, Settings};
 use crate::keymap::{self, Key, Keymap, Lookup};
 use crate::model::{BpRow, ConfigRow, Shown, StackRow};
 use crate::overlay::{Finder, Overlay, Palette};
@@ -97,6 +98,9 @@ impl Ui {
 pub struct App {
     pub tabs: Tabs<Tab>,
     pub keymap: Keymap,
+    pub settings: Settings,
+    /// The editor `edit` asked for, for the loop to run: it owns the terminal.
+    pub editor: Option<Editor>,
     pub ui: Ui,
     pub sources: RefCell<Sources>,
     pub adapters: Adapters,
@@ -139,12 +143,20 @@ const NO_PROJECT: &str = "no project in this tab; /tab open opens one";
 
 impl App {
     /// An app with one empty tab; [`App::open`] puts projects in tabs.
-    pub fn new(keymap: Keymap, adapters: Adapters, store: Store, inbox: UnboundedSender<(TabId, EngineMsg)>) -> App {
+    pub fn new(
+        keymap: Keymap,
+        settings: Settings,
+        adapters: Adapters,
+        store: Store,
+        inbox: UnboundedSender<(TabId, EngineMsg)>,
+    ) -> App {
         let recent_projects =
             persist::recent_file().and_then(|file| persist::load_recent(&file).ok()).unwrap_or_default();
         App {
             tabs: Tabs::new(Tab::empty(&adapters)),
             keymap,
+            settings,
+            editor: None,
             ui: Ui {
                 overlay: None,
                 status: None,
@@ -431,6 +443,15 @@ impl App {
         }
     }
 
+    /// Shows how opening the editor went, once it is known.
+    pub fn edited(&mut self, result: Result<String, String>) {
+        let (message, level) = match result {
+            Ok(message) => (message, Level::Info),
+            Err(message) => (message, Level::Error),
+        };
+        self.ui.status = Some(Status { key: None, command: Some("/edit".into()), message, level });
+    }
+
     /// Shows an error that did not come from a command (startup, configuration).
     pub fn execute_error(&mut self, message: &str) {
         self.ui.status = Some(Status { key: None, command: None, message: message.to_owned(), level: Level::Error });
@@ -586,6 +607,7 @@ impl App {
             Action::Left => self.horizontal(-1),
             Action::Right => self.horizontal(1),
             Action::Open => self.open_selection(),
+            Action::Edit => self.edit(),
             Action::Follow => {
                 self.tab_mut().jump_to_execution();
                 Ok("following execution".into())
@@ -1092,6 +1114,30 @@ impl App {
             },
             _ => Ok(String::new()),
         }
+    }
+
+    /// `edit`: the selected breakpoint, or the SOURCE line, for the loop to open in the editor.
+    fn edit(&mut self) -> Outcome {
+        let (path, line) = match self.selected_bp() {
+            Some((tab, id)) => {
+                let bp = self.tabs.get(tab).and_then(|t| t.engine.breakpoints().get(id)).ok_or("gone")?;
+                (bp.path.clone(), bp.line)
+            }
+            None => match self.tab().shown_source() {
+                Some(Shown::File(path)) => (path, self.tab().ui.source.cursor.max(1)),
+                Some(Shown::Adapter { name, .. }) => {
+                    return Err(Refusal::warn(format!("{name} is the adapter's own source, with no file to edit")));
+                }
+                None => return Err("no file in SOURCE".into()),
+            },
+        };
+        if !path.is_file() {
+            return Err(format!("not on this machine: {}", path.display()).into());
+        }
+        let editor = Editor::new(&self.settings, |name| std::env::var(name).ok(), &path, line)?;
+        let message = format!("opening {} in {}", editor.place, editor.name());
+        self.editor = Some(editor);
+        Ok(message)
     }
 
     fn open_choice(&mut self, choice: crate::overlay::Choice, toggle: bool) {

@@ -199,6 +199,7 @@ Every key runs a command; `/` opens the command line with the same commands and
 | `j` `k` `h` `l`, arrows | move, collapse, expand | | `q` / `esc` | back out (zoom → history → browsing) |
 | `<` `>` | previous / next tab (`g T` `g t`) | | `O` / `T` | open a project / in a new tab |
 | `g s` `g S` | next / previous session of the tab | | `ctrl-w` | close the tab |
+| `E` | open the SOURCE line or the selected breakpoint in your editor | | | |
 
 In BREAKPOINTS: `a` session/all, `e` condition, `l` logpoint, `space` on/off, `d` delete.
 In CONFIG: `enter` start or edit, `a` add, `m` map a path, `u` unset a field, `d` delete.
@@ -218,6 +219,28 @@ c = ""
 [pane.locals]
 enter = "open"
 ```
+
+### Your editor
+
+`E` (`/edit`) opens the line under the SOURCE cursor, or in BREAKPOINTS the
+selected breakpoint, in your editor:
+
+- In a Neovim terminal (`$NVIM` is set), in that Neovim, and tuitor stays on
+  screen: in a window that shows the file already, else in the one used before
+  tuitor's, else in a split beside tuitor's.
+- Otherwise in `$VISUAL` or `$EDITOR`, with `+line file`, in tuitor's terminal,
+  which tuitor gives it until it exits.
+
+Any other editor is a command in `~/.config/tuitor/config.toml`, split at
+spaces, with `{file}` and `{line}` replaced in each word:
+
+```toml
+editor = "code --goto {file}:{line}"
+editor_terminal = false     # it has a window of its own: tuitor stays on screen
+```
+
+`editor_terminal` is `true` by default, for an editor that runs in the
+terminal, such as `hx {file}:{line}`.
 
 ## Adapters
 
@@ -417,4 +440,3 @@ TUITOR_DLV="$(go env GOPATH)/bin/dlv" cargo test -p tuitor-core --test go -- --i
 
 - FLOW (file waterfall from the first breakpoint) from the mockups
 - `runInTerminal`: programs that need a terminal of their own (`"console": "integratedTerminal"`)
-- Opening the current location in Neovim

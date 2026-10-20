@@ -1,6 +1,7 @@
 mod app;
 mod clipboard;
 mod command;
+mod editor;
 mod keymap;
 mod model;
 mod overlay;
@@ -25,6 +26,7 @@ use tuitor_core::project::{Project, Source};
 use tuitor_core::store::Store;
 
 use crate::app::App;
+use crate::editor::Settings;
 use crate::keymap::Keymap;
 use crate::signals::Signals;
 
@@ -89,6 +91,7 @@ fn main() -> Result<ExitCode> {
 
     let adapters = Adapters::load(config_dir.as_ref().map(|d| d.join("adapters.toml")).as_deref())?;
     let keymap = Keymap::load(config_dir.as_ref().map(|d| d.join("keys.toml")).as_deref())?;
+    let settings = Settings::load(config_dir.as_ref().map(|d| d.join("config.toml")).as_deref())?;
     let store = Store::new(Store::default_path().context("no config directory for tuitor's configurations")?);
     let workspace = directory(cli.workspace.as_deref().unwrap_or(Path::new(".")))?;
     let first = Project::open(&workspace, &store, cli.launch_json.as_deref());
@@ -119,7 +122,7 @@ fn main() -> Result<ExitCode> {
         // Before anything is started that a signal would leave behind.
         let signals = Signals::new().context("listening for signals")?;
         let (inbox, rx) = mpsc::unbounded_channel();
-        let mut app = App::new(keymap, adapters, store, inbox);
+        let mut app = App::new(keymap, settings, adapters, store, inbox);
         let mut projects: Vec<Project> = open_first.then_some(first).into_iter().collect();
         for dir in others {
             if !projects.iter().any(|p| p.dir == dir) {

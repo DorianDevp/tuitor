@@ -101,6 +101,7 @@ pub enum Action {
     Left,
     Right,
     Open,
+    Edit,
     Follow,
     Vendor,
     Find(Option<String>),
@@ -432,6 +433,13 @@ pub static COMMANDS: &[Spec] = &[
         help: "expand, jump to or open the selection",
         group: Group::Navigate,
         parse: simple!(Action::Open),
+    },
+    Spec {
+        name: "edit",
+        arg: Arg::None,
+        help: "open the SOURCE line, or the selected breakpoint, in your editor",
+        group: Group::Navigate,
+        parse: simple!(Action::Edit),
     },
     Spec {
         name: "find",
