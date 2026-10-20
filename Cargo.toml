@@ -19,6 +19,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 clap = { version = "4", features = ["derive"] }
 crossterm = { version = "0.29", features = ["event-stream"] }
 dirs = "7"
+# Xdebug traces, which Xdebug gzips when it can (xdebug.use_compression).
+flate2 = "1"
 futures = "0.3"
 ignore = "0.4"
 nucleo-matcher = "0.3"
