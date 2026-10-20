@@ -3,7 +3,8 @@
 # .vscode/launch.json, which stops on the first line); once it does, PHP runs orders.php
 # with Xdebug on and its output goes to run.log. Arguments go to tuitor
 # (./run.sh --script demo.tsc). PHP=/path/to/php picks a php with Xdebug;
-# TUITOR=/path/to/tuitor uses that binary instead of building tuitor from this repository.
+# TUITOR=/path/to/tuitor uses that binary instead of building tuitor from this repository;
+# TRACE=1 has Xdebug write a function trace of the run too, for FLOW.
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -120,7 +121,16 @@ fi
 
 # 4. Debug. PHP connects to tuitor, so a helper starts it once tuitor listens. ss sees that
 # without connecting: vscode-php-debug would take a test connection for Xdebug's.
-again="XDEBUG_MODE=debug XDEBUG_SESSION=1 XDEBUG_CONFIG=client_port=$port $php $here/orders.php"
+# With TRACE=1 Xdebug also writes the run's function trace, in the format tuitor reads, to
+# traces/, where FLOW looks ("xdebugTraceDir" in .vscode/launch.json).
+mode=debug
+php_args=()
+if [[ ${TRACE:-} == 1 ]]; then
+    mode=debug,trace
+    mkdir -p "$here/traces"
+    php_args=(-dxdebug.trace_format=1 -dxdebug.trace_output_name=trace.%u.%s "-dxdebug.output_dir=$here/traces")
+fi
+again="XDEBUG_MODE=$mode XDEBUG_SESSION=1 XDEBUG_TRIGGER=1 XDEBUG_CONFIG=client_port=$port $php ${php_args[*]:+${php_args[*]} }$here/orders.php"
 step "starting tuitor on configuration \"Listen for Xdebug\" (Q quits)"
 echo "    PHP runs once tuitor listens on port $port; its output goes to $log."
 echo "    To run PHP again while tuitor listens, in another terminal: $again"
@@ -129,8 +139,9 @@ echo "    To run PHP again while tuitor listens, in another terminal: $again"
     echo "Waiting for tuitor to listen on port $port."
     until [[ -n $(ss -Hltn "sport = :$port") ]]; do sleep 0.2; done
     echo "Running PHP."
-    export XDEBUG_MODE=debug XDEBUG_SESSION=1 XDEBUG_CONFIG="client_port=$port"
-    exec "$php" "$here/orders.php"
+    # XDEBUG_SESSION starts the debugger, XDEBUG_TRIGGER the trace.
+    export XDEBUG_MODE=$mode XDEBUG_SESSION=1 XDEBUG_TRIGGER=1 XDEBUG_CONFIG="client_port=$port"
+    exec "$php" "${php_args[@]}" "$here/orders.php"
 ) >"$log" 2>&1 &
 helper_pid=$!
 # tuitor runs in the background too, so that a signal to this script reaches the trap at

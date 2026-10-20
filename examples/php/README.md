@@ -61,3 +61,13 @@ container's `/app` back to this directory. Step 1 starts the other configuration
 ```sh
 docker compose run --rm php
 ```
+
+## Traces for FLOW
+
+`TRACE=1 ./run.sh` has Xdebug also write a function trace of the run, in the
+format tuitor reads, to `traces/`, which both configurations name as
+`xdebugTraceDir` (the Docker one as `/app/traces`, which `pathMappings` maps
+back here). Trace one run; in the next one, traced or not, FLOW (`g f`) times
+`orders.php` from the earlier trace and marks where the breakpoint on line 68
+comes round again. In the container, after `mkdir -p traces` (Xdebug makes no
+directory): `XDEBUG_MODE=debug,trace docker compose run --rm php`.

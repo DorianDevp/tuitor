@@ -7,7 +7,10 @@
       "request": "launch",
       "port": 9003,
       // Stop on the first line, so there is time to set breakpoints on the first run.
-      "stopOnEntry": true
+      "stopOnEntry": true,
+      // Where FLOW reads Xdebug function traces (TRACE=1 ./run.sh writes them); tuitor's
+      // own field, which the adapter ignores.
+      "xdebugTraceDir": "${workspaceFolder}/traces"
     },
     {
       // For compose.yaml. Only here: a mapping also rewrites local breakpoints, so PHP run
@@ -17,7 +20,9 @@
       "request": "launch",
       "port": 9003,
       "pathMappings": { "/app": "${workspaceFolder}" },
-      "stopOnEntry": true
+      "stopOnEntry": true,
+      // As PHP in the container sees it; pathMappings make it traces/ here.
+      "xdebugTraceDir": "/app/traces"
     }
   ]
 }
