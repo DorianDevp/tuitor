@@ -4,6 +4,7 @@
 use ratatui::layout::Rect;
 use tuitor_core::snapshot::Snapshot;
 
+use super::breakpoints::stop_marks;
 use super::paint::{Painter, Panel, Seg, seg, truncate};
 use super::theme::*;
 use super::watch::number;
@@ -289,9 +290,9 @@ pub fn timeline(p: &mut Painter<'_>, tab: &Tab, area: Rect, focus: bool) {
     }
     p.text(inner.x + 2, inner.y, "stops", fg(FAINT), x0);
     for snapshot in history {
-        let (glyph, color) = match (snapshot.set, snapshot.silent) {
-            (Some(set), false) => ("●", set_color(set, true)),
-            (Some(set), true) => ("↷", set_color(set, true)),
+        let (glyph, color) = match (snapshot.sets.first(), snapshot.silent) {
+            (Some(set), false) => ("●", set_color(*set, true)),
+            (Some(set), true) => ("↷", set_color(*set, true)),
             (None, _) => ("·", FAINT),
         };
         p.text(column(snapshot.number), inner.y, glyph, fg(color), inner.right());
@@ -304,8 +305,8 @@ pub fn timeline(p: &mut Painter<'_>, tab: &Tab, area: Rect, focus: bool) {
         }
         p.text(inner.x + 2, y, &track.name, fg(if selected { WHITE } else { DIM }), x0 - 1);
         for change in &track.changes {
-            let set = history.get(change.number as usize - 1).and_then(|s| s.set);
-            let color = set.map_or(DIM, |set| set_color(set, true));
+            let set = history.get(change.number as usize - 1).and_then(|s| s.sets.first());
+            let color = set.map_or(DIM, |set| set_color(*set, true));
             let style = if Some(change.number) == viewed { bold(color) } else { fg(color) };
             p.text(column(change.number), y, "◆", style, inner.right());
         }
@@ -323,9 +324,8 @@ fn change_line(snapshot: &Snapshot, track: &Track) -> Vec<Seg<'static>> {
         seg(format!("#{} ", snapshot.number), bold(WHITE)),
         seg(snapshot.time.format("%H:%M:%S%.3f  ").to_string(), fg(FAINT)),
     ];
-    if let Some(set) = snapshot.set {
-        segs.push(seg(if snapshot.silent { "↷ " } else { "● " }, fg(set_color(set, true))));
-    }
+    segs.extend(stop_marks(&snapshot.sets, if snapshot.silent { "↷" } else { "●" }));
+    segs.push(seg(" ", fg(FAINT)));
     segs.push(seg(snapshot.top().map(|f| f.location()).unwrap_or_default(), fg(FG)));
     segs.push(seg("   ", fg(FAINT)));
     match track.at(snapshot.number) {
@@ -343,14 +343,11 @@ fn change_line(snapshot: &Snapshot, track: &Track) -> Vec<Seg<'static>> {
 /// Why the program stopped: a breakpoint by its set's colour, `●` where it waited and `↷`
 /// where it went on by itself, or the adapter's reason.
 fn reason(snapshot: &Snapshot) -> Vec<Seg<'static>> {
-    match (snapshot.hit_breakpoints.first(), snapshot.set) {
-        (Some(id), Some(set)) => {
-            let (glyph, text) = if snapshot.silent { ("↷", fg(FAINT)) } else { ("●", fg(DIM)) };
-            vec![seg(glyph, bold(set_color(set, true))), seg(format!(" bp #{id}"), text)]
-        }
-        (Some(id), None) => vec![seg(format!("bp #{id}"), fg(DIM))],
-        (None, _) => vec![seg(snapshot.reason.clone(), fg(FAINT))],
-    }
+    let Some(id) = snapshot.hit_breakpoints.first() else { return vec![seg(snapshot.reason.clone(), fg(FAINT))] };
+    let (glyph, text) = if snapshot.silent { ("↷", fg(FAINT)) } else { ("●", fg(DIM)) };
+    let mut segs = stop_marks(&snapshot.sets, glyph);
+    segs.push(seg(format!(" bp #{id}"), text));
+    segs
 }
 
 fn format_number(v: f64) -> String {

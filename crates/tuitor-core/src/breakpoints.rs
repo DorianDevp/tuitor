@@ -1,15 +1,16 @@
 //! Breakpoints live in the engine, not in a session: they survive restarts and are
 //! sent to every session whose adapter handles the file's extension.
 //!
-//! Each breakpoint belongs to a set, and one set is active. Every enabled breakpoint goes
-//! to the adapter whatever its set: a stop at the active set's breakpoints waits for the
-//! user, one at another set's is read and goes on by itself, so switching sets needs no
-//! word to the adapter and works while the program runs.
+//! Each breakpoint is in one set or more, and one set is active. Every enabled breakpoint
+//! goes to the adapter whatever its sets: a stop at a breakpoint of the active set waits for
+//! the user, one at a breakpoint only of other sets is read and goes on by itself, so
+//! switching sets needs no word to the adapter and works while the program runs. Sets share
+//! breakpoints: two paths through a program into the same service share its breakpoints.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use tuitor_dap::types::{self as dap, SourceBreakpoint};
 
@@ -39,9 +40,10 @@ pub struct Breakpoint {
     pub hit_condition: Option<String>,
     #[serde(default = "enabled_default")]
     pub enabled: bool,
-    /// Breakpoints saved before there were sets are in the first.
+    /// The sets it is in, one at least, in the order it joined them. Breakpoints saved
+    /// before there were sets are in the first set.
     #[serde(default)]
-    pub set: SetId,
+    pub sets: Vec<SetId>,
     #[serde(skip)]
     pub hits: u32,
     #[serde(skip)]
@@ -61,6 +63,16 @@ pub struct Binding {
 }
 
 impl Breakpoint {
+    pub fn in_set(&self, set: SetId) -> bool {
+        self.sets.contains(&set)
+    }
+
+    /// The set it is shown in: the active one when it is in it, and so stops the program,
+    /// else the first it joined.
+    pub fn shown_set(&self, active: SetId) -> SetId {
+        if self.in_set(active) { active } else { self.sets.first().copied().unwrap_or(active) }
+    }
+
     pub fn is_logpoint(&self) -> bool {
         self.log_message.is_some()
     }
@@ -100,7 +112,7 @@ impl Default for Breakpoints {
 
 impl Breakpoints {
     /// Breakpoints and sets as saved. Saved before there were sets, they are all in one, the
-    /// first colour's; a breakpoint whose set is gone from the file goes to the first set.
+    /// first colour's; a breakpoint left in no set that is in the file goes to the first set.
     pub fn from_saved(mut items: Vec<Breakpoint>, saved_sets: &[SetId], active: Option<SetId>) -> Self {
         let mut sets: Vec<SetId> = Vec::new();
         for set in saved_sets.iter().copied().filter(|s| *s < SET_COLORS) {
@@ -112,8 +124,14 @@ impl Breakpoints {
         if sets.is_empty() {
             sets.push(first);
         }
-        for bp in items.iter_mut().filter(|b| !sets.contains(&b.set)) {
-            bp.set = first;
+        for bp in &mut items {
+            let mut kept: Vec<SetId> = Vec::new();
+            for set in bp.sets.iter().copied().filter(|s| sets.contains(s)) {
+                if !kept.contains(&set) {
+                    kept.push(set);
+                }
+            }
+            bp.sets = if kept.is_empty() { vec![first] } else { kept };
         }
         items.sort_by(|a, b| (&a.path, a.line).cmp(&(&b.path, b.line)));
         let next_id = items.iter().map(|b| b.id).max().unwrap_or(0);
@@ -164,7 +182,12 @@ impl Breakpoints {
         }
     }
 
+    /// A breakpoint in the active set.
     pub fn add(&mut self, path: PathBuf, line: u32) -> BreakpointId {
+        self.add_in(path, line, self.active)
+    }
+
+    pub fn add_in(&mut self, path: PathBuf, line: u32, set: SetId) -> BreakpointId {
         self.next_id += 1;
         let bp = Breakpoint {
             id: self.next_id,
@@ -174,7 +197,7 @@ impl Breakpoints {
             log_message: None,
             hit_condition: None,
             enabled: true,
-            set: self.active,
+            sets: vec![set],
             hits: 0,
             bindings: HashMap::new(),
         };
@@ -299,22 +322,40 @@ impl Breakpoints {
         Ok(set)
     }
 
-    pub fn move_to(&mut self, id: BreakpointId, set: SetId) -> Result<()> {
+    /// Puts breakpoint `id` in `set` too; false when it was in it already.
+    pub fn join(&mut self, id: BreakpointId, set: SetId) -> Result<bool> {
         if !self.sets.contains(&set) {
             bail!("there is no such set");
         }
-        let bp = self.items.iter_mut().find(|b| b.id == id).ok_or_else(|| anyhow::anyhow!("no breakpoint #{id}"))?;
-        bp.set = set;
+        let bp = self.items.iter_mut().find(|b| b.id == id).ok_or_else(|| anyhow!("no breakpoint #{id}"))?;
+        if bp.in_set(set) {
+            return Ok(false);
+        }
+        bp.sets.push(set);
+        Ok(true)
+    }
+
+    /// Takes breakpoint `id` out of `set`. It stays in another: a breakpoint in no set would
+    /// neither stop nor be any set's.
+    pub fn leave(&mut self, id: BreakpointId, set: SetId) -> Result<()> {
+        let bp = self.items.iter_mut().find(|b| b.id == id).ok_or_else(|| anyhow!("no breakpoint #{id}"))?;
+        if !bp.in_set(set) {
+            bail!("#{id} is not in that set");
+        }
+        if bp.sets.len() == 1 {
+            bail!("#{id} is in no other set; d deletes it");
+        }
+        bp.sets.retain(|s| *s != set);
         Ok(())
     }
 
-    pub fn in_set(&self, set: SetId) -> impl Iterator<Item = &Breakpoint> {
-        self.items.iter().filter(move |b| b.set == set)
+    pub fn members(&self, set: SetId) -> impl Iterator<Item = &Breakpoint> {
+        self.items.iter().filter(move |b| b.in_set(set))
     }
 
-    /// Deletes `set`. Its breakpoints go to `to`, or with it when `to` is `None`; those are
-    /// returned. The last set cannot go. When the active set goes, `to` or the first set
-    /// left becomes active.
+    /// Deletes `set`. Its breakpoints join `to`, if given; those then in no set go with it
+    /// and are returned. The last set cannot go. When the active set goes, `to` or the first
+    /// set left becomes active.
     pub fn delete_set(&mut self, set: SetId, to: Option<SetId>) -> Result<Vec<Breakpoint>> {
         if !self.sets.contains(&set) {
             bail!("there is no such set");
@@ -327,41 +368,46 @@ impl Breakpoints {
         {
             bail!("its breakpoints can go only to another set there is");
         }
-        let removed = match to {
-            Some(to) => {
-                for bp in self.items.iter_mut().filter(|b| b.set == set) {
-                    bp.set = to;
-                }
-                Vec::new()
+        for bp in self.items.iter_mut().filter(|b| b.in_set(set)) {
+            bp.sets.retain(|s| *s != set);
+            if let Some(to) = to.filter(|to| !bp.sets.contains(to)) {
+                bp.sets.push(to);
             }
-            None => {
-                let (gone, kept) = std::mem::take(&mut self.items).into_iter().partition(|b| b.set == set);
-                self.items = kept;
-                gone
-            }
-        };
+        }
+        let (gone, kept) = std::mem::take(&mut self.items).into_iter().partition(|b| b.sets.is_empty());
+        self.items = kept;
         self.sets.retain(|s| *s != set);
         if self.active == set {
             self.active = to.unwrap_or(self.sets[0]);
         }
-        Ok(removed)
+        Ok(gone)
     }
 
-    /// Whether a stop at breakpoints `hits` goes on by itself: they are all of sets other
-    /// than the active one. A stop at none, or at one that is gone, waits.
+    /// Whether a stop at breakpoints `hits` goes on by itself: none of them is in the active
+    /// set. A stop at none, or at one that is gone, waits.
     pub fn passes(&self, hits: &[BreakpointId]) -> bool {
-        !hits.is_empty() && hits.iter().all(|id| self.get(*id).is_some_and(|b| b.set != self.active))
+        !hits.is_empty() && hits.iter().all(|id| self.get(*id).is_some_and(|b| !b.in_set(self.active)))
     }
 
-    /// Whether any enabled breakpoint is of a set other than the active one, so that a stop
-    /// at a breakpoint the adapter does not name may be one to go on from.
+    /// Whether any enabled breakpoint is outside the active set, so that a stop at a
+    /// breakpoint the adapter does not name may be one to go on from.
     pub fn any_passing(&self) -> bool {
-        self.items.iter().any(|b| b.enabled && b.set != self.active)
+        self.items.iter().any(|b| b.enabled && !b.in_set(self.active))
     }
 
-    /// The set of the first of `hits` that is still there.
-    pub fn set_of(&self, hits: &[BreakpointId]) -> Option<SetId> {
-        hits.iter().find_map(|id| self.get(*id)).map(|b| b.set)
+    /// The sets of breakpoints `hits` that are still there, the active one first when it is
+    /// among them: the set a stop is shown in, then the others it is part of.
+    pub fn sets_of(&self, hits: &[BreakpointId]) -> Vec<SetId> {
+        let mut sets: Vec<SetId> = Vec::new();
+        for set in hits.iter().filter_map(|id| self.get(*id)).flat_map(|b| b.sets.iter().copied()) {
+            if !sets.contains(&set) {
+                sets.push(set);
+            }
+        }
+        if let Some(index) = sets.iter().position(|s| *s == self.active) {
+            sets[..=index].rotate_right(1);
+        }
+        sets
     }
 }
 
@@ -436,27 +482,29 @@ mod tests {
                 .expect("old");
         let bps = Breakpoints::from_saved(old, &[], None);
         assert_eq!((bps.sets(), bps.active_set()), (&[0][..], 0));
-        assert!(bps.iter().all(|b| b.set == 0));
+        assert!(bps.iter().all(|b| b.sets == [0]));
 
-        // A set gone from the file, or one out of the palette, takes its breakpoints to the first.
+        // Sets gone from the file, or out of the palette, are left; a breakpoint in none of
+        // the sets there are goes to the first.
         let mut saved = bps.saved().to_vec();
-        saved[1].set = 3;
+        (saved[0].sets, saved[1].sets) = (vec![3, 2, 2], vec![3]);
         let bps = Breakpoints::from_saved(saved, &[2, 2, 9], Some(4));
         assert_eq!((bps.sets(), bps.active_set()), (&[2][..], 2));
-        assert_eq!(bps.iter().map(|b| b.set).collect::<Vec<_>>(), [2, 2]);
+        assert_eq!(bps.iter().map(|b| b.sets.clone()).collect::<Vec<_>>(), [vec![2], vec![2]]);
     }
 
     #[test]
     fn sets_are_saved_with_their_breakpoints() {
         let mut bps = Breakpoints::default();
-        bps.add(PathBuf::from("/a.rs"), 1);
+        let a = bps.add(PathBuf::from("/a.rs"), 1);
         let teal = bps.new_set().expect("set");
         let b = bps.add(PathBuf::from("/a.rs"), 2);
+        bps.join(a, teal).expect("join");
         let text = serde_json::to_string(bps.saved()).expect("save");
         let restored = Breakpoints::from_saved(serde_json::from_str(&text).expect("load"), bps.sets(), Some(teal));
         assert_eq!((restored.sets(), restored.active_set()), (&[0, teal][..], teal));
-        assert_eq!(restored.get(b).map(|b| b.set), Some(teal));
-        assert_eq!(restored.get(1).map(|b| b.set), Some(0));
+        assert_eq!(restored.get(a).map(|b| b.sets.clone()), Some(vec![0, teal]));
+        assert_eq!(restored.get(b).map(|b| b.sets.clone()), Some(vec![teal]));
     }
 
     #[test]
@@ -466,8 +514,10 @@ mod tests {
         let (one, two) = (bps.new_set().expect("set"), bps.new_set().expect("set"));
         assert_eq!((one, two, bps.active_set()), (1, 2, 2));
         let second = bps.add(PathBuf::from("/a.rs"), 2);
-        assert_eq!(bps.get(first).map(|b| b.set), Some(0));
-        assert_eq!(bps.get(second).map(|b| b.set), Some(2));
+        let third = bps.add_in(PathBuf::from("/a.rs"), 3, one);
+        assert_eq!(bps.get(first).map(|b| b.sets.clone()), Some(vec![0]));
+        assert_eq!(bps.get(second).map(|b| b.sets.clone()), Some(vec![2]));
+        assert_eq!(bps.get(third).map(|b| b.sets.clone()), Some(vec![one]));
         // A deleted set's colour is free again; then there is one set per colour, and no more.
         bps.delete_set(one, Some(0)).expect("delete");
         assert_eq!(bps.new_set().expect("set"), 1);
@@ -479,46 +529,72 @@ mod tests {
     }
 
     #[test]
-    fn only_hits_of_other_sets_all_of_them_pass() {
+    fn a_breakpoint_joins_and_leaves_sets_but_stays_in_one() {
+        let mut bps = Breakpoints::default();
+        let id = bps.add(PathBuf::from("/a.rs"), 1);
+        let teal = bps.new_set().expect("set");
+        assert!(bps.join(id, teal).expect("join"));
+        assert!(!bps.join(id, teal).expect("again"), "already in it");
+        assert!(bps.join(id, 4).is_err(), "no such set");
+        assert_eq!(bps.members(teal).map(|b| b.id).collect::<Vec<_>>(), [id]);
+        bps.leave(id, 0).expect("leave");
+        assert!(bps.leave(id, teal).is_err(), "the last set it is in");
+        assert!(bps.leave(id, 0).is_err(), "not in it");
+        assert_eq!(bps.get(id).map(|b| b.sets.clone()), Some(vec![teal]));
+    }
+
+    #[test]
+    fn a_breakpoint_stops_when_it_is_in_the_active_set_and_passes_only_when_it_is_not() {
         let mut bps = Breakpoints::default();
         let rose = bps.add(PathBuf::from("/a.rs"), 1);
         let teal_set = bps.new_set().expect("set");
         let teal = bps.add(PathBuf::from("/a.rs"), 2);
+        let shared = bps.add(PathBuf::from("/a.rs"), 3);
+        bps.join(shared, 0).expect("join");
         bps.activate(0).expect("activate");
         assert!(bps.passes(&[teal]));
         assert!(!bps.passes(&[rose]));
+        assert!(!bps.passes(&[shared]), "in the active set, and in another");
         assert!(!bps.passes(&[teal, rose]), "a hit of the active set stops");
         assert!(!bps.passes(&[]), "a stop at no breakpoint waits");
         assert!(!bps.passes(&[99]), "nor does one at a breakpoint that is gone");
         assert!(bps.any_passing());
-        assert_eq!(bps.set_of(&[99, teal]), Some(teal_set));
+        // The set it is shown in first: the active one when it is in it.
+        assert_eq!(bps.sets_of(&[99, shared]), [0, teal_set]);
+        assert_eq!(bps.sets_of(&[teal]), [teal_set]);
+        assert_eq!(bps.get(shared).map(|b| b.shown_set(0)), Some(0));
 
         // Switching sets turns it around, with nothing sent to the adapter.
         bps.activate(teal_set).expect("activate");
-        assert!(bps.passes(&[rose]) && !bps.passes(&[teal]));
+        assert!(bps.passes(&[rose]) && !bps.passes(&[teal]) && !bps.passes(&[shared]));
+        assert_eq!(bps.sets_of(&[shared]), [teal_set, 0]);
         // A disabled breakpoint, which the adapter does not have, cannot be hit.
         bps.update(rose, |b| b.enabled = false);
         assert!(!bps.any_passing());
     }
 
     #[test]
-    fn a_deleted_set_moves_its_breakpoints_or_takes_them_along() {
+    fn a_deleted_set_takes_along_only_the_breakpoints_in_no_other() {
         let mut bps = Breakpoints::default();
         let teal = bps.new_set().expect("set");
         let a = bps.add(PathBuf::from("/a.rs"), 1);
         let orchid = bps.new_set().expect("set");
         let b = bps.add(PathBuf::from("/b.rs"), 2);
+        let shared = bps.add(PathBuf::from("/c.rs"), 3);
+        bps.join(shared, 0).expect("join");
         assert!(bps.delete_set(teal, Some(teal)).is_err());
         assert!(bps.delete_set(teal, Some(4)).is_err());
 
         assert!(bps.delete_set(teal, Some(orchid)).expect("move").is_empty());
-        assert_eq!(bps.get(a).map(|b| b.set), Some(orchid));
+        assert_eq!(bps.get(a).map(|b| b.sets.clone()), Some(vec![orchid]));
         assert_eq!(bps.sets(), [0, orchid]);
 
-        // The active set going leaves the first one active, with its breakpoints gone.
+        // The active set going leaves the first one active; the breakpoints in no other set
+        // go with it, the shared one stays.
         let gone = bps.delete_set(orchid, None).expect("delete");
         assert_eq!(gone.iter().map(|b| b.id).collect::<Vec<_>>(), [a, b]);
-        assert_eq!((bps.sets(), bps.active_set(), bps.len()), (&[0][..], 0, 0));
+        assert_eq!((bps.sets(), bps.active_set(), bps.len()), (&[0][..], 0, 1));
+        assert_eq!(bps.get(shared).map(|b| b.sets.clone()), Some(vec![0]));
         assert!(bps.delete_set(0, None).is_err(), "the last set stays");
     }
 }

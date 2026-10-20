@@ -20,8 +20,9 @@ pub struct Snapshot {
     pub reason: String,
     pub description: Option<String>,
     pub hit_breakpoints: Vec<BreakpointId>,
-    /// The set of the breakpoint hit, as it was then.
-    pub set: Option<SetId>,
+    /// The sets of the breakpoints hit, as they were then: first the one the stop is shown
+    /// in, which at a stop the program waited at is the set that was active.
+    pub sets: Vec<SetId>,
     /// At a breakpoint of a set other than the active one: read as any stop is, then the
     /// program went on by itself.
     pub silent: bool,
@@ -332,7 +333,7 @@ mod tests {
             reason: "step".into(),
             description: None,
             hit_breakpoints: vec![],
-            set: None,
+            sets: vec![],
             silent: false,
             frames,
             watches: vec![],

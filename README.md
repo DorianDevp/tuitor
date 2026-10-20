@@ -233,52 +233,6 @@ in `~/.local/state/tuitor/`, outside the repository.
 
 ![PROJECT in the Go example: a condition, a hit count and a logpoint, and a configuration of tuitor's own beside launch.json's](assets/screenshots/project.png)
 
-### Breakpoint sets
-
-Every breakpoint is in a set. Sets have no names, only a colour each: rose, teal, orchid,
-sky and gold. One set is active: its breakpoints stop the program. A breakpoint of another
-set records the stop as every stop is recorded, with the stack, the top frame's variables
-read ahead and the watches, and the program goes on by itself. Every enabled breakpoint stays
-with the adapter, so a new active set takes effect at its next hit, also while the program
-runs. A step that ends on a breakpoint of another set stops there as asked.
-
-`N` makes a set and makes it active, so the breakpoints added next go to it. `A` makes the
-next set active, `/set active teal` a given one. `M` moves the breakpoint on the SOURCE line,
-or the one selected in BREAKPOINTS, to the next set (`/set move orchid` to a given one). `D`
-in BREAKPOINTS deletes the selected breakpoint's set, and asks again before its breakpoints
-go with it; `/set delete teal rose` moves them to rose. Sets are kept with the breakpoints
-in `~/.local/state/tuitor/`; breakpoints from before there were sets are in rose.
-
-A breakpoint has its set's colour in SOURCE, BREAKPOINTS, FLOW, OUTLINE, HISTORY and the
-context line: full for the active set, dimmer for the others. The shape is what it does:
-`●` stops, `◐` has a condition or a hit count, `◆` logs, `○` is disabled, `◌` was not
-taken by the adapter, and `◉` is the one the stop on view hit. HISTORY marks the stops the
-program went on from with `↷`.
-
-A breakpoint of another set costs what reading a stop costs. Measured per hit on the C, PHP
-and JavaScript examples: 6 to 14 ms with gdb, 3 ms with Xdebug and vscode-php-debug, and
-about 400 ms with js-debug, which takes 45 to 90 ms for each `variables` request.
-
-### Comparing sets
-
-COMPARE (`g d`) lines up what two sets recorded, each the stops at its breakpoints in one
-run. A stop lines up with the stop at the same breakpoint that is the same hit of it on the
-other path: the first with the first, the second with the second. For those, the values each
-stop read, the watches and the top frame's variables at every level read, are compared: the
-row counts those that differ, appear and disappear, and VALUES below lists them for the hit
-under the cursor. A hit only one path has is listed with what it read. Hits on both keep the
-order of the first path, and the others follow the last of those before them by time, so two
-sets of one run are in the order things happened.
-
-`/compare` alone compares the active set with the other set that recorded last, each in the
-latest run that has its stops, or with one set, its latest run with the run before.
-`/compare teal` compares the active set with teal, `/compare rose teal` two sets, and
-`/compare rose@3 rose@5` one set in FLOW's runs 3 and 5. In COMPARE, `h` and `l` pick the
-breakpoint or a side, `[` and `]` take that side, or on the breakpoint both, from an older or
-newer run, and `enter` opens the breakpoint in CODE or the side's stop in HISTORY. Only the
-runs of the tuitor that is running can be compared: FLOW remembers earlier ones by their
-stacks, without values.
-
 CONFIG lists the project's launch configurations from two places: `.vscode/launch.json`,
 read as VS Code reads it and never written, and tuitor's own, kept outside the repository
 in `~/.config/tuitor/projects.toml` by project path. `enter` starts one, or edits the field
@@ -304,6 +258,63 @@ CONFIG to adjust what a default cannot know:
 | Go | `go.mod` | Delve builds and launches the package |
 | C | `Makefile`, `CMakeLists.txt`, `*.c` | gdb launch of an executable built in the directory |
 | JS/TS | `package.json`, `angular.json`, `tsconfig.json` | `pwa-chrome` on `http://localhost:4200`, in the browser found on `PATH` |
+
+### Breakpoint sets
+
+Every breakpoint is in one set or more. Sets have no names, only a colour each: rose, teal,
+orchid, sky and gold. One set is active, and the breakpoints in it stop the program. A
+breakpoint only in other sets records the stop as every stop is recorded, with the stack, the
+top frame's variables read ahead and the watches, and the program goes on by itself. Sets
+share breakpoints: two ways into one service, a controller and a command, can each have a
+set, both with the service's breakpoints. Every enabled breakpoint stays with the adapter,
+so a new active set takes effect at its next hit, also while the program runs. A step that
+ends on a breakpoint of another set stops there as asked.
+
+`N` makes a set, active from then on, with the breakpoint selected in BREAKPOINTS or on the
+SOURCE line in it, if there is one; `/set new orders.php:61 orders.php:68` makes one with
+those, made where there are none. Breakpoints added with `b` go to the active set. `A` makes
+the next set active, `/set active teal` a given one. `M` puts the breakpoint selected, or on
+the SOURCE line, in the active set, or takes it out; `/set add teal orders.php:68` and
+`/set remove teal` name the set and the breakpoints. A breakpoint stays in one set at least.
+`D` in BREAKPOINTS deletes the set the selected breakpoint is shown in: its breakpoints in no
+other set go with it once asked again, and `/set delete teal rose` puts them in rose. Sets are
+kept with the breakpoints in `~/.local/state/tuitor/`; breakpoints from before there were
+sets are in rose.
+
+A breakpoint has the colour of the active set when it is in it, else of the first set it
+joined, in SOURCE, BREAKPOINTS, FLOW, OUTLINE, HISTORY and the context line: full when it
+stops the program, dimmer when it only records. A `⁺` after it, in another set's colour,
+says it is in more sets, and BREAKPOINTS has a dot for each set it is in. The shape is what
+it does: `●` stops, `◐` has a condition or a hit count, `◆` logs, `○` is disabled, `◌` was
+not taken by the adapter, and `◉` is the one the stop on view hit. HISTORY marks the stops
+the program went on from with `↷`.
+
+A breakpoint of another set costs what reading a stop costs. Measured per hit on the C, PHP
+and JavaScript examples: 6 to 14 ms with gdb, 3 ms with Xdebug and vscode-php-debug, and
+about 400 ms with js-debug, which takes 45 to 90 ms for each `variables` request.
+
+### Comparing sets
+
+COMPARE (`g d`) lines up what two sets recorded, each the stops at its breakpoints in one
+run: set A in one request, set B in another. A stop lines up with the stop at the same
+breakpoint that is the same hit of it on the other path: the first with the first, the
+second with the second. These are hits of breakpoints the sets share, and for them the values
+each stop read, the watches and the top frame's variables at every level read, are compared:
+the row counts those that differ, appear and disappear, and VALUES below lists them for the
+hit under the cursor. A hit only one path has, at a breakpoint of one set or one the other
+path did not reach, is listed with what it read. Hits on both keep the order of the first
+path, and the others follow the last of those before them by time, so two sets of one run
+are in the order things happened.
+
+Each set is compared in its own run: the latest in which it was the active set and stopped
+the program, else the latest that recorded it. `/compare` alone compares the active set with
+the other set whose own run is the latest, or with one set, its latest run with the run
+before. `/compare teal` compares the active set with teal, `/compare rose teal` two sets, and
+`/compare rose@3 rose@5` one set in FLOW's runs 3 and 5. In COMPARE, `h` and `l` pick the
+breakpoint or a side, `[` and `]` take that side, or on the breakpoint both, from an older or
+newer run, and `enter` opens the breakpoint in CODE or the side's stop in HISTORY. Only the
+runs of the tuitor that is running can be compared: FLOW remembers earlier ones by their
+stacks, without values.
 
 ### Commands
 
@@ -345,7 +356,7 @@ named (`tuitor doctor php gdb`), needs is missing.
 | key | action | key | action |
 |---|---|---|---|
 | `c` `n` `s` `o` | continue, step over, in, out | `b` | toggle a breakpoint on the SOURCE line |
-| `N` `A` | new breakpoint set, next set active | `M` | move the breakpoint to the next set |
+| `N` `A` | new breakpoint set, next set active | `M` | breakpoint in or out of the active set |
 | `p` `X` `R` | pause, stop, restart | `f` | find files and breakpoints |
 | `S` | start the configuration selected in CONFIG | `ctrl-f`, in SOURCE `/` | search SOURCE |
 | `[` `]` `}` | older stop, newer, live | `w` `x` | watch, evaluate |

@@ -504,8 +504,9 @@ fn context(p: &mut Painter<'_>, app: &App, area: Rect) {
                     None => snapshot.reason.clone(),
                 };
                 // The breakpoint's set, by its colour, beside the amber of execution.
-                if let Some(set) = snapshot.set {
-                    segs.push(seg("◉ ", bold(set_color(set, true))));
+                segs.extend(breakpoints::stop_marks(&snapshot.sets, "◉"));
+                if !snapshot.sets.is_empty() {
+                    segs.push(seg(" ", fg(FAINT)));
                 }
                 segs.push(seg(reason, bold(AMBER)));
                 if let Some(top) = snapshot.top() {
@@ -644,7 +645,7 @@ fn hints(p: &mut Painter<'_>, app: &App, area: Rect) {
             ("bp condition", "condition"),
             ("bp log", "logpoint"),
             ("bp hits", "hits"),
-            ("set move", "set"),
+            ("set toggle", "in active set"),
             ("bp enable", "on/off"),
             ("bp delete", "delete"),
             ("set delete", "delete set"),

@@ -196,7 +196,7 @@ async fn breakpoints_of_another_set_record_and_go_on() {
     pump(&mut engine, &mut rx, stopped).await;
     assert_eq!(lines(&engine), [(39, true), (39, true), (39, true), (77, false)]);
     let cid = child_of(&engine, parent).expect("child").id;
-    assert!(engine.session(cid).expect("child").history[..3].iter().all(|s| s.set == Some(teal)));
+    assert!(engine.session(cid).expect("child").history[..3].iter().all(|s| s.sets == [teal]));
 
     // The other set now stops at its next hit, the second order's first line...
     engine.activate_set(teal).expect("activate");

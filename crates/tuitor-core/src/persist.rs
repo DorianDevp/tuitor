@@ -142,7 +142,7 @@ mod tests {
         // A file from before there were sets.
         std::fs::write(&file, r#"{"breakpoints":[{"id":1,"path":"/a.rs","line":3}],"watches":[]}"#).expect("old");
         let old = load(&file).expect("old");
-        assert_eq!((old.breakpoints[0].set, old.sets.len(), old.active_set), (0, 0, None));
+        assert_eq!((old.breakpoints[0].sets.len(), old.sets.len(), old.active_set), (0, 0, None));
         std::fs::remove_dir_all(dir).ok();
     }
 

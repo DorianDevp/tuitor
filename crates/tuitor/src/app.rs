@@ -33,6 +33,7 @@ use crate::overlay::{Finder, Overlay, Palette};
 use crate::picker::Picker;
 use crate::places;
 use crate::search::{self, Prompt, Search};
+use crate::sets::Membership;
 use crate::sources::Sources;
 use crate::tab::{Tab, TabId, TabUi, Tabs, forward};
 
@@ -662,12 +663,14 @@ impl App {
                 engine.clear_breakpoints();
                 Ok(format!("deleted {n} breakpoints"))
             }
-            Action::SetNew => self.set_new(),
+            Action::SetNew(places) => self.set_new(places),
             Action::SetNext => self.set_cycle(1),
             Action::SetPrev => self.set_cycle(-1),
             Action::SetActive(Some(name)) => self.set_active(crate::sets::parse_set(&name)?),
             Action::SetActive(None) => self.prompt(spec),
-            Action::SetMove(set) => self.set_move(set),
+            Action::SetToggle(arg) => self.set_membership(Membership::Toggle, arg),
+            Action::SetAdd(arg) => self.set_membership(Membership::Add, arg),
+            Action::SetRemove(arg) => self.set_membership(Membership::Remove, arg),
             Action::SetDelete(arg) => self.set_delete(arg),
             Action::Compare(arg) => self.compare(arg),
             Action::CompareOlder => self.compare_run(-1),
@@ -1808,7 +1811,7 @@ impl App {
         }
     }
 
-    fn resolve_file(&self, file: &str) -> Result<PathBuf, String> {
+    pub(crate) fn resolve_file(&self, file: &str) -> Result<PathBuf, String> {
         let path = Path::new(file);
         let path = if path.is_absolute() { path.to_path_buf() } else { self.tab().engine.workspace().join(path) };
         if path.is_file() { Ok(path) } else { Err(format!("no such file: {}", path.display())) }
@@ -1916,6 +1919,6 @@ impl BpField {
     }
 }
 
-fn canonical(path: &Path) -> PathBuf {
+pub(crate) fn canonical(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }

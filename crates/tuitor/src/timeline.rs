@@ -132,7 +132,7 @@ mod tests {
             reason: "breakpoint".into(),
             description: None,
             hit_breakpoints: vec![],
-            set: None,
+            sets: vec![],
             silent: false,
             frames: vec![frame],
             watches: vec![],

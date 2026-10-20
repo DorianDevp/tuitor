@@ -6,6 +6,7 @@
 use tuitor_core::breakpoints::SetId;
 use tuitor_core::compare::{Entry, Recording, align};
 use tuitor_core::session::SessionId;
+use tuitor_core::snapshot::Snapshot;
 
 use crate::app::{App, Outcome, Pane};
 use crate::command::View;
@@ -45,24 +46,34 @@ pub struct Compared<'a> {
 impl Tab {
     /// The runs that recorded `set`, oldest first.
     pub fn runs_of(&self, set: SetId) -> Vec<RunRef> {
-        let sessions = self.engine.sessions();
-        let recorded = |run: &RunRef| {
-            let history = sessions.iter().find(|s| s.id == run.session).map(|s| &s.history[run.stops.clone()]);
-            history.is_some_and(|stops| stops.iter().any(|s| s.set == Some(set)))
-        };
-        self.flows.in_memory(sessions).into_iter().filter(recorded).collect()
+        let in_memory = self.flows.in_memory(self.engine.sessions());
+        in_memory.into_iter().filter(|run| self.stops_of(run).iter().any(|s| s.sets.contains(&set))).collect()
+    }
+
+    fn stops_of(&self, run: &RunRef) -> &[Snapshot] {
+        self.engine.session(run.session).map_or(&[][..], |s| &s.history[run.stops.clone()])
+    }
+
+    /// The run a set is compared in unless one is named: the latest in which it was the
+    /// active set and stopped the program, else the latest that recorded it. Sets that share
+    /// breakpoints all record wherever those are hit, but each was used in a run of its own:
+    /// one request, one command, made with it active.
+    fn own_run(&self, set: SetId) -> Option<RunRef> {
+        let runs = self.runs_of(set);
+        let stopped = |run: &&RunRef| self.stops_of(run).iter().any(|s| !s.silent && s.sets.first() == Some(&set));
+        runs.iter().rev().find(stopped).or(runs.last()).cloned()
     }
 
     fn path(&self, side: Side) -> Option<Path<'_>> {
-        let runs = self.runs_of(side.set);
         let run = match side.run {
-            Some((session, start)) => runs.into_iter().find(|r| r.session == session && r.stops.start == start)?,
-            None => runs.into_iter().last()?,
+            Some(key) => self.runs_of(side.set).into_iter().find(|r| (r.session, r.stops.start) == key)?,
+            None => self.own_run(side.set)?,
         };
-        let session = self.engine.session(run.session)?;
-        let stops = &session.history[run.stops.clone()];
-        let recording =
-            Recording { stops: stops.iter().filter(|s| s.set == Some(side.set)).collect(), start: stops.first()?.time };
+        let stops = self.stops_of(&run);
+        let recording = Recording {
+            stops: stops.iter().filter(|s| s.sets.contains(&side.set)).collect(),
+            start: stops.first()?.time,
+        };
         Some(Path { set: side.set, run, recording })
     }
 
@@ -71,14 +82,14 @@ impl Tab {
         self.ui.comparison.or_else(|| self.default_comparison())
     }
 
-    /// The active set against the other set that recorded last; with no other, the active
-    /// set against itself in the run before its latest.
+    /// The active set against the other set whose own run is the latest; with no other that
+    /// recorded anything, the active set against itself in the run before its latest.
     fn default_comparison(&self) -> Option<Comparison> {
         let bps = self.engine.breakpoints();
         let active = bps.active_set();
-        let last_run = |set| self.runs_of(set).last().map(|r| self.recorded_at(r));
-        let other = bps.sets().iter().copied().filter(|s| *s != active).max_by_key(|s| last_run(*s));
-        if let Some(other) = other.filter(|s| last_run(*s).is_some()) {
+        let own_run_ended = |set| self.own_run(set).and_then(|run| self.stops_of(&run).last().map(|s| s.time));
+        let other = bps.sets().iter().copied().filter(|s| *s != active).max_by_key(|s| own_run_ended(*s));
+        if let Some(other) = other.filter(|s| own_run_ended(*s).is_some()) {
             return Some(Comparison { a: Side { set: active, run: None }, b: Side { set: other, run: None } });
         }
         let runs = self.runs_of(active);
@@ -87,20 +98,11 @@ impl Tab {
         Some(Comparison { a, b: Side { set: active, run: None } })
     }
 
-    /// When a run's last stop was recorded.
-    fn recorded_at(&self, run: &RunRef) -> Option<chrono::DateTime<chrono::Local>> {
-        let session = self.engine.session(run.session)?;
-        Some(session.history.get(run.stops.end.checked_sub(1)?)?.time)
-    }
-
     /// `side` in the run `delta` runs from its own among those that recorded its set.
     fn shifted(&self, side: Side, delta: isize) -> Side {
         let runs = self.runs_of(side.set);
-        let current = match side.run {
-            Some(key) => runs.iter().position(|r| (r.session, r.stops.start) == key),
-            None => runs.len().checked_sub(1),
-        };
-        let Some(current) = current else { return side };
+        let key = side.run.or_else(|| self.own_run(side.set).map(|r| (r.session, r.stops.start)));
+        let Some(current) = runs.iter().position(|r| Some((r.session, r.stops.start)) == key) else { return side };
         let run = &runs[current.saturating_add_signed(delta).min(runs.len() - 1)];
         Side { run: Some((run.session, run.stops.start)), ..side }
     }

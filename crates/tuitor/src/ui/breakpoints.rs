@@ -76,8 +76,7 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool)
                     p.band(inner.x, y, inner.width, SEL2);
                 }
                 let active = owner_tab.engine.breakpoints().active_set();
-                let (glyph, color) = glyph(bp, active, here);
-                p.text(inner.x + 1, y, glyph, bold(color), inner.right());
+                p.segs(inner.x + 1, y, &marks(bp, active, here), inner.right());
                 let path = if wide {
                     bp.path.strip_prefix(owner_tab.engine.workspace()).unwrap_or(&bp.path).display().to_string()
                 } else {
@@ -102,12 +101,13 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool)
                     vec![seg("disabled", italic(GHOST))]
                 } else if bp.verified() == Some(false) {
                     vec![seg(bp.adapter_message().unwrap_or("not verified").to_owned(), italic(RED_DIM))]
-                } else if bp.set != active {
+                } else if !bp.in_set(active) {
                     vec![seg("records only", italic(FAINT))]
                 } else {
                     vec![]
                 };
-                p.segs(cond_x, y, &detail, hits_x.saturating_sub(1));
+                let sets_x = p.segs_right(hits_x.saturating_sub(1), y, &memberships(bp, owner_tab), cond_x);
+                p.segs(cond_x, y, &detail, sets_x.saturating_sub(1));
                 let hits_text = bp.hits.to_string();
                 p.segs_right(inner.right() - 1, y, &[seg(hits_text, fg(if bp.hits > 0 { FG } else { GHOST }))], hits_x);
             }
@@ -141,10 +141,11 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool)
     }
 }
 
-/// How a breakpoint is drawn. Its colour is its set's, whole while that set is active and
-/// its breakpoints stop the program; its shape is what it does: ● stops, ◐ stops when its
-/// condition or hit count says, ◆ logs, ○ is off, ◌ the adapter did not take it. A hit at
-/// the stop on view is ◉, at full colour whatever the set.
+/// How a breakpoint is drawn. Its colour is that of the set it is shown in (the active one
+/// when it is in it, else the first it joined), whole when it is in the active set and so
+/// stops the program; its shape is what it does: ● stops, ◐ stops when its condition or hit
+/// count says, ◆ logs, ○ is off, ◌ the adapter did not take it. A hit at the stop on view
+/// is ◉, at full colour whatever the set.
 pub fn glyph(bp: &Breakpoint, active: SetId, hit: bool) -> (&'static str, Color) {
     let shape = if !bp.enabled {
         "○"
@@ -159,7 +160,39 @@ pub fn glyph(bp: &Breakpoint, active: SetId, hit: bool) -> (&'static str, Color)
     } else {
         "●"
     };
-    (shape, set_color(bp.set, hit || (bp.enabled && bp.set == active)))
+    (shape, set_color(bp.shown_set(active), hit || (bp.enabled && bp.in_set(active))))
+}
+
+/// [`glyph`], and `⁺` after it, in the colour of another set the breakpoint is in, when it
+/// is in more than the one it is shown in.
+pub fn marks(bp: &Breakpoint, active: SetId, hit: bool) -> Vec<Seg<'static>> {
+    let (shape, color) = glyph(bp, active, hit);
+    let shown = bp.shown_set(active);
+    let other = bp.sets.iter().copied().find(|s| *s != shown);
+    let mut segs = vec![seg(shape, bold(color))];
+    segs.extend(other.map(|set| seg("⁺", fg(set_color(set, false)))));
+    segs
+}
+
+/// `glyph` for a stop, in the colour of the first of the sets its breakpoint was in, the
+/// one it is shown in, with `⁺` in the colour of the next when there are more.
+pub fn stop_marks(sets: &[SetId], glyph: &'static str) -> Vec<Seg<'static>> {
+    let Some((first, rest)) = sets.split_first() else { return Vec::new() };
+    let mut segs = vec![seg(glyph, bold(set_color(*first, true)))];
+    segs.extend(rest.first().map(|set| seg("⁺", fg(set_color(*set, false)))));
+    segs
+}
+
+/// The sets a breakpoint is in, a dot each, once there is more than one set.
+fn memberships(bp: &Breakpoint, tab: &Tab) -> Vec<Seg<'static>> {
+    let bps = tab.engine.breakpoints();
+    if bps.sets().len() < 2 {
+        return Vec::new();
+    }
+    let dots = bps.sets().iter().filter(|s| bp.in_set(**s));
+    let mut segs: Vec<Seg<'static>> = dots.map(|s| seg("●", fg(set_color(*s, *s == bps.active_set())))).collect();
+    segs.push(seg(" ", fg(GHOST)));
+    segs
 }
 
 /// The sets, once there is more than one: the active one named on a band, as the view on

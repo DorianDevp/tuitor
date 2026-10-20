@@ -7,7 +7,7 @@ use tuitor_core::compare::{Delta, Entry, differences, state};
 use tuitor_core::session::Session;
 use tuitor_core::snapshot::Snapshot;
 
-use super::breakpoints::glyph;
+use super::breakpoints::marks;
 use super::paint::{Painter, Panel, Seg, seg, truncate};
 use super::theme::*;
 use crate::app::App;
@@ -73,8 +73,9 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
             }
         }
         let bp = tab.engine.breakpoints().get(entry.breakpoint);
-        let (mark, color) = bp.map_or(("·", GHOST), |bp| glyph(bp, tab.engine.breakpoints().active_set(), false));
-        p.text(inner.x + 1, y, mark, bold(color), x_loc);
+        let mark =
+            bp.map_or_else(|| vec![seg("·", fg(GHOST))], |bp| marks(bp, tab.engine.breakpoints().active_set(), false));
+        p.segs(inner.x + 1, y, &mark, x_loc);
         let location = bp.map_or_else(
             || format!("#{} (deleted)", entry.breakpoint),
             |bp| format!("{}:{}", file_name(&bp.path), bp.line),
