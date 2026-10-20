@@ -17,7 +17,8 @@ only. Adapters released as VS Code extensions are unpacked into `<adapters>`:
 | `go` | `dlv dap --listen 127.0.0.1:${port}` (Delve) | Go |
 
 `tuitor configs` prints this list as it resolves on your machine, and
-`~/.config/tuitor/adapters.toml` overrides or adds entries (see the README).
+`~/.config/tuitor/adapters.toml` overrides or adds entries (see
+[configuration.md](configuration.md#adapterstoml)).
 
 ## js-debug
 
