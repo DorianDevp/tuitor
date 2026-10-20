@@ -8,6 +8,7 @@
 //! @wait stop                     until the program stops anew, in any tab (not a stop it
 //!                                went on from by itself, at a breakpoint of another set)
 //! @wait running | exited         until the active tab's session is in that state
+//! @wait paths                    until PATHS has its answer
 //! @sleep 300                     milliseconds
 //! @clock 700                     animations at 700 ms (by default they hold still)
 //! @dump overview.ans             save the screen
@@ -29,11 +30,14 @@ use tuitor_core::session::SessionState;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
+use crate::overlay::Overlay;
 use crate::runner::Inbox;
 use crate::signals::Signals;
 use crate::ui;
 
 const WAIT: Duration = Duration::from_secs(20);
+/// A language server may read the project for a while before it answers.
+const PATHS_WAIT: Duration = Duration::from_secs(300);
 
 /// Runs the script, or as much of it as comes before an error or a signal, then ends
 /// every session; returns the status to exit with.
@@ -137,20 +141,26 @@ async fn wait(app: &mut App, rx: &mut Inbox, what: &str, before: usize) -> Resul
         "stop" => stops(app) > before,
         "running" => state(app) == Some(SessionState::Running),
         "exited" => state(app) == Some(SessionState::Exited),
+        "paths" => !matches!(&app.ui.overlay, Some(Overlay::Paths(paths)) if paths.found.is_none()),
         _ => true,
     };
-    if !matches!(what, "stop" | "running" | "exited") {
-        bail!("@wait expects stop, running or exited");
+    if !matches!(what, "stop" | "running" | "exited" | "paths") {
+        bail!("@wait expects stop, running, exited or paths");
     }
-    let deadline = Instant::now() + WAIT;
+    let deadline = Instant::now() + if what == "paths" { PATHS_WAIT } else { WAIT };
     while !done(app) {
         let left = deadline.saturating_duration_since(Instant::now());
-        match tokio::time::timeout(left, rx.recv()).await {
+        if left.is_zero() {
+            bail!("timed out waiting for {what}");
+        }
+        // Engines report on the channel; what runs beside them, as PATHS, is polled.
+        match tokio::time::timeout(left.min(Duration::from_millis(100)), rx.recv()).await {
             Ok(Some((tab, msg))) => {
                 app.on_engine(tab, msg);
                 drain(app, rx);
             }
-            _ => bail!("timed out waiting for {what}"),
+            Ok(None) => bail!("timed out waiting for {what}"),
+            Err(_) => app.poll(),
         }
     }
     // Let the capture that follows a stop arrive.

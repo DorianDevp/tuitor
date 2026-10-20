@@ -1,5 +1,5 @@
 //! Popups that take over the keyboard: the command palette, the fuzzy finder, the
-//! open-project picker, DOCTOR and INSTALL.
+//! open-project picker, DOCTOR, INSTALL and PATHS.
 
 use std::path::{Path, PathBuf};
 
@@ -7,6 +7,7 @@ use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use tuitor_core::breakpoints::{BreakpointId, Breakpoints};
 
+use crate::callpaths::Paths;
 use crate::command::{self, Arg, COMMANDS, Group, Spec};
 use crate::doctor::Doctor;
 use crate::keymap::Keymap;
@@ -25,6 +26,8 @@ pub enum Overlay {
     Install,
     /// The search being typed; it shows on the status line, over SOURCE.
     Search(Prompt),
+    /// The call paths to a line; dropped, it stops asking.
+    Paths(Paths),
 }
 
 /// Score and matched character positions, or `None` when the pattern does not match.

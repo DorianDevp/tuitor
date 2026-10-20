@@ -2,6 +2,7 @@
 //! state except the scroll offsets and the animation flag kept in `Cell`s.
 
 mod breakpoints;
+mod callpaths;
 mod compare;
 mod config;
 mod doctor;
@@ -90,6 +91,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 install::draw(&mut p, app, installer, area);
             }
         }
+        Some(Overlay::Paths(paths)) => callpaths::draw(&mut p, app, paths, area),
         // On the status line, over SOURCE and its highlights.
         Some(Overlay::Search(_)) => {}
         None => {}
@@ -632,6 +634,7 @@ fn hints(p: &mut Painter<'_>, app: &App, area: Rect) {
         ],
         Pane::Source => &[
             ("bp toggle", "breakpoint"),
+            ("paths", "paths here"),
             ("find", "find"),
             ("search", "search"),
             ("follow", "follow"),

@@ -150,6 +150,24 @@ impl FlowState {
         }
     }
 
+    /// The calls the stacks of the project's runs showed, once each: `paths` takes them as
+    /// callers no language server can see.
+    pub fn observed(&self) -> Vec<tuitor_code::Observed> {
+        let mut calls: Vec<tuitor_code::Observed> = Vec::new();
+        for edge in self.runs.iter().flat_map(|run| &run.observed.edges) {
+            let call = tuitor_code::Observed {
+                path: edge.site.path.clone(),
+                line: edge.site.line,
+                callee: edge.callee.clone(),
+                callee_path: edge.callee_path.clone(),
+            };
+            if !calls.contains(&call) {
+                calls.push(call);
+            }
+        }
+        calls
+    }
+
     /// The stops of the run of `session` that stop index `index` belongs to.
     fn run_of(&self, session: &Session, index: usize) -> Range<usize> {
         let starts = self.starts.get(&session.id).map(Vec::as_slice).unwrap_or_default();

@@ -103,6 +103,8 @@ pub enum Action {
     Compare(Option<String>),
     CompareOlder,
     CompareNewer,
+    /// Breakpoints along the call paths that lead to the SOURCE line.
+    Paths,
     WatchAdd(Option<String>),
     WatchDelete,
     Eval(Option<String>),
@@ -419,6 +421,13 @@ pub static COMMANDS: &[Spec] = &[
         help: "in COMPARE, the side under the cursor (both on the breakpoint) from the run after",
         group: Group::Breakpoints,
         parse: simple!(Action::CompareNewer),
+    },
+    Spec {
+        name: "paths",
+        arg: Arg::None,
+        help: "breakpoints along the call paths to the SOURCE line, from a language server",
+        group: Group::Breakpoints,
+        parse: simple!(Action::Paths),
     },
     Spec {
         name: "watch add",
