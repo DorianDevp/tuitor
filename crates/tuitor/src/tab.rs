@@ -15,6 +15,7 @@ use tuitor_core::{Engine, EngineMsg, EngineOptions, persist};
 use crate::app::Pane;
 use crate::command::{BpScope, View};
 use crate::flow::{FlowState, Item, executing};
+use crate::search::Search;
 
 pub type TabId = u32;
 
@@ -170,6 +171,8 @@ pub struct SourceState {
     pub cursor: u32,
     /// First visible line (1-based), kept by the renderer.
     pub top: Cell<u32>,
+    /// Lines on screen, kept by the renderer.
+    pub rows: Cell<u32>,
     /// Centre the cursor vertically on the next render.
     pub recenter: Cell<bool>,
 }
@@ -183,6 +186,8 @@ pub struct TabUi {
     /// Stop number shown per session; absent means the latest (live) stop.
     pub viewing: HashMap<SessionId, u32>,
     pub source: SourceState,
+    /// What was searched for in SOURCE, highlighted until `esc`.
+    pub search: Option<Search>,
     pub locals: Cursor,
     pub stack: Cursor,
     pub show_vendor: bool,
@@ -216,6 +221,7 @@ impl Default for TabUi {
             session: None,
             viewing: HashMap::new(),
             source: SourceState::default(),
+            search: None,
             locals: Cursor::default(),
             stack: Cursor::default(),
             show_vendor: false,

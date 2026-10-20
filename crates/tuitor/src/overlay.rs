@@ -11,6 +11,7 @@ use crate::command::{self, Arg, COMMANDS, Group, Spec};
 use crate::doctor::Doctor;
 use crate::keymap::Keymap;
 use crate::picker::Picker;
+use crate::search::Prompt;
 
 const MAX_FILES: usize = 100_000;
 const MAX_HITS: usize = 40;
@@ -22,6 +23,8 @@ pub enum Overlay {
     Doctor(Doctor),
     /// INSTALL, which shows [`App::installer`]: an installation goes on with it closed.
     Install,
+    /// The search being typed; it shows on the status line, over SOURCE.
+    Search(Prompt),
 }
 
 /// Score and matched character positions, or `None` when the pattern does not match.
