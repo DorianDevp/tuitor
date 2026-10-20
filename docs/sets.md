@@ -1,7 +1,7 @@
 # Breakpoint sets, COMPARE and PATHS
 
-[`examples/php-paths`](../examples/php-paths) walks through all three: PATHS to a helper,
-its paths taken as sets, one request with each set active, and COMPARE of the two.
+[`examples/php-paths`](../examples/php-paths) walks through all three: PATHS through a helper,
+two of its paths taken as sets, one request with each set active, and COMPARE of the two.
 
 ## Sets
 
@@ -103,25 +103,78 @@ remembers earlier ones by their stacks, without values.
 
 ## PATHS
 
-`P` (`/paths`) asks the project's language server who calls the function the SOURCE line is
-in, and who calls those, up to where execution starts: a controller, `main`, a test, a script's
-top level, or a function no code calls, which a framework, a container or an event does. PATHS
-lists each chain, entry point first and tests last, with the lines on it worth a breakpoint:
-the entry of each function, its call into the next one, before that call the last write of
-each variable and the last call into the project's other functions (three at most), and the
-line asked about. `j` and `k` pick a path and show its lines, `space` marks it or unmarks it;
-none is marked at first. A path marked has the colour of the set it is to be from then on: a
-set with no breakpoint, else a colour chosen as a new set's is, apart from the sets' and those
-of the other paths marked; unmarking it frees the colour. `enter` makes each path marked a
-breakpoint set of its own, in the colour its mark has, and the first of them the active set: a line several paths share is one breakpoint in each of
-their sets, and COMPARE lines up two paths at the lines they share.
+`P` (`/paths`) asks the project's language server for the call trees through the function the
+SOURCE line is in, the anchor:
 
-Calls no server can see, such as a container's, an event's or one through an interface, come
-from the stacks of the runs FLOW remembers, and show as `⇢`. tuitor runs intelephense (PHP),
-typescript-language-server (TypeScript, JavaScript, Angular), rust-analyzer (Rust) and gopls
-(Go) from `PATH`, or as the `[lsp]` table of `config.toml` says
+- Up, who calls the anchor, and who calls those, up to where execution starts: a controller,
+  `main`, a test, a script's top level, or a function no code calls, which a framework, a
+  container or an event does. Each such place is the root of a tree; controllers, `main` and
+  scripts come first, then the functions no code calls, then tests.
+- Down, what every function on a way from a root to the anchor calls, and the anchor itself,
+  and what those calls call, as far as three calls below the way, in the project's code only:
+  `vendor` and `node_modules` are left out. Calls are asked of `callHierarchy/outgoingCalls`,
+  or, from intelephense, which has no call hierarchy, of the `textDocument/definition` of each
+  name the text calls, kept when it is a function of the project.
+- Calls no server can see, such as a container's, an event dispatcher's or one through an
+  interface, come from the stacks of the runs FLOW remembers, in both directions, and show as
+  `⇢`.
+
+A stage is a call: a function, under the stage that calls it, in the order of the lines that
+make the calls. A chain from a root down to a stage with nothing below it that passes the
+anchor is an end-to-end path. The anchor is `◆` wherever it is called, `⋔ 2 ways` marks a stage
+where the end-to-end paths through it part, `↻ again` a call of a function above it in the
+chain, followed once, and `…` a stage whose calls were not asked for. Branches off the
+end-to-end paths start folded.
+
+Below the trees are the lines of the stage under the cursor worth a breakpoint: the entry of
+its function, its calls into the stages chosen below it, in the anchor the line asked about,
+and before the last of those the last write of each variable and the last call into the
+project's other functions (three at most). Chosen means in the current mark when the stage is
+in it, else on the end-to-end path through it.
+
+| key | command | |
+|---|---|---|
+| `m` | `/paths mark` | mark the end-to-end path through the stage under the cursor: its chain from the root and, below it, the first call on an end-to-end path, else the first call, down to a stage with nothing below it |
+| `space` | `/paths stage` | the stage under the cursor in the current mark, or out of it; with no mark, a new one |
+| `b` | `/paths branch` | the stage under the cursor and every stage below it, in the current mark or out of it |
+| `u` | `/paths unmark` | drop the current mark |
+| `[` `]` | `/paths prev`, `/paths next` | the mark before or after is current |
+| `h` `l` | `/left`, `/right` | fold a stage's calls, or go to its caller; unfold them, or go to the first |
+| `enter` | `/paths take` | a breakpoint set for each mark |
+
+Nothing is marked at first. A mark has the colour of the set it is to be from when it is made:
+a set with no breakpoint, else a colour chosen as a new set's is ([colours](#colours)), apart
+from the sets' and those of the other marks. Unmarking frees the colour, and a mark left with
+no stage is unmarked. `enter` makes each mark a breakpoint set on the lines of its stages, made
+where there is no breakpoint and joined where there is one, and the first mark's set the
+active one: a line several marks share is one breakpoint in each of their sets, and COMPARE
+lines up two paths at the lines they share.
+
+PATHS is bounded, and says in its notes what each bound cut short:
+
+| bound | |
+|---|---|
+| 8 calls up | callers of a function further from the anchor are not asked for; its tree is `cut short` |
+| 10 callers | of a function, the first followed |
+| 3 calls below the paths | what a stage further below a way to the anchor calls is not asked for (`…`) |
+| 12 calls | of a function, the first in its text followed |
+| 300 requests up, 300 down | past them no function is asked about, and the graph found so far is the answer |
+| 8 trees | the roots nearest the anchor kept |
+| 400 stages | in all the trees |
+| 600 requests for lines | past them, which lines write comes from the text alone |
+
+What no server sees, it says too: in PHP the calls a container, a router or an event dispatcher
+makes and calls of callables (`$listener($event)`, `$controller->$action()`); in TypeScript the
+calls from templates, Angular's bindings and events included, and through DI tokens and
+callbacks; in Rust calls through trait objects and function pointers, and any call inside a
+macro's arguments, which rust-analyzer does not report; in Go calls through interfaces and
+function values. Run the program and ask again: the calls its stacks showed join the trees.
+
+tuitor runs intelephense (PHP), typescript-language-server (TypeScript, JavaScript, Angular),
+rust-analyzer (Rust) and gopls (Go) from `PATH`, or as the `[lsp]` table of `config.toml` says
 ([configuration](configuration.md#configtoml)), once per project when first asked, and ends
 them with the tab; PATHS shows what a server reports while it reads the project. intelephense
-answers no call hierarchy, so for PHP the callers are its references that call; references
-need no intelephense licence. Other language servers are welcome as contributions: the
-`tuitor-code` crate is the only one that speaks LSP.
+answers no call hierarchy, so for PHP the callers are its references that call, and the calls
+are the definitions of what the text calls; neither needs an intelephense licence. Other
+language servers are welcome as contributions: the `tuitor-code` crate is the only one that
+speaks LSP.

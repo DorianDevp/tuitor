@@ -11,8 +11,8 @@ screen: source with values inline, stack, locals with what changed since the pre
 stop, watches, breakpoints, output and protocol events. Every stop is recorded, so you can
 step back through them and see when a value went wrong. Breakpoints go in sets told apart by
 colour: one set stops the program, the others record the stop and let it go on. COMPARE lines
-up what two sets recorded in two runs, and PATHS makes sets of the chains of calls that a
-language server finds to a line.
+up what two sets recorded in two runs, and PATHS makes sets of the stages you choose in the
+call trees a language server finds through a line, from where execution starts down past it.
 
 It exists because there is no standalone, language-agnostic debugging client: a debugger
 is either part of an IDE or made for one language or runtime (pdb for Python, Delve for
@@ -282,19 +282,30 @@ breakpoint in CODE or a side's stop in HISTORY.
 
 ![COMPARE in the php-paths example: lavender in the invoice request against cyan in the order request, which share the breakpoints in OrderService and Money; each controller's hits are on one side alone, and VALUES lists the six values that differ at the first hit of OrderService.php:23](assets/screenshots/compare.png)
 
-### Paths to a line
+### Paths through a line
 
-`P` (`/paths`) asks the project's language server for the chains of calls to the function the
-SOURCE line is in, from where execution starts: a controller, `main`, a test, a script's top
-level, or a function no code calls, which a framework or an event does. PATHS lists them, with
-the lines on each worth a breakpoint: the entry of each function, its call into the next one,
-the last writes and calls into the project before that call, and the line asked about. Calls
-no server can see, such as an event dispatcher's, come from the stacks of the runs FLOW
-remembers and show as `⇢`. `space` marks a path, in the colour of its set to be, and `enter`
-makes each path marked a set of its own, so that a line two paths share is one breakpoint in
-both sets, where COMPARE lines the paths up.
+`P` (`/paths`) asks the project's language server for the call trees through the function the
+SOURCE line is in. Up, it follows the callers to where execution starts: a controller, `main`,
+a test, a script's top level, or a function no code calls, which a framework or an event does.
+Down, from that place, from every function on the way and from the line's function, it follows
+what each one calls in the project, up to three calls further, so that a path does not end at
+the line: a controller loads the order before the service totals it and formats the total
+after. PATHS shows a tree per place execution starts, with the line's function marked `◆`
+wherever it is called and `⋔` where the paths through it part. Under the trees are the lines
+of the stage under the cursor worth a breakpoint: its entry, its calls into the stages chosen
+below it, the last writes and calls into the project before those, and the line asked about.
+Calls no server can see, such as an event dispatcher's, come from the stacks of the runs FLOW
+remembers and show as `⇢`.
 
-![PATHS to the helper Money::lineTotal in the php-paths example: both controllers through OrderService, both again through the event dispatcher to a listener, a call FLOW saw at run time (⇢), and the test, unmarked](assets/screenshots/paths.png)
+Nothing is marked at first. `m` marks the end-to-end path through the stage under the cursor,
+from where it starts down to a call with nothing below it, and gives the mark a set's colour;
+`space` puts one stage in the current mark or takes it out, `b` a stage and everything below
+it, and `[` `]` go from mark to mark. `enter` makes each mark a breakpoint set, so that a line
+two marks share is one breakpoint in both sets, where COMPARE lines the paths up. PATHS says
+what its limits cut short and what no server sees in the language: a container's, a router's or
+an event's calls, Angular's template bindings, calls through interfaces.
+
+![PATHS through the helper Money::lineTotal in the php-paths example: a tree per controller and the test, each controller's call into the repository and the format after the service, the service's two ways to the helper, one through the event dispatcher to a listener that a FLOW run showed (⇢), and the lines of the stage under the cursor](assets/screenshots/paths.png)
 
 tuitor runs intelephense (PHP), typescript-language-server (TypeScript, JavaScript, Angular),
 rust-analyzer (Rust) and gopls (Go), from `PATH` or as the `[lsp]` table of
@@ -346,7 +357,7 @@ named (`tuitor doctor php gdb`), needs is missing.
 |---|---|---|---|
 | `c` `n` `s` `o` | continue, step over, in, out | `b` | toggle a breakpoint on the SOURCE line |
 | `N` `A` `g a` | new breakpoint set, next set active, list of sets | `M` | breakpoint in or out of the active set |
-| `P` | paths to the SOURCE line, with their breakpoints | | |
+| `P` | paths through the SOURCE line, to make sets of | | |
 | `p` `X` `R` | pause, stop, restart | `f` | find files and breakpoints |
 | `S` | start the configuration selected in CONFIG | `ctrl-f`, in SOURCE `/` | search SOURCE |
 | `[` `]` `}` | older stop, newer, live | `w` `x` | watch, evaluate |
@@ -363,7 +374,9 @@ In a pane: BREAKPOINTS `a` this session or all, `e` condition, `h` hit count, `l
 `space` on/off, `d` delete, `D` delete its set; CONFIG `a` add, `m` map a path, `M`
 mappings from compose, `u` unset, `d` delete, `i` install the adapter; STACK and FLOW `v`
 library frames or files; WATCH `d` delete; OUTPUT `C` clear; SOURCE `/` search, `ctrl-n`
-`ctrl-p` next and previous match, `q` clears the search; COMPARE `[` `]` an older, newer run.
+`ctrl-p` next and previous match, `q` clears the search; COMPARE `[` `]` an older, newer run;
+PATHS `m` mark the path, `space` a stage in or out, `b` a branch in or out, `u` unmark, `[` `]`
+the mark before or after, `h` `l` fold and unfold, `enter` make the sets.
 
 ## Configuration
 
@@ -429,7 +442,9 @@ way.
 - COMPARE has values only for the runs of the tuitor that is running: recorded stops are not
   saved, and FLOW remembers earlier runs by their stacks alone.
 - PATHS asks one of four language servers, so it covers PHP, TypeScript and JavaScript, Rust
-  and Go; C and C++ have none.
+  and Go; C and C++ have none. It sees what the server sees: calls a framework makes by name, an
+  event dispatcher's and those through interfaces come only from runs FLOW remembers, and
+  rust-analyzer reports no call inside a macro's arguments.
 - tuitor draws with truecolour and Unicode symbols; a terminal or console font without
   them shows approximate colours and missing glyphs.
 - Developed and tested on Linux; macOS and Windows are untested.
