@@ -14,6 +14,7 @@ use tuitor_core::{Engine, EngineMsg, EngineOptions, persist};
 
 use crate::app::Pane;
 use crate::command::{BpScope, View};
+use crate::compare::Comparison;
 use crate::flow::{FlowState, Item, executing};
 use crate::search::Search;
 
@@ -236,6 +237,11 @@ pub struct TabUi {
     /// FLOW lists library files one by one instead of one line per package.
     pub flow_vendor: bool,
     pub outline: Cursor,
+    /// What COMPARE shows, once `/compare` said; until then its default.
+    pub comparison: Option<Comparison>,
+    /// The line of COMPARE under the cursor, and its column: the breakpoint, or a side.
+    pub compare: Cursor,
+    pub compare_col: usize,
     pub(crate) seen_stops: HashMap<SessionId, usize>,
 }
 
@@ -264,6 +270,9 @@ impl Default for TabUi {
             flow_follow: true,
             flow_vendor: false,
             outline: Cursor::default(),
+            comparison: None,
+            compare: Cursor::default(),
+            compare_col: 0,
             seen_stops: HashMap::new(),
         }
     }

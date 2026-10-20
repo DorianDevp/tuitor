@@ -57,6 +57,7 @@ S = "config start"
 "g h" = "view history"
 "g f" = "view flow"
 "g p" = "view config"
+"g d" = "view compare"
 "g b" = "view breakpoints"
 B = "view breakpoints"
 j = "down"
@@ -93,6 +94,10 @@ h = "bp hits"
 d = "bp delete"
 space = "bp enable"
 D = "set delete"
+
+[pane.compare]
+"[" = "compare older"
+"]" = "compare newer"
 
 [pane.watch]
 d = "watch delete"

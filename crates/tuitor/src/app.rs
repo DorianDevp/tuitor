@@ -49,6 +49,7 @@ pub enum Pane {
     Config,
     Flow,
     Outline,
+    Compare,
 }
 
 impl Pane {
@@ -65,6 +66,7 @@ impl Pane {
             Pane::Config => "config",
             Pane::Flow => "flow",
             Pane::Outline => "outline",
+            Pane::Compare => "compare",
         }
     }
 }
@@ -77,6 +79,7 @@ pub fn panes(view: View) -> &'static [Pane] {
         View::History => &[History, Locals],
         View::Flow => &[Flow],
         View::Project => &[Breakpoints, Config],
+        View::Compare => &[Compare],
     }
 }
 
@@ -664,6 +667,9 @@ impl App {
             Action::SetActive(None) => self.prompt(spec),
             Action::SetMove(set) => self.set_move(set),
             Action::SetDelete(arg) => self.set_delete(arg),
+            Action::Compare(arg) => self.compare(arg),
+            Action::CompareOlder => self.compare_run(-1),
+            Action::CompareNewer => self.compare_run(1),
             Action::WatchAdd(expr) => {
                 let tab = self.tab_mut();
                 let expr = match expr {
@@ -1466,6 +1472,10 @@ impl App {
                 let len = path.and_then(|p| self.sources.borrow_mut().get(&p)).map_or(0, |f| f.outline().len());
                 self.tab_mut().ui.outline.move_by(delta, len);
             }
+            Pane::Compare => {
+                let len = self.tab().compared().map_or(0, |c| c.entries.len());
+                self.tab_mut().ui.compare.move_by(delta, len);
+            }
             Pane::Config => {
                 let tab = self.tab_mut();
                 let rows = tab.config_rows();
@@ -1513,6 +1523,8 @@ impl App {
             Pane::History => {
                 tab.ui.history_col = tab.ui.history_col.saturating_add_signed(delta);
             }
+            // The breakpoint, then each side.
+            Pane::Compare => tab.ui.compare_col = tab.ui.compare_col.saturating_add_signed(delta).min(2),
             _ => {}
         }
         Ok(String::new())
@@ -1562,6 +1574,7 @@ impl App {
                 Ok("showing the selected stop".into())
             }
             Pane::Flow => self.flow_open(),
+            Pane::Compare => self.compare_open(),
             Pane::Output | Pane::Events => self.open_place(),
             Pane::Outline => {
                 let tab = self.tab();
