@@ -34,10 +34,25 @@ neither, the current directory gets a tab only if it is a project (it has a
 launch configuration or a kind tuitor knows, see below); otherwise tuitor starts
 with an empty tab, and `O` opens a project in it.
 
-[`examples/`](examples) has a small program for PHP, Rust, C, Go, Node.js, a
-web page in Chromium, TypeScript and Angular, each with a launch.json, a
-`run.sh` that sets it up and starts tuitor on it, and a walk through a first
-session.
+### Examples
+
+[`examples/`](examples) has one small program, which totals three orders, for
+each kind of project. Each example has a `.vscode/launch.json`, a README with a
+first session and the steps by hand, and a `run.sh` that checks what the
+example needs (offering to install js-debug, vscode-php-debug or Delve as
+[Installing adapters](#installing-adapters) does), builds tuitor from this
+repository and starts it on the example.
+
+| example | debugged through | run |
+|---|---|---|
+| [`php`](examples/php) | Xdebug and vscode-php-debug, on the host or in Docker | `./run.sh`, `PHP=/path/to/php ./run.sh`, `TRACE=1 ./run.sh` |
+| [`js`](examples/js) | js-debug, in Node.js | `./run.sh` |
+| [`typescript`](examples/typescript) | js-debug, in Node.js, through `tsc`'s source map | `./run.sh` |
+| [`web`](examples/web) | js-debug, a page from disk in Chromium | `./run.sh`, `HEADLESS=1 ./run.sh` |
+| [`angular`](examples/angular) | js-debug, `ng serve`'s page in Chromium | `./run.sh`, `HEADLESS=1 ./run.sh` |
+| [`go`](examples/go) | Delve | `./run.sh` |
+| [`c`](examples/c) | gdb | `./run.sh` |
+| [`rust`](examples/rust) | gdb | `./run.sh` |
 
 ### PHP in a container
 
@@ -80,7 +95,7 @@ tuitor does not run VS Code's `preLaunchTask`, so start the dev server first
 (`ng serve`), then `tuitor "ng serve"`. Breakpoints go in the `.ts` files under
 `src/app`, and stops, STACK and stepping show those files, down to the line of
 the template's `(click)` that called the component; Angular's own frames fold
-into one `@angular/core` line. No `sourceMapPathOverrides` are needed: the dev
+into one line, `@angular/core · @angular/platform-browser`. No `sourceMapPathOverrides` are needed: the dev
 server of Angular's application builder (`@angular/build:dev-server`) sends the
 page's `main.js` with a source map that names `src/app/app.ts` and the others
 relative to the page, and `webRoot` puts them in the project.
