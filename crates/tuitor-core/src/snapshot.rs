@@ -33,6 +33,10 @@ pub struct Frame {
     pub name: String,
     pub path: Option<PathBuf>,
     pub source_name: Option<String>,
+    /// The adapter's reference to the source's text, which it then has itself: code generated
+    /// at run time, a runtime's internals, a file it cannot say the path of. Its `path`, if
+    /// any, may name no file here (js-debug: `<node_internals>/…`).
+    pub source_reference: Option<i64>,
     pub line: u32,
     pub column: u32,
     /// Library / vendor code; collapsed in the stack by default.
@@ -292,6 +296,7 @@ mod tests {
             name: function.into(),
             path: None,
             source_name: None,
+            source_reference: None,
             line: 1,
             column: 1,
             library: false,

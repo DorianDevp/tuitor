@@ -174,6 +174,13 @@ looked at then. `▲` and `△` compare a frame with the same call at the previo
 stop. `x` evaluates in the selected frame; watches are evaluated in the top
 frame, so that each is one series from stop to stop.
 
+A frame whose source the adapter has itself, such as Node's internals or code
+generated at run time, shows the adapter's text in SOURCE, marked `from
+adapter`. It is read once per session, and is read-only: breakpoints go to
+adapters by file path, and it has none here. A path that is not on this
+machine, as a program in a container reports one, comes with the `/config map`
+that maps it to the project.
+
 ## Keys
 
 Every key runs a command; `/` opens the command line with the same commands and
@@ -410,5 +417,4 @@ TUITOR_DLV="$(go env GOPATH)/bin/dlv" cargo test -p tuitor-core --test go -- --i
 
 - FLOW (file waterfall from the first breakpoint) from the mockups
 - `runInTerminal`: programs that need a terminal of their own (`"console": "integratedTerminal"`)
-- Sources without a path
 - Opening the current location in Neovim

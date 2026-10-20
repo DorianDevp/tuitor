@@ -1,18 +1,20 @@
 use std::collections::HashMap;
+use std::path::Path;
 use std::time::Duration;
 
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use tuitor_core::breakpoints::Breakpoint;
 use tuitor_core::config::home_relative;
-use tuitor_core::session::SessionState;
-use tuitor_core::snapshot::Change;
+use tuitor_core::session::{SessionState, SourceText};
+use tuitor_core::snapshot::{Change, Frame};
 
 use super::logo::{self, Size};
-use super::paint::{Painter, Panel, seg, truncate, truncate_left};
+use super::paint::{Painter, Panel, Seg, seg, truncate, truncate_left};
 use super::syntax::{Lang, highlight};
 use super::theme::*;
 use crate::app::App;
+use crate::model::Shown;
 use crate::tab::Tab;
 
 const GUTTER: u16 = 8;
@@ -20,10 +22,9 @@ const INLINE_VALUE_WIDTH: usize = 28;
 
 pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
     let tab = app.tab();
-    let path = tab.source_path();
+    let shown = tab.shown_source();
     let frame = tab.selected_frame();
     let top_frame = tab.viewed().and_then(|s| s.top());
-    let rel = path.as_deref().map(|p| p.strip_prefix(tab.engine.workspace()).unwrap_or(p).display().to_string());
 
     let mut right = Vec::new();
     if tab.ui.source.browse.is_some() {
@@ -32,40 +33,45 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
         right.push(seg(truncate(&frame.name, 40).into_owned(), fg(DIM)));
     }
     let sub_width = usize::from(area.width / 2);
-    let sub = rel.map(|r| vec![seg(truncate_left(&r, sub_width).into_owned(), fg(DIM))]).unwrap_or_default();
-    p.panel(
-        area,
-        &Panel {
-            title: "SOURCE",
-            sub,
-            right,
-            keys: if focus { vec![("b", "bp"), (".", "follow")] } else { vec![] },
-            focus,
-        },
-    );
+    let sub = match &shown {
+        Some(Shown::File(path)) => {
+            let rel = path.strip_prefix(tab.engine.workspace()).unwrap_or(path).display().to_string();
+            vec![seg(truncate_left(&rel, sub_width).into_owned(), fg(DIM))]
+        }
+        Some(Shown::Adapter { name, .. }) => {
+            vec![seg(truncate_left(name, sub_width).into_owned(), fg(DIM)), seg(" · from adapter", fg(FAINT))]
+        }
+        None => Vec::new(),
+    };
+    // The adapter's own source is read-only, and takes no breakpoints.
+    let keys = match (&shown, focus) {
+        (_, false) => vec![],
+        (Some(Shown::Adapter { .. }), true) => vec![(".", "follow")],
+        (_, true) => vec![("b", "bp"), (".", "follow")],
+    };
+    p.panel(area, &Panel { title: "SOURCE", sub, right, keys, focus });
 
     let inner = super::paint::inner(area);
-    let Some(path) = path else {
-        empty(p, app, inner);
+    let Some(shown) = shown else {
+        match frame {
+            Some(frame) => no_source(p, tab, frame, inner),
+            None => empty(p, app, inner),
+        }
         return;
     };
-    let Some(file) = app.sources.borrow_mut().get(&path) else {
-        p.text(inner.x + 2, inner.y + 1, &format!("cannot read {}", path.display()), fg(DIM), inner.right());
-        p.text(
-            inner.x + 2,
-            inner.y + 2,
-            "(remote path? add pathMappings to the launch configuration)",
-            fg(FAINT),
-            inner.right(),
-        );
+    let Some(file) = app.shown_lines() else {
+        let lines = unavailable(app, &shown);
+        for (row, line) in lines.iter().enumerate() {
+            p.segs(inner.x + 2, inner.y + 1 + row as u16, line, inner.right());
+        }
         return;
     };
 
     let lines = u32::try_from(file.lines.len()).unwrap_or(u32::MAX);
     let height = u32::from(inner.height);
     let in_history = tab.in_history();
-    // The execution line, if the shown frame is in this file.
-    let exec = frame.filter(|f| f.path.as_deref() == Some(path.as_path())).map(|f| f.line);
+    // The execution line, if the shown frame's source is the one shown.
+    let exec = frame.filter(|f| shows(&shown, f)).map(|f| f.line);
     let exec_is_top = frame.zip(top_frame).is_some_and(|(a, b)| a.id == b.id);
     let cursor = tab.ui.source.cursor.clamp(1, lines.max(1));
 
@@ -73,13 +79,20 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
     let top = window_top(tab.ui.source.top.get(), cursor, height, lines, recenter);
     tab.ui.source.top.set(top);
 
-    let canonical = tuitor_canonical(&path);
+    // The adapter's own source has no path for breakpoints to be in.
+    let file_path = match &shown {
+        Shown::File(path) => Some(tuitor_canonical(path)),
+        Shown::Adapter { .. } => None,
+    };
     let breakpoints: HashMap<u32, &Breakpoint> =
-        tab.engine.breakpoints().in_file(&canonical).map(|b| (b.line, b)).collect();
+        file_path.iter().flat_map(|path| tab.engine.breakpoints().in_file(path)).map(|b| (b.line, b)).collect();
     let hit: Vec<u32> = tab.viewed().map(|s| s.hit_breakpoints.clone()).unwrap_or_default();
     let inline =
         if tab.ui.source.browse.is_none() { inline_values(tab, &file.lines, top, exec) } else { HashMap::new() };
-    let lang = Lang::from_path(&path);
+    let lang = match &shown {
+        Shown::File(path) => Lang::from_path(path),
+        Shown::Adapter { session, name, .. } => adapter_lang(tab, *session, name),
+    };
     let browsing = tab.ui.source.browse.is_some() || focus;
 
     for row in 0..height {
@@ -141,6 +154,84 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
             p.segs(cx + 3, y, &segs, inner.right());
         }
     }
+}
+
+/// Whether SOURCE shows `frame`'s source.
+fn shows(shown: &Shown, frame: &Frame) -> bool {
+    match shown {
+        Shown::File(path) => frame.path.as_deref() == Some(path.as_path()),
+        Shown::Adapter { reference, .. } => frame.source_reference == Some(*reference),
+    }
+}
+
+/// The language of an adapter's own source: by its name, else the language the adapter
+/// debugs (js-debug names Node's internals `<node_internals>/internal/…`).
+fn adapter_lang(tab: &Tab, session: tuitor_core::session::SessionId, name: &str) -> Lang {
+    match Lang::from_path(Path::new(name)) {
+        Lang::Plain => {
+            let extension = tab.engine.session(session).and_then(|s| s.adapter.extensions.first());
+            extension.map_or(Lang::Plain, |e| Lang::from_path(&Path::new("source").with_extension(e)))
+        }
+        lang => lang,
+    }
+}
+
+/// What SOURCE says for a frame that has no source at all.
+fn no_source(p: &mut Painter<'_>, tab: &Tab, frame: &Frame, inner: Rect) {
+    let index = tab.selected_frame_index();
+    let text = format!("#{index} {} has no source", truncate(&frame.name, 60));
+    p.text(inner.x + 2, inner.y + 1, &text, fg(DIM), inner.right());
+    let why = "the adapter knows no file or text for it, as for code without debug information";
+    p.text(inner.x + 2, inner.y + 2, why, fg(FAINT), inner.right());
+}
+
+/// Why SOURCE has no lines to show, and what to do about it, line by line.
+fn unavailable(app: &App, shown: &Shown) -> Vec<Vec<Seg<'static>>> {
+    let tab = app.tab();
+    let line = |text: String, color| vec![seg(text, fg(color))];
+    match shown {
+        Shown::Adapter { session, reference, name } => {
+            let session = tab.engine.session(*session);
+            match session.and_then(|s| s.source(*reference)) {
+                Some(SourceText::Failed(err)) => {
+                    vec![line(format!("the adapter did not give {name}"), DIM), line(err.clone(), FAINT)]
+                }
+                None if !session.is_some_and(|s| s.is_alive()) => {
+                    vec![line(format!("{name} was not read from the adapter before its session ended"), DIM)]
+                }
+                _ => vec![line(format!("reading {name} from the adapter…"), FAINT)],
+            }
+        }
+        Shown::File(path) if !path.exists() => {
+            let project = tab.engine.workspace();
+            let root = remote_root(path, |rest| project.join(rest).is_file());
+            let map = match root {
+                Some(root) => format!("/config map {}=.", root.display()),
+                None => "/config map ‹directory there›=‹directory here›".to_owned(),
+            };
+            let config =
+                app.keymap.key_for(tab.focus().name(), "view config").map(|k| format!(" ({k})")).unwrap_or_default();
+            vec![
+                line(format!("not on this machine: {}", path.display()), DIM),
+                line("The program runs elsewhere, in a container or on another host, where its".into(), FAINT),
+                line(format!("files have other paths. Map them to this project in CONFIG{config}:"), FAINT),
+                vec![seg("    ", fg(FAINT)), seg(map, bold(FG))],
+            ]
+        }
+        Shown::File(path) => {
+            let err = std::fs::read(path).err().map(|e| format!(": {e}")).unwrap_or_default();
+            vec![line(format!("cannot read {}{err}", path.display()), DIM)]
+        }
+    }
+}
+
+/// Where the program's files are, for a path that is not here: the directory it starts in
+/// when the rest of it is a file of the project (`is_file`, relative to the project). For
+/// `/var/www/app/src/Order.php` and a project with `src/Order.php`, `/var/www/app`. The
+/// longest rest that matches wins, as a file name alone may match by chance.
+fn remote_root(path: &Path, is_file: impl Fn(&Path) -> bool) -> Option<&Path> {
+    let roots: Vec<&Path> = path.ancestors().skip(1).collect();
+    roots.into_iter().rev().find(|root| path.strip_prefix(root).is_ok_and(&is_file))
 }
 
 /// First visible line of `height` rows over a file of `lines` lines that shows `cursor`:
@@ -335,7 +426,20 @@ fn tuitor_canonical(path: &std::path::Path) -> std::path::PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{mentions, window_top};
+    use std::path::Path;
+
+    use super::{mentions, remote_root, window_top};
+
+    #[test]
+    fn a_path_elsewhere_maps_to_the_project_by_the_longest_rest_it_has() {
+        let project = |files: &'static [&'static str]| move |rest: &Path| files.iter().any(|f| Path::new(f) == rest);
+        let path = Path::new("/var/www/app/src/Order.php");
+        assert_eq!(remote_root(path, project(&["src/Order.php"])), Some(Path::new("/var/www/app")));
+        // A file of the same name at the top of the project is a weaker match.
+        assert_eq!(remote_root(path, project(&["Order.php", "src/Order.php"])), Some(Path::new("/var/www/app")));
+        assert_eq!(remote_root(Path::new("/app/orders.php"), project(&["orders.php"])), Some(Path::new("/app")));
+        assert_eq!(remote_root(path, project(&["lib/Order.php"])), None);
+    }
 
     #[test]
     fn recentring_puts_the_cursor_in_the_middle_within_the_file() {

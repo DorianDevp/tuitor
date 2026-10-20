@@ -4,15 +4,17 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use serde_json::Value;
 use tuitor_core::breakpoints::BreakpointId;
 use tuitor_core::project::{Configuration, value_text};
-use tuitor_core::session::{Session, SessionId};
+use tuitor_core::session::{Session, SessionId, SourceText};
 use tuitor_core::snapshot::{Change, Frame, Snapshot, Var, VarPath, diff};
 
 use crate::app::{App, Pane};
 use crate::command::BpScope;
+use crate::sources::SourceFile;
 use crate::tab::{Tab, TabId};
 
 #[derive(Debug, Clone)]
@@ -67,6 +69,16 @@ pub enum ConfigRow {
     Field(String),
     /// A path in `pathMappings` of the selected configuration, by its remote side.
     Mapping(String),
+}
+
+/// What SOURCE shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Shown {
+    /// A file, by its path here, where it may not exist.
+    File(PathBuf),
+    /// A source the adapter of `session` has itself, with no file here: code generated at
+    /// run time, a runtime's internals.
+    Adapter { session: SessionId, reference: i64, name: String },
 }
 
 /// Breakpoints the BREAKPOINTS scope leaves out.
@@ -233,9 +245,29 @@ impl Tab {
         self.viewed()?.frames.get(self.selected_frame_index())
     }
 
+    /// What SOURCE shows: the file browsed, else the selected frame's source. That is the
+    /// adapter's own text when the adapter has it and the frame's path names no file here.
+    pub fn shown_source(&self) -> Option<Shown> {
+        if let Some(path) = &self.ui.source.browse {
+            return Some(Shown::File(path.clone()));
+        }
+        let frame = self.selected_frame()?;
+        match (frame.source_reference, &frame.path) {
+            (Some(reference), path) if path.as_deref().is_none_or(|p| !p.is_file()) => {
+                let path = path.as_ref().map(|p| p.display().to_string());
+                let name = frame.source_name.clone().or(path).unwrap_or_else(|| format!("source {reference}"));
+                Some(Shown::Adapter { session: self.ui.session?, reference, name })
+            }
+            (_, path) => path.clone().map(Shown::File),
+        }
+    }
+
     /// File shown in SOURCE.
     pub fn source_path(&self) -> Option<PathBuf> {
-        self.ui.source.browse.clone().or_else(|| self.selected_frame()?.path.clone())
+        match self.shown_source()? {
+            Shown::File(path) => Some(path),
+            Shown::Adapter { .. } => None,
+        }
     }
 
     /// The configuration CONFIG shows and `S` starts.
@@ -335,6 +367,19 @@ impl App {
         hidden
     }
 
+    /// The lines SOURCE shows, read from the file or given by the adapter; `None` while they
+    /// cannot be had.
+    pub fn shown_lines(&self) -> Option<Rc<SourceFile>> {
+        let tab = self.tab();
+        match tab.shown_source()? {
+            Shown::File(path) => self.sources.borrow_mut().get(&path),
+            Shown::Adapter { session, reference, .. } => {
+                let Some(SourceText::Read(text)) = tab.engine.session(session)?.source(reference) else { return None };
+                Some(self.sources.borrow_mut().adapter((self.tabs.active_id(), session, reference), text))
+            }
+        }
+    }
+
     /// The breakpoint under the BREAKPOINTS cursor, and the tab it belongs to.
     pub fn selected_bp(&self) -> Option<(TabId, BreakpointId)> {
         let tab = self.tab();
@@ -360,8 +405,7 @@ impl App {
                 tab.viewed()?.watch(expr)?.clone().ok()
             }
             Pane::Source => {
-                let path = tab.source_path()?;
-                let file = self.sources.borrow_mut().get(&path)?;
+                let file = self.shown_lines()?;
                 file.lines.get(usize::try_from(tab.ui.source.cursor).ok()?.checked_sub(1)?).map(|l| l.trim().to_owned())
             }
             Pane::Stack => {
