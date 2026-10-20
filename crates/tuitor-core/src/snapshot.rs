@@ -87,15 +87,20 @@ pub enum Change {
 }
 
 impl Frame {
+    /// `file:line`; nothing for a frame with neither, such as the label js-debug puts
+    /// between the frames of an async call (`Promise.then`).
     pub fn location(&self) -> String {
         let file = self
             .path
             .as_deref()
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned())
-            .or_else(|| self.source_name.clone())
-            .unwrap_or_else(|| "?".to_owned());
-        format!("{file}:{}", self.line)
+            .or_else(|| self.source_name.clone());
+        match file {
+            Some(file) => format!("{file}:{}", self.line),
+            None if self.line == 0 => String::new(),
+            None => format!("?:{}", self.line),
+        }
     }
 }
 
@@ -489,5 +494,14 @@ mod tests {
         let s = snap("f", vec![order]);
         assert_eq!(s.var(0, &path(&["Locals", "$order", "status"])).map(|v| v.value.as_str()), Some("Pending"));
         assert!(s.var(0, &path(&["Locals", "$nope"])).is_none());
+    }
+
+    #[test]
+    fn a_frame_without_source_or_line_has_no_location() {
+        let label = Frame { name: "Promise.then".into(), line: 0, column: 0, ..frame("f", None) };
+        assert_eq!(label.location(), "");
+        assert_eq!(Frame { line: 7, ..frame("f", None) }.location(), "?:7");
+        let named = Frame { source_name: Some("main.js".into()), ..frame("f", None) };
+        assert_eq!(named.location(), "main.js:1");
     }
 }
