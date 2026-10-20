@@ -75,6 +75,12 @@ impl AdapterCommand {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        // A process group of its own, out of the terminal's: ctrl-c there and the terminal
+        // closing signal its whole foreground group. The caller then ends the adapter in
+        // order; signalled too, js-debug would leave the browser it started to close by itself,
+        // still writing its profile after the caller removed the adapter's TMPDIR.
+        #[cfg(unix)]
+        cmd.process_group(0);
         if let Some(cwd) = &self.cwd {
             cmd.current_dir(cwd);
         }
@@ -571,5 +577,24 @@ mod tests {
         drop(peer);
         assert!(matches!(pending.await.expect("join"), Err(Error::Closed)));
         assert!(matches!(incoming.recv().await, Some(Incoming::Closed)));
+    }
+
+    /// The process group in /proc/<pid>/stat, the fifth field: the second after the name.
+    #[cfg(target_os = "linux")]
+    fn process_group(pid: &str) -> String {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).expect("stat");
+        let (_, after_name) = stat.rsplit_once(')').expect("name");
+        after_name.split_whitespace().nth(2).expect("pgrp").to_owned()
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn an_adapter_is_out_of_the_terminals_process_group() {
+        let cmd = AdapterCommand { program: "cat".into(), args: vec![], cwd: None, env: vec![] };
+        let (client, _incoming) = Client::connect(Transport::Stdio(cmd)).await.expect("cat starts");
+        let pid = client.inner.child.lock().expect("lock").as_ref().and_then(Child::id).expect("pid").to_string();
+        assert_eq!(process_group(&pid), pid, "a group of its own");
+        assert_ne!(process_group(&pid), process_group("self"));
+        client.kill_and_wait().await;
     }
 }

@@ -381,7 +381,9 @@ otherwise leave a directory there at every start, with the profile of the
 browser it started. `env` in `adapters.toml` can set another `TMPDIR`.
 SIGTERM, SIGHUP (its terminal closed) and SIGINT end tuitor as quitting does:
 it disconnects the adapters, removes their directories and puts the terminal
-back, then exits with 128 and the signal's number.
+back, then exits with 128 and the signal's number. Adapters run in a process
+group of their own, so that ctrl-c at the terminal and the terminal closing
+signal tuitor alone, which then ends them in that order.
 
 ### Installing adapters
 
