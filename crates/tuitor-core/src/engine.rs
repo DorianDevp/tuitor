@@ -3,8 +3,9 @@
 //! [`EngineMsg`]s that the loop passes to [`Engine::handle`]. Nothing is shared
 //! across threads, so there are no locks.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Result, anyhow, bail};
 use chrono::Local;
@@ -167,6 +168,9 @@ pub struct Engine {
     notices: Vec<Notice>,
     /// Adapter processes being ended, whose temporary directories go once they have exited.
     releasing: Vec<JoinHandle<()>>,
+    /// When each file with breakpoints was last read for them, and its size then: a file
+    /// that changed since has its breakpoints' lines found again.
+    stamps: HashMap<PathBuf, (Option<SystemTime>, u64)>,
 }
 
 impl Engine {
@@ -193,6 +197,7 @@ impl Engine {
             events: Bounded::new(EVENT_LINES),
             notices,
             releasing: Vec::new(),
+            stamps: HashMap::new(),
         };
         (engine, rx)
     }
@@ -404,10 +409,54 @@ impl Engine {
 
     // ---- breakpoints ------------------------------------------------------------------
 
+    /// Finds the lines of the breakpoints again in the files that changed since they were
+    /// last read (an editor saved them, or a checkout, a pull or a rebase rewrote them), and
+    /// sends the breakpoints of those whose lines moved to the sessions. Says what moved, and
+    /// warns of breakpoints whose line is gone.
+    pub fn follow_files(&mut self) {
+        for path in self.breakpoints.files() {
+            self.follow_file(&path, false);
+        }
+    }
+
+    /// [`Engine::follow_files`] for one file; `anew` reads it though it did not change, to
+    /// anchor a breakpoint just set there.
+    fn follow_file(&mut self, path: &Path, anew: bool) {
+        let Ok(meta) = std::fs::metadata(path) else { return };
+        let stamp = (meta.modified().ok(), meta.len());
+        let unanchored = self.breakpoints.in_file(path).any(|b| b.anchor.is_none());
+        if !anew && !unanchored && self.stamps.get(path) == Some(&stamp) {
+            return;
+        }
+        self.stamps.insert(path.to_path_buf(), stamp);
+        let Ok(bytes) = std::fs::read(path) else { return };
+        let followed = self.breakpoints.follow(path, &String::from_utf8_lossy(&bytes));
+        if followed.changed_lines() {
+            // One line for the file: what moved, what came back, then what was lost.
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let mut said: Vec<String> =
+                followed.moved.iter().map(|(id, from, to)| format!("#{id} {from}→{to}")).collect();
+            said.extend(followed.found.iter().map(|id| format!("#{id} found again")));
+            for id in &followed.lost {
+                let text = self.breakpoints.get(*id).and_then(|b| b.anchor.as_ref()).map(|a| a.text.clone());
+                said.push(format!("#{id} lost its line `{}`", text.unwrap_or_default()));
+            }
+            let level = if followed.lost.is_empty() { Level::Info } else { Level::Warn };
+            self.notice(None, level, format!("{name} changed; breakpoints: {}", said.join(", ")));
+        }
+        if followed.changed_lines() {
+            self.breakpoints_changed(path);
+        } else if followed.anchored {
+            self.save();
+        }
+    }
+
     pub fn toggle_breakpoint(&mut self, path: &Path, line: u32) -> Toggle {
         let path = canonical(path);
         let toggle = self.breakpoints.toggle(path.clone(), line);
         self.breakpoints_changed(&path);
+        // A breakpoint is anchored as it is set, so that it follows its line from then on.
+        self.follow_file(&path, true);
         toggle
     }
 
@@ -495,6 +544,7 @@ impl Engine {
         }
         let id = self.breakpoints.add_in(path.clone(), line, set);
         self.breakpoints_changed(&path);
+        self.follow_file(&path, true);
         Ok((id, true))
     }
 
@@ -776,6 +826,8 @@ impl Engine {
     /// Sends breakpoints once the adapter says it is ready, and `configurationDone` once they
     /// are answered.
     fn configure(&mut self, sid: SessionId) {
+        // Lines that moved since the files were last read go out where they are now.
+        self.follow_files();
         let Ok(session) = self.session_mut(sid) else { return };
         session.configured = true;
         session.configure_pending = false;

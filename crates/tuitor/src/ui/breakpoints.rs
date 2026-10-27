@@ -94,6 +94,9 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool)
                     vec![seg("stopped here", italic(AMBER))]
                 } else if bp.log_message.is_some() || bp.condition.is_some() || bp.hit_condition.is_some() {
                     conditions(bp, &owner_tab.engine)
+                } else if bp.lost {
+                    let text = bp.anchor.as_ref().map(|a| a.text.as_str()).unwrap_or_default();
+                    vec![seg(format!("line gone: {text}"), italic(YELLOW_DIM))]
                 } else if !bp.enabled {
                     vec![seg("disabled", italic(GHOST))]
                 } else if bp.verified() == Some(false) {
@@ -141,9 +144,12 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool)
 /// How a breakpoint is drawn. Its colour is that of the set it is shown in (the active one
 /// when it is in it, else the first it joined), whole when it is in the active set and so
 /// stops the program; its shape is what it does: ● stops, ◐ stops when its condition or hit
-/// count says, ◆ logs, ○ is off, ◌ the adapter did not take it. A hit at the stop on view
-/// is ◉, at full colour whatever the set.
+/// count says, ◆ logs, ○ is off, ◌ the adapter did not take it, ⊘ its line is gone from the
+/// file. A hit at the stop on view is ◉, at full colour whatever the set.
 pub fn glyph(bp: &Breakpoint, active: SetId, hit: bool) -> (&'static str, Color) {
+    if bp.lost {
+        return ("⊘", YELLOW_DIM);
+    }
     let shape = if !bp.enabled {
         "○"
     } else if bp.verified() == Some(false) {

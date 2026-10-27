@@ -14,6 +14,7 @@ use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use tuitor_dap::types::{self as dap, SourceBreakpoint};
 
+use crate::follow::{self, Anchor};
 use crate::palette;
 pub use crate::palette::SetId;
 use crate::session::SessionId;
@@ -39,6 +40,14 @@ pub struct Breakpoint {
     /// before there were sets are in the first set.
     #[serde(default)]
     pub sets: Vec<SetId>,
+    /// What its line read, to find the line again once the file changes; taken when the
+    /// file is first read with it there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<Anchor>,
+    /// Its line is gone from the file: it goes to no adapter and is on no line of SOURCE
+    /// until a line that reads as its did comes back.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lost: bool,
     #[serde(skip)]
     pub hits: u32,
     #[serde(skip)]
@@ -79,6 +88,26 @@ impl Breakpoint {
 
     pub fn adapter_message(&self) -> Option<&str> {
         self.bindings.values().find_map(|b| b.message.as_deref())
+    }
+}
+
+/// What [`Breakpoints::follow`] did to a file's breakpoints.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Followed {
+    /// Breakpoints on another line now: id, the line it was on, the line it is on.
+    pub moved: Vec<(BreakpointId, u32, u32)>,
+    /// Breakpoints whose line is gone.
+    pub lost: Vec<BreakpointId>,
+    /// Lost breakpoints whose line is back.
+    pub found: Vec<BreakpointId>,
+    /// An anchor was taken or renewed, which is worth saving but changes no line.
+    pub anchored: bool,
+}
+
+impl Followed {
+    /// A line changed: the adapters need the file's breakpoints again.
+    pub fn changed_lines(&self) -> bool {
+        !(self.moved.is_empty() && self.lost.is_empty() && self.found.is_empty())
     }
 }
 
@@ -160,8 +189,9 @@ impl Breakpoints {
         self.items.iter().find(|b| b.id == id)
     }
 
+    /// The breakpoint on a line; a lost one is on none.
     pub fn at(&self, path: &Path, line: u32) -> Option<&Breakpoint> {
-        self.items.iter().find(|b| b.path == path && b.line == line)
+        self.items.iter().find(|b| b.path == path && b.line == line && !b.lost)
     }
 
     pub fn in_file<'a>(&'a self, path: &'a Path) -> impl Iterator<Item = &'a Breakpoint> + 'a {
@@ -199,6 +229,8 @@ impl Breakpoints {
             hit_condition: None,
             enabled: true,
             sets: vec![set],
+            anchor: None,
+            lost: false,
             hits: 0,
             bindings: HashMap::new(),
         };
@@ -228,7 +260,7 @@ impl Breakpoints {
     /// refuse the breakpoint, or take the count for a condition.
     pub fn for_adapter(&self, path: &Path, hits: bool) -> (Vec<BreakpointId>, Vec<SourceBreakpoint>) {
         self.in_file(path)
-            .filter(|b| b.enabled)
+            .filter(|b| b.enabled && !b.lost)
             .map(|b| {
                 let source = SourceBreakpoint {
                     line: i64::from(b.line),
@@ -239,6 +271,44 @@ impl Breakpoints {
                 (b.id, source)
             })
             .unzip()
+    }
+
+    /// Finds the lines of `path`'s breakpoints again in `text`, what the file reads now, by
+    /// what each line read when it was anchored; a breakpoint not anchored yet is anchored
+    /// where it is. Says what moved, what was lost and what was found again.
+    pub fn follow(&mut self, path: &Path, text: &str) -> Followed {
+        let lines: Vec<&str> = text.lines().collect();
+        let mut followed = Followed::default();
+        for bp in self.items.iter_mut().filter(|b| b.path == path) {
+            let Some(anchor) = &bp.anchor else {
+                bp.anchor = follow::anchor(&lines, bp.line);
+                followed.anchored |= bp.anchor.is_some();
+                continue;
+            };
+            match follow::find(&lines, anchor, bp.line) {
+                Some(line) => {
+                    if bp.lost {
+                        followed.found.push(bp.id);
+                    } else if line != bp.line {
+                        followed.moved.push((bp.id, bp.line, line));
+                    }
+                    bp.lost = false;
+                    bp.line = line;
+                    // Anchored anew where it is: the lines around it, or its own text, may
+                    // have changed.
+                    let now = follow::anchor(&lines, line);
+                    followed.anchored |= now.as_ref() != Some(anchor);
+                    bp.anchor = now;
+                }
+                None if !bp.lost => {
+                    bp.lost = true;
+                    followed.lost.push(bp.id);
+                }
+                None => {}
+            }
+        }
+        self.items.sort_by(|a, b| (&a.path, a.line).cmp(&(&b.path, b.line)));
+        followed
     }
 
     /// Numbers a `setBreakpoints` of `path` about to go to `session`, for [`Breakpoints::bind`].
@@ -690,5 +760,39 @@ mod tests {
         assert_eq!((bps.sets(), bps.active_set(), bps.len()), (&[first][..], first, 1));
         assert_eq!(bps.get(shared).map(|b| b.sets.clone()), Some(vec![first]));
         assert!(bps.delete_set(first, None).is_err(), "the last set stays");
+    }
+
+    #[test]
+    fn breakpoints_follow_their_lines_and_one_whose_line_is_gone_goes_to_no_adapter() {
+        let path = PathBuf::from("/w/orders.php");
+        let before = "<?php\nfunction total($o) {\n    $sum = 0;\n    return $sum;\n}\n";
+        let mut bps = Breakpoints::default();
+        let sum = bps.add(path.clone(), 3);
+        let ret = bps.add(path.clone(), 4);
+        // The first look anchors them where they are.
+        let first = bps.follow(&path, before);
+        assert!(first.anchored && !first.changed_lines());
+
+        let inserted = before.replace("{\n", "{\n    // Cents.\n");
+        let moved = bps.follow(&path, &inserted);
+        assert_eq!(moved.moved, [(sum, 3, 4), (ret, 4, 5)]);
+
+        let gone = inserted.replace("    $sum = 0;\n", "").replace("return $sum;", "return 0;");
+        let lost = bps.follow(&path, &gone);
+        assert_eq!(lost.lost, [sum, ret]);
+        assert!(bps.at(&path, 4).is_none(), "a lost breakpoint is on no line");
+        assert!(bps.for_adapter(&path, true).0.is_empty(), "nor sent to an adapter");
+
+        let back = bps.follow(&path, &inserted);
+        assert_eq!(back.found, [sum, ret]);
+        assert_eq!(bps.for_adapter(&path, true).0, [sum, ret]);
+    }
+
+    #[test]
+    fn a_breakpoint_saved_without_an_anchor_reads_as_not_lost() {
+        let bp: Breakpoint = serde_json::from_str(r#"{"id": 1, "path": "/w/a.c", "line": 3}"#).expect("parse");
+        assert!(bp.anchor.is_none() && !bp.lost);
+        let json = serde_json::to_string(&bp).expect("save");
+        assert!(!json.contains("lost") && !json.contains("anchor"), "{json}");
     }
 }

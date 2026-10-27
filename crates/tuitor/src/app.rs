@@ -4,7 +4,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::KeyEvent;
 use serde_json::Value;
@@ -126,6 +126,8 @@ impl Ui {
 
 /// Rows `page down` and `page up` move by.
 const PAGE: isize = 15;
+/// How often the files with breakpoints are looked at for changes.
+const FOLLOW_EVERY: Duration = Duration::from_millis(500);
 
 /// The table of the keymap PATHS reads its keys from, over `[global]`.
 pub const PATHS_PANE: &str = "paths";
@@ -155,6 +157,8 @@ pub struct App {
     pub resume_editor: bool,
     /// `suspend`: the loop stops tuitor until its shell continues it.
     pub suspend: bool,
+    /// When the files with breakpoints were last looked at for changes.
+    followed: Option<Instant>,
     pub ui: Ui,
     pub sources: RefCell<Sources>,
     pub adapters: Adapters,
@@ -217,6 +221,7 @@ impl App {
             editor: None,
             resume_editor: false,
             suspend: false,
+            followed: None,
             ui: Ui {
                 overlay: None,
                 status: None,
@@ -555,6 +560,15 @@ impl App {
     /// Takes in what finished in the background: DOCTOR's checks, INSTALL's steps, the mappings
     /// of a compose file.
     pub fn poll(&mut self) {
+        // Breakpoints follow their lines when files change on disk: an editor saved them, a
+        // checkout or a rebase rewrote them. A look twice a second is a stat per file.
+        if self.followed.is_none_or(|at| at.elapsed() >= FOLLOW_EVERY) {
+            self.followed = Some(Instant::now());
+            for (_, tab) in self.tabs.iter_mut() {
+                tab.engine.follow_files();
+            }
+            self.show_notices();
+        }
         let cwd = self.base_dir();
         match &mut self.ui.overlay {
             Some(Overlay::Doctor(doctor)) => doctor.poll(),
@@ -594,6 +608,14 @@ impl App {
 
     /// Runs after a batch of engine messages: follow new stops, surface notices.
     pub fn after_engine(&mut self) {
+        self.show_notices();
+        for (_, tab) in self.tabs.iter_mut() {
+            tab.follow_stops();
+        }
+    }
+
+    /// Puts what the engines have to say on the status line.
+    fn show_notices(&mut self) {
         let active = self.tabs.active_id();
         for (id, tab) in self.tabs.iter_mut() {
             let name = tab.name();
@@ -602,7 +624,6 @@ impl App {
                 let message = if id == active { notice.text } else { format!("{name}: {}", notice.text) };
                 self.ui.status = Some(Status { key: None, command: None, message, level: notice.level });
             }
-            tab.follow_stops();
         }
     }
 

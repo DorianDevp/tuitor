@@ -93,8 +93,12 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
         Shown::File(path) => Some(tuitor_canonical(path)),
         Shown::Adapter { .. } => None,
     };
-    let breakpoints: HashMap<u32, &Breakpoint> =
-        file_path.iter().flat_map(|path| tab.engine.breakpoints().in_file(path)).map(|b| (b.line, b)).collect();
+    let breakpoints: HashMap<u32, &Breakpoint> = file_path
+        .iter()
+        .flat_map(|path| tab.engine.breakpoints().in_file(path))
+        .filter(|b| !b.lost)
+        .map(|b| (b.line, b))
+        .collect();
     let hit: Vec<u32> = tab.viewed().map(|s| s.hit_breakpoints.clone()).unwrap_or_default();
     let active = tab.engine.breakpoints().active_set();
     let inline =

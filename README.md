@@ -237,8 +237,16 @@ js-debug, `% 2` in vscode-php-debug, `> 2` in Delve, and for gdb the number of h
 pass over), or log a message instead of stopping (`l`, `{expr}` is interpolated). `space`
 turns one off, `a` lists those of every tab. The shape of a breakpoint is what it does: `●`
 stops, `◐` has a condition or a hit count, `◆` logs, `○` is disabled, `◌` was not taken by
-the adapter, and `◉` is the one the stop on view hit. Breakpoints and watches are kept per
-project in `~/.local/state/tuitor/`, outside the repository.
+the adapter, `⊘` lost its line, and `◉` is the one the stop on view hit. Breakpoints and
+watches are kept per project in `~/.local/state/tuitor/`, outside the repository.
+
+A breakpoint follows its line when the file changes on disk, saved by an editor or rewritten
+by a checkout, a pull or a rebase, with tuitor running or not. It keeps what its line read
+and the two lines with text above and below it, and its line is the one that reads the same
+with the most of those around it, or, when its own text changed, the one between the same
+lines. The sessions get the lines where they are now. One whose line is gone, with the lines
+around it, is `⊘`: it goes to no adapter, and the status line says what its line read, until
+the line comes back.
 
 ![PROJECT in the Go example: a condition, a hit count and a logpoint, and a configuration of tuitor's own beside launch.json's](assets/screenshots/project.png)
 
