@@ -98,6 +98,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         Some(Overlay::Paths(paths)) => callpaths::draw(&mut p, app, paths, area),
         Some(Overlay::Sets(pick)) => overlays::sets(&mut p, app, pick, area),
+        Some(Overlay::Value(view)) => overlays::value(&mut p, view, area),
         // On the status line, over SOURCE and its highlights.
         Some(Overlay::Search(_)) => {}
         None => {}
@@ -290,6 +291,9 @@ fn views(p: &mut Painter<'_>, app: &App, area: Rect) {
     }
     let clock = Local::now().format("%H:%M:%S ").to_string();
     let mut right = Vec::new();
+    if app.tab().engine.my_code() {
+        right.push(seg("my code only   ", fg(DIM)));
+    }
     // An editor stopped in tuitor's terminal waits with what it has open until `edit`.
     if let Some(name) = &app.ui.stopped_editor {
         let key = app.keymap.key_for(app.focus().name(), "edit").unwrap_or_else(|| "/edit".into());

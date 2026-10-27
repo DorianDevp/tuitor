@@ -35,6 +35,11 @@ use crate::tmpdir::TempDir;
 
 const OUTPUT_LINES: usize = 10_000;
 const EVENT_LINES: usize = 1_000;
+/// Steps a step into library code takes on by itself to reach the project's code: the first
+/// few step in, for a callback into the project close by; the rest step out, a frame at a
+/// time, back to the project's code that called the library.
+const SKIP_STEPS: u32 = 40;
+const SKIP_IN: u32 = 8;
 /// Runs kept on disk per workspace, the newest; each is read back as an ended session.
 const KEPT_RUNS: usize = 12;
 const KILL_GRACE: Duration = Duration::from_secs(2);
@@ -176,6 +181,8 @@ pub struct Engine {
     /// Where the runs of this workspace are kept once their sessions end; none for a tab with
     /// no project.
     recordings: Option<PathBuf>,
+    /// "My code only": a step into library code goes on until the project's code.
+    my_code: bool,
 }
 
 impl Engine {
@@ -205,6 +212,7 @@ impl Engine {
             releasing: Vec::new(),
             stamps: HashMap::new(),
             recordings,
+            my_code: saved.my_code,
         };
         engine.restore_runs();
         (engine, rx)
@@ -363,6 +371,7 @@ impl Engine {
     // ---- execution ------------------------------------------------------------------
 
     pub fn resume(&mut self, sid: SessionId, step: Step) -> Result<()> {
+        let my_code = self.my_code;
         let session = self.session_mut(sid)?;
         if !session.is_stopped() {
             bail!("{} is not stopped", session.name);
@@ -372,6 +381,8 @@ impl Engine {
         session.mark_running();
         session.stepping = step != Step::Continue;
         session.end_hold();
+        // Library code is stepped through by itself, a step at a time, but not for ever.
+        session.skipping = if step == Step::In && my_code { SKIP_STEPS } else { 0 };
 
         let args = ThreadArguments { thread_id };
         let command = step.name();
@@ -459,6 +470,24 @@ impl Engine {
         } else if followed.anchored {
             self.save();
         }
+    }
+
+    /// Finds the lines of `path`'s breakpoints again now, as when the file changes: for a
+    /// breakpoint given an anchor from elsewhere, as one imported is.
+    pub fn follow_now(&mut self, path: &Path) {
+        self.follow_file(&canonical(path), true);
+    }
+
+    /// "My code only" on or off: whether a step into library code goes on until the project's
+    /// code. Returns whether it is on now.
+    pub fn toggle_my_code(&mut self) -> bool {
+        self.my_code = !self.my_code;
+        self.save();
+        self.my_code
+    }
+
+    pub fn my_code(&self) -> bool {
+        self.my_code
     }
 
     pub fn toggle_breakpoint(&mut self, path: &Path, line: u32) -> Toggle {
@@ -1194,6 +1223,32 @@ impl Engine {
             at: Instant::now(),
         });
 
+        // A step into library code with "my code only": on into the project's code, the stops
+        // between left out (see SKIP_STEPS).
+        if stop.hits.is_empty() && self.session_ref(sid).is_ok_and(|s| s.skipping > 0) {
+            let library = capture.frames.first().is_some_and(|f| f.library);
+            let Ok(session) = self.session_mut(sid) else { return };
+            if library {
+                session.skipping -= 1;
+                let out = session.skipping < SKIP_STEPS - SKIP_IN;
+                session.mark_running();
+                session.stepping = true;
+                session.held_since = None;
+                if let Some(client) = session.client.clone() {
+                    let args = ThreadArguments { thread_id: capture.thread_id };
+                    let command = if out { "step out" } else { "step in" };
+                    let done = move |r: DapResult<()>| Msg::Done { sid, command, result: r };
+                    if out {
+                        self.call::<StepOut>(sid, &client, args, move |r| done(r.map(drop)));
+                    } else {
+                        self.call::<StepIn>(sid, &client, args, move |r| done(r.map(drop)));
+                    }
+                }
+                return;
+            }
+            session.skipping = 0;
+        }
+
         // Not every adapter reports hitBreakpointIds; fall back to the stop location.
         let top = capture.frames.first();
         if stop.hits.is_empty()
@@ -1460,6 +1515,7 @@ impl Engine {
             sets: self.breakpoints.sets().to_vec(),
             active_set: Some(self.breakpoints.active_set()),
             watches: self.watches.clone(),
+            my_code: self.my_code,
         };
         if let Err(err) = persist::save(file, &state) {
             let text = format!("{err:#}");

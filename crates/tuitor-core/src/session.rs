@@ -70,6 +70,9 @@ pub struct Session {
     pub(crate) saved: bool,
     /// When the adapter said the program stopped at the latest stop, until it goes on.
     pub(crate) held_since: Option<Instant>,
+    /// Steps left to take on into the program's own code, after a step into library code with
+    /// "my code only": the stops in between are not the user's.
+    pub(crate) skipping: u32,
     pub exception_filters: Vec<ExceptionFilter>,
     /// Variable paths the user expanded; re-fetched at every stop.
     pub expanded: BTreeSet<VarPath>,
@@ -133,6 +136,7 @@ impl Session {
             commit: None,
             saved: false,
             held_since: None,
+            skipping: 0,
             exception_filters: Vec::new(),
             expanded: BTreeSet::new(),
             sources: HashMap::new(),

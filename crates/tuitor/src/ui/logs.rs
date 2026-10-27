@@ -10,8 +10,10 @@ use super::theme::*;
 use crate::tab::Tab;
 
 pub fn output(p: &mut Painter<'_>, tab: &Tab, area: Rect, focus: bool) {
-    let lines = tab.engine.output();
-    let right = if tab.ui.output_back > 0 {
+    let lines = tab.output_lines();
+    let right = if let Some(filter) = &tab.ui.output_filter {
+        vec![seg(format!("{} with `{filter}`", lines.len()), fg(AMBER_DIM))]
+    } else if tab.ui.output_back > 0 {
         vec![seg(format!("{} lines up", tab.ui.output_back), fg(AMBER_DIM))]
     } else {
         vec![seg(format!("{} lines", lines.len()), fg(DIM))]

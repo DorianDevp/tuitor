@@ -38,6 +38,8 @@ z = "zoom"
 q = "close"
 esc = "close"
 Q = "quit"
+v = "inspect"
+J = "my code"
 ctrl-c = "quit"
 ctrl-z = "suspend"
 "/" = "palette"
@@ -127,6 +129,10 @@ v = "vendor"
 
 [pane.output]
 C = "clear output"
+F = "palette filter "
+
+[pane.locals]
+F = "palette filter "
 
 [pane.config]
 a = "config add"

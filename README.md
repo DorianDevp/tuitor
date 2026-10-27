@@ -370,6 +370,20 @@ each takes and lists the recent command lines; a number alone goes to that line 
 
 ![The command line, opened with : in SOURCE, with set typed: the set commands, their arguments and keys, and the recent command lines](assets/screenshots/palette.png)
 
+- `v` shows the value under the cursor in full, wrapped, in LOCALS, WATCH or OUTPUT: a long
+  string, or an evaluation's result that OUTPUT cuts at its width. JSON is laid out, also as
+  a string holding JSON or after an evaluation's `=`; `y` copies it whole.
+- `F` filters: in OUTPUT the lines with a text, in LOCALS the variables whose name has it,
+  with the ones they are in (`/filter ‹text›`, alone to show all).
+- `J` turns "my code only" on or off, which the top bar says while it is on: a step into
+  library code (`vendor`, `node_modules` and the like, as STACK folds them) goes on by itself
+  to the project's code, a few steps in for a callback close by, then out a frame at a time,
+  and the stops between are not recorded. A breakpoint in library code still stops there.
+- `/bp export [file]` writes the project's breakpoints, paths from the project's directory,
+  with their conditions and what each line read (`tuitor-breakpoints.json` by default), and
+  `/bp import [file]` reads such a file into a new set: each breakpoint finds its line in the
+  files as they are, as when a file changes, so a colleague's breakpoints, or one's own from
+  another branch, land on their lines; one whose line is not there is `⊘`.
 - `f` finds files and breakpoints (`name:line`).
 - A command's `file:line`, as in `/bp toggle LoyaltyListener.php:16`, names a file from the
   project's directory or by the end of its path, `Event/LoyaltyListener.php` say, when one
@@ -421,7 +435,8 @@ named (`tuitor doctor php gdb`), needs is missing.
 | `g s` `g S` | next, previous session of the tab | `!` | doctor |
 | `q` `esc` | back out of a popup, zoom, history | `/` `:` `?` | command line, all commands |
 | `Q` `ctrl-c` | quit | `enter` | expand, open, start |
-| `ctrl-z` | back to the shell, until `fg` | | |
+| `ctrl-z` | back to the shell, until `fg` | `v` | the selected value in full |
+| `J` | my code only, on or off | `F` | filter OUTPUT or LOCALS |
 
 In a pane: BREAKPOINTS `a` this session or all, `e` condition, `h` hit count, `l` log,
 `space` on/off, `d` delete, `D` delete its set; CONFIG `a` add, `m` map a path, `M`

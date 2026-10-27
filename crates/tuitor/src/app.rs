@@ -467,6 +467,24 @@ impl App {
             }
             Overlay::Install => self.installer_key(key),
             Overlay::Paths(_) => self.paths_key(key),
+            Overlay::Value(view) => {
+                if key.is("up") || key.is("k") {
+                    view.scroll = view.scroll.saturating_sub(1);
+                } else if key.is("down") || key.is("j") {
+                    view.scroll = (view.scroll + 1).min(view.lines.len().saturating_sub(1));
+                } else if key.is("y") {
+                    let text = view.lines.join("\n");
+                    let said =
+                        if self.headless { Ok(()) } else { crate::clipboard::copy(&text).map_err(|e| e.to_string()) };
+                    let (message, level) = match said {
+                        Ok(()) => ("copied the whole value".to_owned(), Level::Info),
+                        Err(e) => (e, Level::Error),
+                    };
+                    self.ui.status = Some(Status { key: None, command: Some("/inspect".into()), message, level });
+                } else if key.is("q") || key.is("enter") {
+                    self.ui.overlay = None;
+                }
+            }
             Overlay::Sets(pick) => {
                 let len = self.tabs.get(pick.tab).map_or(0, |tab| tab.engine.breakpoints().sets().len());
                 if key.is("up") || key.is("k") || key.is("ctrl-p") {
@@ -679,6 +697,26 @@ impl App {
         self.ui.status = Some(Status { key: None, command: Some("/edit".into()), message, level });
     }
 
+    /// `/filter [text]`: OUTPUT's lines, or LOCALS' variables by name, that have the text;
+    /// without one, all of them again.
+    fn filter(&mut self, text: Option<String>) -> Outcome {
+        let pane = self.focus();
+        let text = text.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
+        let tab = self.tab_mut();
+        let (slot, what) = match pane {
+            Pane::Output => (&mut tab.ui.output_filter, "lines"),
+            Pane::Locals => (&mut tab.ui.locals_filter, "variables"),
+            _ => return Err("/filter works in OUTPUT and LOCALS".into()),
+        };
+        *slot = text.clone();
+        tab.ui.output_back = 0;
+        tab.ui.locals.pos = 0;
+        Ok(match text {
+            Some(text) => format!("only the {what} with `{text}`; /filter alone shows all"),
+            None => format!("all the {what}"),
+        })
+    }
+
     /// Says something that did not come from a command, on the status line.
     pub fn say(&mut self, message: &str) {
         self.ui.status = Some(Status { key: None, command: None, message: message.to_owned(), level: Level::Info });
@@ -813,6 +851,20 @@ impl App {
             Action::Rebase(arg) => self.rebase(arg),
             Action::RebaseSet => self.rebase_set(),
             Action::Coverage => self.coverage(),
+            Action::Filter(text) => self.filter(text),
+            Action::BpExport(file) => self.bp_export(file),
+            Action::BpImport(file) => self.bp_import(file),
+            Action::MyCode => Ok(if self.tab_mut().engine.toggle_my_code() {
+                "my code only: a step into library code goes on until the project's code".into()
+            } else {
+                "a step into library code stops there again".into()
+            }),
+            Action::Inspect => {
+                let text = self.selected_text().ok_or("nothing to show here")?;
+                let title = self.focus().name().to_uppercase();
+                self.ui.overlay = Some(Overlay::Value(crate::overlay::ValueView::new(title, &text)));
+                Ok(String::new())
+            }
             Action::WatchAdd(expr) => {
                 let tab = self.tab_mut();
                 let expr = match expr {
@@ -1705,7 +1757,7 @@ impl App {
             }
             Pane::Output => {
                 let tab = self.tab_mut();
-                let len = tab.engine.output().len();
+                let len = tab.output_lines().len();
                 tab.ui.output_back = (tab.ui.output_back as isize - delta).clamp(0, len as isize) as usize;
             }
             Pane::Events => {
@@ -1899,8 +1951,8 @@ impl App {
         let tab = self.tab();
         match tab.focus() {
             Pane::Output => {
-                let output = tab.engine.output();
-                let line = output.iter().nth(output.len().checked_sub(1 + tab.ui.output_back)?)?;
+                let output = tab.output_lines();
+                let line = output.get(output.len().checked_sub(1 + tab.ui.output_back)?)?;
                 Some((places::find(&line.text), Some(line.session)))
             }
             Pane::Events => {

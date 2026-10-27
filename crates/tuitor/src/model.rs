@@ -187,7 +187,30 @@ impl Tab {
     }
 
     /// The variables of the frame selected in STACK, as rows.
+    /// The lines of OUTPUT, those the filter lets through.
+    pub fn output_lines(&self) -> Vec<&tuitor_core::log::OutputLine> {
+        let lines = self.engine.output().iter();
+        match self.ui.output_filter.as_deref().map(str::to_lowercase) {
+            Some(filter) => lines.filter(|l| l.text.to_lowercase().contains(&filter)).collect(),
+            None => lines.collect(),
+        }
+    }
+
+    /// LOCALS' rows; with a filter, the variables whose name has it, the scopes and the
+    /// variables they are in, among those read.
     pub fn local_rows(&self) -> Vec<LocalRow> {
+        let rows = self.all_local_rows();
+        let Some(filter) = self.ui.locals_filter.as_deref().map(str::to_lowercase) else { return rows };
+        let matching: Vec<&VarPath> =
+            rows.iter().filter(|r| !r.scope && r.name.to_lowercase().contains(&filter)).map(|r| &r.path).collect();
+        let keep: Vec<bool> = rows
+            .iter()
+            .map(|r| r.scope || matching.iter().any(|m| m.starts_with(&r.path) || r.path.starts_with(m)))
+            .collect();
+        rows.into_iter().zip(keep).filter(|(_, k)| *k).map(|(r, _)| r).collect()
+    }
+
+    fn all_local_rows(&self) -> Vec<LocalRow> {
         let (Some(session), Some(snapshot)) = (self.active(), self.viewed()) else { return Vec::new() };
         let changes = self.changes();
         let mut rows = Vec::new();
@@ -445,9 +468,9 @@ impl App {
                 Some(format!("{}:{}", bp.path.display(), bp.line))
             }
             Pane::Output => {
-                let len = tab.engine.output().len();
-                let index = len.checked_sub(1 + tab.ui.output_back)?;
-                tab.engine.output().iter().nth(index).map(|l| l.text.clone())
+                let lines = tab.output_lines();
+                let index = lines.len().checked_sub(1 + tab.ui.output_back)?;
+                lines.get(index).map(|l| l.text.clone())
             }
             Pane::Config => tab.config_text(&tab.config_row()?),
             Pane::Flow => Some(self.flow_row()?.path.display().to_string()),

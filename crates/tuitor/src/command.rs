@@ -116,6 +116,11 @@ pub enum Action {
     Rebase(Option<String>),
     RebaseSet,
     Coverage,
+    Inspect,
+    Filter(Option<String>),
+    MyCode,
+    BpExport(Option<String>),
+    BpImport(Option<String>),
     /// The call trees through the SOURCE line, in PATHS.
     Paths,
     /// In PATHS: the end-to-end path through the stage under the cursor, marked as a set.
@@ -461,6 +466,41 @@ pub static COMMANDS: &[Spec] = &[
         help: "the rebases in git's reflog, and what was decided by hand in each (a number opens that one)",
         group: Group::Breakpoints,
         parse: |a| Ok(Action::Rebase(text(a))),
+    },
+    Spec {
+        name: "bp export",
+        arg: Arg::Optional("‹file›"),
+        help: "the project's breakpoints to a file, with what each line read (tuitor-breakpoints.json)",
+        group: Group::Breakpoints,
+        parse: |a| Ok(Action::BpExport(text(a))),
+    },
+    Spec {
+        name: "bp import",
+        arg: Arg::Optional("‹file›"),
+        help: "breakpoints from a file into a new set, each on its line as the files are here",
+        group: Group::Breakpoints,
+        parse: |a| Ok(Action::BpImport(text(a))),
+    },
+    Spec {
+        name: "my code",
+        arg: Arg::None,
+        help: "on or off: a step into library code (vendor, node_modules) goes on into the project's code",
+        group: Group::Run,
+        parse: simple!(Action::MyCode),
+    },
+    Spec {
+        name: "filter",
+        arg: Arg::Optional("‹text›"),
+        help: "in OUTPUT the lines, in LOCALS the variables by name, that have the text; alone, all",
+        group: Group::Navigate,
+        parse: |a| Ok(Action::Filter(text(a))),
+    },
+    Spec {
+        name: "inspect",
+        arg: Arg::None,
+        help: "the selected value in full: a variable's, a watch's, a line of OUTPUT, wrapped",
+        group: Group::Navigate,
+        parse: simple!(Action::Inspect),
     },
     Spec {
         name: "coverage",

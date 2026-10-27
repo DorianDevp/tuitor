@@ -22,6 +22,7 @@ mod runner;
 mod script;
 mod search;
 mod sets;
+mod share;
 mod signals;
 mod sources;
 mod tab;

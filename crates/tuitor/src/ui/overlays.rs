@@ -385,3 +385,36 @@ fn preview(p: &mut Painter<'_>, app: &App, path: &std::path::Path, line: u32, ar
         }
     }
 }
+
+/// A value in full: its lines wrapped to the width, scrolled with j and k.
+pub fn value(p: &mut Painter<'_>, view: &crate::overlay::ValueView, screen: Rect) {
+    p.dim(screen);
+    let width = screen.width.saturating_sub(6);
+    let height = screen.height.saturating_sub(super::HEADER + 3);
+    let rect = Rect::new((screen.width - width) / 2, super::HEADER + 1, width, height);
+    p.fill(rect, BG);
+    let inner = super::paint::inner(rect);
+    let room = usize::from(inner.width.saturating_sub(2)).max(1);
+    // Each line cut into rows of the width, by characters.
+    let rows: Vec<String> = view
+        .lines
+        .iter()
+        .skip(view.scroll)
+        .flat_map(|line| {
+            let chars: Vec<char> = line.chars().collect();
+            if chars.is_empty() {
+                vec![String::new()]
+            } else {
+                chars.chunks(room).map(|c| c.iter().collect()).collect()
+            }
+        })
+        .take(usize::from(inner.height))
+        .collect();
+    let count = format!("{} lines", view.lines.len());
+    let sub = vec![seg(view.title.clone(), fg(DIM))];
+    let keys = vec![("j/k", "scroll"), ("y", "copy"), ("q", "close")];
+    p.panel(rect, &Panel { title: "VALUE", sub, right: vec![seg(count, fg(FAINT))], keys, focus: true });
+    for (y, row) in (inner.y..inner.bottom()).zip(rows) {
+        p.text(inner.x + 1, y, &row, fg(FG), inner.right());
+    }
+}

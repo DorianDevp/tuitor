@@ -225,6 +225,10 @@ pub struct TabUi {
     pub bp_scope: BpScope,
     /// Lines up from the bottom of OUTPUT; 0 follows new output.
     pub output_back: usize,
+    /// OUTPUT shows only the lines with this in them, whatever their case.
+    pub output_filter: Option<String>,
+    /// LOCALS shows only the variables whose name has this in it, with the ones they are in.
+    pub locals_filter: Option<String>,
     pub events: Cursor,
     pub history_col: usize,
     /// The value under TIMELINE's cursor.
@@ -265,6 +269,8 @@ impl Default for TabUi {
             bps: Cursor::default(),
             bp_scope: BpScope::Session,
             output_back: 0,
+            output_filter: None,
+            locals_filter: None,
             events: Cursor::default(),
             history_col: 0,
             timeline: Cursor::default(),

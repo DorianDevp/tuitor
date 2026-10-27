@@ -25,6 +25,9 @@ pub struct Persisted {
     pub active_set: Option<SetId>,
     #[serde(default)]
     pub watches: Vec<String>,
+    /// A step into library code goes on into the project's code.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub my_code: bool,
 }
 
 const RECENT_PROJECTS: usize = 30;

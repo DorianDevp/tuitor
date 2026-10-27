@@ -32,6 +32,60 @@ pub enum Overlay {
     Paths(Box<Paths>),
     /// The breakpoint sets, to make one active.
     Sets(SetPick),
+    /// A value in full, wrapped: a variable's, a watch's, a line of OUTPUT.
+    Value(ValueView),
+}
+
+/// A value too long for its pane, shown whole.
+#[derive(Debug)]
+pub struct ValueView {
+    /// Where it is from: `$order`, `OUTPUT`.
+    pub title: String,
+    /// Its lines: a JSON value laid out, else the text as it is.
+    pub lines: Vec<String>,
+    pub scroll: usize,
+}
+
+impl ValueView {
+    pub fn new(title: String, text: &str) -> ValueView {
+        ValueView { title, lines: layout(text), scroll: 0 }
+    }
+}
+
+/// `text` laid out to read: JSON as JSON (also when it is a quoted string holding JSON, as
+/// adapters show a string), else as it is.
+fn layout(text: &str) -> Vec<String> {
+    let json = |text: &str| {
+        serde_json::from_str::<serde_json::Value>(text.trim()).ok().and_then(|value| match value {
+            serde_json::Value::String(inner) => serde_json::from_str::<serde_json::Value>(inner.trim()).ok(),
+            value @ (serde_json::Value::Object(_) | serde_json::Value::Array(_)) => Some(value),
+            _ => None,
+        })
+    };
+    let pretty = |value: serde_json::Value| serde_json::to_string_pretty(&value).ok();
+    // An evaluation in OUTPUT reads `expression = value`: the expression, then its value laid out.
+    let laid = match json(text).and_then(pretty) {
+        Some(laid) => laid,
+        None => match text.rsplit_once(" = ").and_then(|(expr, value)| Some((expr, pretty(json(value)?)?))) {
+            Some((expr, value)) => format!("{expr} =\n{value}"),
+            None => text.to_owned(),
+        },
+    };
+    laid.lines().map(str::to_owned).collect()
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::layout;
+
+    #[test]
+    fn a_value_reads_laid_out_when_it_is_json_or_an_evaluation_of_json() {
+        assert_eq!(layout("plain text"), ["plain text"]);
+        assert_eq!(layout(r#"{"a":[1]}"#), ["{", r#"  "a": ["#, "    1", "  ]", "}"]);
+        let evaluated = layout(r#"json_encode($x) = "{\"id\":[\"get\"]}""#);
+        assert_eq!(evaluated[0], "json_encode($x) =");
+        assert_eq!(evaluated[1..], ["{", r#"  "id": ["#, r#"    "get""#, "  ]", "}"]);
+    }
 }
 
 /// Score and matched character positions, or `None` when the pattern does not match.
