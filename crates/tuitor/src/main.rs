@@ -16,6 +16,7 @@ mod overlay;
 mod paths;
 mod picker;
 mod places;
+mod rebase;
 mod runner;
 mod script;
 mod search;

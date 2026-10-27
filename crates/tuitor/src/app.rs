@@ -53,6 +53,7 @@ pub enum Pane {
     Outline,
     Compare,
     Timeline,
+    Rebase,
 }
 
 impl Pane {
@@ -71,6 +72,7 @@ impl Pane {
             Pane::Outline => "outline",
             Pane::Compare => "compare",
             Pane::Timeline => "timeline",
+            Pane::Rebase => "rebase",
         }
     }
 }
@@ -84,6 +86,7 @@ pub fn panes(view: View) -> &'static [Pane] {
         View::Flow => &[Flow],
         View::Project => &[Breakpoints, Config],
         View::Compare => &[Compare],
+        View::Rebase => &[Rebase],
     }
 }
 
@@ -569,6 +572,7 @@ impl App {
             }
             self.show_notices();
         }
+        self.poll_rebase();
         let cwd = self.base_dir();
         match &mut self.ui.overlay {
             Some(Overlay::Doctor(doctor)) => doctor.poll(),
@@ -673,6 +677,11 @@ impl App {
             Err(message) => (message, Level::Error),
         };
         self.ui.status = Some(Status { key: None, command: Some("/edit".into()), message, level });
+    }
+
+    /// Says something that did not come from a command, on the status line.
+    pub fn say(&mut self, message: &str) {
+        self.ui.status = Some(Status { key: None, command: None, message: message.to_owned(), level: Level::Info });
     }
 
     /// Shows an error that did not come from a command (startup, configuration).
@@ -801,6 +810,8 @@ impl App {
             Action::Compare(arg) => self.compare(arg),
             Action::CompareOlder => self.compare_run(-1),
             Action::CompareNewer => self.compare_run(1),
+            Action::Rebase(arg) => self.rebase(arg),
+            Action::RebaseSet => self.rebase_set(),
             Action::WatchAdd(expr) => {
                 let tab = self.tab_mut();
                 let expr = match expr {
@@ -837,6 +848,8 @@ impl App {
                 }
                 Ok(format!("copied {}", crate::ui::paint::truncate(&text, 60)))
             }
+            // REBASE reads the reflog the first time it is shown.
+            Action::View(View::Rebase, _) if self.tab().rebase.is_none() => self.rebase(None),
             Action::View(view, pane) => {
                 let tab = self.tab_mut();
                 tab.ui.view = view;
@@ -1709,6 +1722,7 @@ impl App {
                 let len = self.tab().compared().map_or(0, |c| c.entries.len());
                 self.tab_mut().ui.compare.move_by(delta, len);
             }
+            Pane::Rebase => self.rebase_move(delta),
             Pane::Timeline => {
                 let len = self.tab().timeline_tracks().len();
                 self.tab_mut().ui.timeline.move_by(delta, len);
@@ -1738,6 +1752,10 @@ impl App {
     }
 
     fn horizontal(&mut self, delta: isize) -> Outcome {
+        if self.focus() == Pane::Rebase {
+            self.rebase_fold(delta > 0);
+            return Ok(String::new());
+        }
         let tab = self.tab_mut();
         match tab.focus() {
             Pane::Locals => {
@@ -1826,6 +1844,7 @@ impl App {
             }
             Pane::Flow => self.flow_open(),
             Pane::Compare => self.compare_open(),
+            Pane::Rebase => self.rebase_open(),
             Pane::Output | Pane::Events => self.open_place(),
             Pane::Outline => {
                 let tab = self.tab();

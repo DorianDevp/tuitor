@@ -15,6 +15,7 @@ mod logs;
 mod outline;
 mod overlays;
 pub mod paint;
+mod rebase;
 mod source;
 mod stack;
 pub mod syntax;
@@ -73,6 +74,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if tab.ui.view == View::Compare && !tab.ui.zoom {
         compare::detail(&mut p, app, compare_detail_area(body));
     }
+    if tab.ui.view == View::Rebase && !tab.ui.zoom {
+        rebase::detail(&mut p, app, compare_detail_area(body));
+    }
     if tab.ui.view == View::Flow && !tab.ui.zoom {
         let below = flow_detail_area(app, body);
         let half = pct(below.width, 55);
@@ -117,6 +121,7 @@ fn draw_pane(p: &mut Painter<'_>, app: &App, pane: Pane, area: Rect) {
         Pane::Outline => outline::draw(p, app, area, focus),
         Pane::Compare => compare::draw(p, app, area, focus),
         Pane::Timeline => history::timeline(p, tab, area, focus),
+        Pane::Rebase => rebase::draw(p, app, area, focus),
     }
 }
 
@@ -181,6 +186,8 @@ fn layout(app: &App, body: Rect) -> Vec<(Pane, Rect)> {
             vec![(Pane::Breakpoints, Rect::new(x, y, lw, h)), (Pane::Config, Rect::new(x + lw, y, w - lw, h))]
         }
         View::Compare => vec![(Pane::Compare, Rect::new(x, y, w, compare_height(h)))],
+        // The tree over the row under the cursor, as COMPARE.
+        View::Rebase => vec![(Pane::Rebase, Rect::new(x, y, w, compare_height(h)))],
     }
 }
 
@@ -691,6 +698,7 @@ fn hints(p: &mut Painter<'_>, app: &App, area: Rect) {
             ("compare newer", "newer run"),
         ],
         Pane::Outline => &[("open", "jump"), ("bp toggle", "bp on entry")],
+        Pane::Rebase => &[("open", "open"), ("left", "fold"), ("right", "unfold"), ("rebase set", "set of decisions")],
     };
     let common: &[(&str, &str)] = &[
         ("set next", "active set"),

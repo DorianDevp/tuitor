@@ -321,6 +321,24 @@ rust-analyzer (Rust) and gopls (Go), from `PATH` or as the `[lsp]` table of
 ends them with the tab. Support for other language servers is welcome as a contribution:
 [`crates/tuitor-code`](crates/tuitor-code) is the one crate that speaks LSP.
 
+### Rebases
+
+REBASE (`g r`, `/rebase`) lists the rebases git's reflog holds for the project's repository,
+newest first: what was rebased onto what, when, how many commits it picked and how many of
+those stopped for a conflict. `enter` reads one. For each pick that stopped, tuitor makes git's
+own merge of the commit onto its new parent again (`git merge-file`, so no worktree or newer
+git is needed), and what the rebased commit has in place of a conflict, or anywhere else it
+differs, was decided by hand: a conflict that kept what the rebase went onto and dropped the
+pick's side, or the other way round, or merged them by hand. Below them are the lines the branch
+had before the rebase and no longer has after it, gone or changed, with comments apart. A pick
+the target already had, rewritten by another rebase of the same commits, is marked: it conflicts
+with itself, and REBASE says which `git rebase --onto` would have left those out.
+
+`enter` on a decision opens its line in CODE as the file is now, found as a breakpoint finds its
+line, and `b` makes a breakpoint set of the decisions of a rebase, a pick or one decision. The
+set is not the active one, so its breakpoints record and the program goes on: run what goes
+through them, and HISTORY and COMPARE show what the decided code did.
+
 ### Commands
 
 Every key runs a command line. `/` opens the command line (`:` too, and in SOURCE only
@@ -373,7 +391,7 @@ named (`tuitor doctor php gdb`), needs is missing.
 | `p` `X` `R` | pause, stop, restart | `f` | find files and breakpoints |
 | `S` | start the configuration selected in CONFIG | `ctrl-f`, in SOURCE `/` | search SOURCE |
 | `[` `]` `}` | older stop, newer, live | `w` `x` | watch, evaluate |
-| `g o` `g c` `g h` `g f` `g p` `g d` | OVERVIEW, CODE, HISTORY, FLOW, PROJECT, COMPARE | `E` | open in your editor |
+| `g o` `g c` `g h` `g f` `g p` `g d` `g r` | OVERVIEW, CODE, HISTORY, FLOW, PROJECT, COMPARE, REBASE | `E` | open in your editor |
 | `tab` `z` | next pane, zoom the pane | `y` | copy the selection (OSC 52) |
 | `j` `k` `h` `l`, arrows | move, collapse, expand | `.` | SOURCE follows execution again |
 | `shift-down` `shift-up` | scroll SOURCE a page | `:42` | go to line 42 of SOURCE |
@@ -388,7 +406,7 @@ In a pane: BREAKPOINTS `a` this session or all, `e` condition, `h` hit count, `l
 mappings from compose, `u` unset, `d` delete, `i` install the adapter; STACK and FLOW `v`
 library frames or files; WATCH `d` delete; OUTPUT `C` clear; SOURCE `/` search, `ctrl-n`
 `ctrl-p` next and previous match, `q` clears the search; COMPARE `[` `]` an older, newer run;
-PATHS `m` mark the path, `space` a stage in or out, `b` a branch in or out, `u` unmark, `[` `]`
+REBASE `enter` read a rebase or open a decision, `h` `l` fold, `b` a set of its decisions; PATHS `m` mark the path, `space` a stage in or out, `b` a branch in or out, `u` unmark, `[` `]`
 the mark before or after, `h` `l` fold and unfold, `enter` make the sets.
 
 ## Configuration

@@ -294,6 +294,8 @@ pub struct Tab {
     pub flows: FlowState,
     /// The project's language servers, which `paths` starts when it first needs them.
     pub code: Code,
+    /// REBASE, once `/rebase` read the reflog.
+    pub rebase: Option<crate::rebase::RebaseView>,
 }
 
 impl Tab {
@@ -301,7 +303,15 @@ impl Tab {
         let options = EngineOptions { adapters: adapters.clone(), workspace: PathBuf::new(), state_file: None };
         let (engine, _) = Engine::new(options);
         let code = Code::new(PathBuf::new(), Servers::default());
-        Tab { project: None, engine, ui: TabUi::default(), files: None, flows: FlowState::default(), code }
+        Tab {
+            project: None,
+            engine,
+            ui: TabUi::default(),
+            files: None,
+            flows: FlowState::default(),
+            code,
+            rebase: None,
+        }
     }
 
     /// A tab for `project`, and the channel its engine reports on.
@@ -313,7 +323,7 @@ impl Tab {
         });
         let flows = FlowState::open(&project.dir);
         let code = Code::new(project.dir.clone(), servers.clone());
-        (Tab { project: Some(project), engine, ui: TabUi::default(), files: None, flows, code }, rx)
+        (Tab { project: Some(project), engine, ui: TabUi::default(), files: None, flows, code, rebase: None }, rx)
     }
 
     /// The line of FLOW under the cursor among `items`: the file where execution is until

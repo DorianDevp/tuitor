@@ -17,6 +17,7 @@ pub mod palette;
 pub mod persist;
 pub mod process;
 pub mod project;
+pub mod rebase;
 pub mod session;
 pub mod snapshot;
 pub mod store;

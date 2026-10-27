@@ -455,7 +455,7 @@ impl App {
                 let source = self.sources.borrow_mut().get(&tab.source_path()?)?;
                 source.outline().get(tab.ui.outline.pos).map(|s| s.name.clone())
             }
-            Pane::Events | Pane::History | Pane::Compare | Pane::Timeline => None,
+            Pane::Events | Pane::History | Pane::Compare | Pane::Timeline | Pane::Rebase => None,
         }
     }
 }

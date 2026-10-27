@@ -16,10 +16,13 @@ pub enum View {
     Project,
     /// What two breakpoint sets recorded, side by side.
     Compare,
+    /// The rebases in git's reflog, and what was decided by hand in them.
+    Rebase,
 }
 
 impl View {
-    pub const ALL: [View; 6] = [View::Overview, View::Code, View::History, View::Flow, View::Project, View::Compare];
+    pub const ALL: [View; 7] =
+        [View::Overview, View::Code, View::History, View::Flow, View::Project, View::Compare, View::Rebase];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -29,6 +32,7 @@ impl View {
             View::Flow => "flow",
             View::Project => "project",
             View::Compare => "compare",
+            View::Rebase => "rebase",
         }
     }
 
@@ -41,9 +45,12 @@ impl View {
             "flow" | "f" => (View::Flow, None),
             "project" | "p" => (View::Project, None),
             "compare" | "d" => (View::Compare, None),
+            "rebase" | "r" => (View::Rebase, None),
             "breakpoints" | "bp" | "b" => (View::Project, Some(Pane::Breakpoints)),
             "config" => (View::Project, Some(Pane::Config)),
-            other => return Err(format!("unknown view `{other}` (overview, code, history, flow, project, compare)")),
+            other => {
+                return Err(format!("unknown view `{other}` (overview, code, history, flow, project, compare, rebase)"));
+            }
         })
     }
 }
@@ -104,6 +111,8 @@ pub enum Action {
     Compare(Option<String>),
     CompareOlder,
     CompareNewer,
+    Rebase(Option<String>),
+    RebaseSet,
     /// The call trees through the SOURCE line, in PATHS.
     Paths,
     /// In PATHS: the end-to-end path through the stage under the cursor, marked as a set.
@@ -442,6 +451,20 @@ pub static COMMANDS: &[Spec] = &[
         help: "in COMPARE, the side under the cursor (both on the breakpoint) from the run after",
         group: Group::Breakpoints,
         parse: simple!(Action::CompareNewer),
+    },
+    Spec {
+        name: "rebase",
+        arg: Arg::Optional("‹n›"),
+        help: "the rebases in git's reflog, and what was decided by hand in each (a number opens that one)",
+        group: Group::Breakpoints,
+        parse: |a| Ok(Action::Rebase(text(a))),
+    },
+    Spec {
+        name: "rebase set",
+        arg: Arg::None,
+        help: "in REBASE, a new set recording at every decision of the rebase, pick or decision selected",
+        group: Group::Breakpoints,
+        parse: simple!(Action::RebaseSet),
     },
     Spec {
         name: "paths",
