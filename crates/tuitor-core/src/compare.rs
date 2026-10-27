@@ -206,6 +206,8 @@ mod tests {
             frames: vec![frame],
             watches: vec![],
             live: false,
+            held_ms: None,
+            ran_ms: None,
         }
     }
 

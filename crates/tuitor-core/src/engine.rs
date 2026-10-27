@@ -371,6 +371,7 @@ impl Engine {
         let client = session.client.clone().ok_or_else(|| anyhow!("{} is not connected", session.name))?;
         session.mark_running();
         session.stepping = step != Step::Continue;
+        session.end_hold();
 
         let args = ThreadArguments { thread_id };
         let command = step.name();
@@ -1240,9 +1241,18 @@ impl Engine {
         }
         session.stopped_thread = Some(capture.thread_id);
         let number = u32::try_from(session.history.len()).unwrap_or(u32::MAX - 1) + 1;
+        // The stop's time is when the adapter said it stopped, not when it had been read.
+        let time = Local::now() - chrono::Duration::from_std(stop.at.elapsed()).unwrap_or_default();
+        let ran_ms = session.history.last().and_then(|before| {
+            let between = (time - before.time).num_milliseconds();
+            u64::try_from(between).ok()?.checked_sub(before.held_ms?)
+        });
+        session.held_since = Some(stop.at);
         session.history.push(Snapshot {
             number,
-            time: Local::now(),
+            time,
+            held_ms: None,
+            ran_ms,
             thread_id: capture.thread_id,
             reason: stop.reason,
             description: stop.description,
@@ -1375,6 +1385,7 @@ impl Engine {
     fn pass_on(&mut self, sid: SessionId) {
         let Ok(session) = self.session_mut(sid) else { return };
         session.passing = false;
+        session.end_hold();
         if let Some(thread_id) = session.stopped_thread {
             self.go_on(sid, thread_id);
         }

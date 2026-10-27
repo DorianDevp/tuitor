@@ -570,6 +570,8 @@ mod tests {
             frames: vec![frame(line)],
             watches: vec![],
             live: false,
+            held_ms: None,
+            ran_ms: None,
         };
         let history = [stop(1, 68), stop(2, 70), stop(3, 68), stop(4, 68)];
         assert_eq!(occurrence(&history, &history[3]), 2);

@@ -68,6 +68,8 @@ pub struct Session {
     pub commit: Option<String>,
     /// Its stops are kept on disk already: it was saved as it ended, or read back from there.
     pub(crate) saved: bool,
+    /// When the adapter said the program stopped at the latest stop, until it goes on.
+    pub(crate) held_since: Option<Instant>,
     pub exception_filters: Vec<ExceptionFilter>,
     /// Variable paths the user expanded; re-fetched at every stop.
     pub expanded: BTreeSet<VarPath>,
@@ -108,6 +110,13 @@ pub struct Session {
 }
 
 impl Session {
+    /// The program goes on from the latest stop: how long the debugger held it there is known.
+    pub(crate) fn end_hold(&mut self) {
+        if let (Some(since), Some(stop)) = (self.held_since.take(), self.history.last_mut()) {
+            stop.held_ms = u64::try_from(since.elapsed().as_millis()).ok();
+        }
+    }
+
     pub(crate) fn new(id: SessionId, name: String, adapter: AdapterSpec, config: LaunchConfig, tag: String) -> Self {
         Self {
             id,
@@ -123,6 +132,7 @@ impl Session {
             history: Vec::new(),
             commit: None,
             saved: false,
+            held_since: None,
             exception_filters: Vec::new(),
             expanded: BTreeSet::new(),
             sources: HashMap::new(),

@@ -628,6 +628,8 @@ mod tests {
             frames,
             watches: vec![],
             live: false,
+            held_ms: None,
+            ran_ms: None,
         }
     }
 

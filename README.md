@@ -160,7 +160,13 @@ breakpoints, which follow their lines from one commit to the other; COMPARE says
 each side's code was at and starts at the first hit where the two part. `[` and `]` step through the recorded stops and `}` returns to
 the live one; an older stop is shown read-only, and nothing is read from the program
 again. HISTORY (`g h`) is every variable at every stop, with a chart of the value under
-the cursor and the full snapshot of the stop.
+the cursor and the full snapshot of the stop. Its `ran` column is how long the program ran
+from the stop before to this one, from the adapter's word that it stopped there to its word
+that it stopped here, less the time the debugger held it at the stop before: reading the
+stop, and yours. It is the program's own time, as a profile has it, with any adapter and no
+profiler: breakpoints that only record, on the stages of a path, time each stage of a run at
+the cost of reading a stop, and COMPARE gives each hit the program's time from the start of
+its run, so that a run before a change and one after show where the time went.
 
 ![HISTORY of seven stops of the PHP example: $total and a watch per stop, TIMELINE of the two, a bar chart of $total, and the snapshot of stop #5](assets/screenshots/history.png)
 

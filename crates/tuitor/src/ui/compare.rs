@@ -85,8 +85,8 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool) {
         );
         let end = p.text(x_loc, y, &location, fg(if selected { WHITE } else { FG }), x_a - 1);
         p.text(end + 1, y, &format!("hit {}", entry.occurrence), fg(DIM), x_a - 1);
-        p.segs(x_a, y, &stop_cell(entry.a, &compared.a), x_b - 1);
-        p.segs(x_b, y, &stop_cell(entry.b, &compared.b), x_state - 1);
+        p.segs(x_a, y, &stop_cell(entry.a, &compared.a, tab), x_b - 1);
+        p.segs(x_b, y, &stop_cell(entry.b, &compared.b, tab), x_state - 1);
         p.segs(x_state, y, &summary(entry, &names), inner.right());
     }
 }
@@ -128,15 +128,28 @@ fn label(path: &Path<'_>, tab: &Tab, style: ratatui::style::Style) -> Vec<Seg<'s
 }
 
 /// The stop, and when after its run began.
-fn stop_cell(stop: Option<&Snapshot>, path: &Path<'_>) -> Vec<Seg<'static>> {
+fn stop_cell(stop: Option<&Snapshot>, path: &Path<'_>, tab: &Tab) -> Vec<Seg<'static>> {
     let Some(stop) = stop else { return vec![seg("—", fg(GHOST))] };
-    let after = (stop.time - path.recording.start).num_milliseconds() as f64 / 1000.0;
     let glyph = if stop.silent { "↷" } else { "●" };
+    // How long the program ran to here from the run's start, the debugger's holds left out,
+    // so that the two sides' times compare; the clock's time when that is not known.
+    let when = match ran_to(tab, path, stop) {
+        Some(ms) => super::history::ran(ms),
+        None => format!("+{:.2}s", (stop.time - path.recording.start).num_milliseconds() as f64 / 1000.0),
+    };
     vec![
         seg(format!("{glyph} "), fg(set_color(path.set, true))),
         seg(format!("#{:<4}", stop.number), fg(FG)),
-        seg(format!("+{after:.2}s"), fg(FAINT)),
+        seg(when, fg(FAINT)),
     ]
+}
+
+/// The program's own time from the first stop of `path`'s run to `stop`.
+fn ran_to(tab: &Tab, path: &Path<'_>, stop: &Snapshot) -> Option<u64> {
+    let session = tab.engine.session(path.run.session)?;
+    let stops = session.history.get(path.run.stops.clone())?;
+    let first = stops.first()?.number;
+    stops.iter().filter(|s| s.number > first && s.number <= stop.number).map(|s| s.ran_ms).sum()
 }
 
 /// How the values of a hit both paths have differ, or what the one path that has it read.

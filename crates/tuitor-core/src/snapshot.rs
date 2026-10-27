@@ -32,6 +32,14 @@ pub struct Snapshot {
     pub watches: Vec<WatchValue>,
     /// Variable references are only valid until the debuggee resumes.
     pub live: bool,
+    /// How long the debugger held the program here, from the adapter's word that it stopped to
+    /// the word to go on: reading the stop, and the user's time at it. Known once it went on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_ms: Option<u64>,
+    /// How long the program ran from the stop before, in the same session, to this one, the
+    /// debugger's hold at that stop left out; the program's own time, as a profile has it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ran_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -339,6 +347,8 @@ mod tests {
             frames,
             watches: vec![],
             live: true,
+            held_ms: None,
+            ran_ms: None,
         }
     }
 

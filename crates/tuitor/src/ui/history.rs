@@ -58,7 +58,8 @@ pub fn table(p: &mut Painter<'_>, tab: &Tab, area: Rect, focus: bool) {
     // Fixed columns.
     let x_num = inner.x + 2;
     let x_time = x_num + 5;
-    let x_reason = x_time + 13;
+    let x_ran = x_time + 13;
+    let x_reason = x_ran + 8;
     let x_loc = x_reason + 12;
     let loc_w = (inner.width / 5).clamp(18, 34);
     let x_vars = x_loc + loc_w + 1;
@@ -81,6 +82,7 @@ pub fn table(p: &mut Painter<'_>, tab: &Tab, area: Rect, focus: bool) {
     let y0 = inner.y;
     p.text(x_num, y0, "#", bold(FAINT), inner.right());
     p.text(x_time, y0, "time", bold(FAINT), inner.right());
+    p.text(x_ran, y0, "ran", bold(FAINT), inner.right());
     p.text(x_reason, y0, "reason", bold(FAINT), inner.right());
     p.text(x_loc, y0, "location", bold(FAINT), inner.right());
     let mut x = x_vars;
@@ -119,6 +121,10 @@ pub fn table(p: &mut Painter<'_>, tab: &Tab, area: Rect, focus: bool) {
         p.text(inner.x, y, mark, bold(if is_cursor { WHITE } else { AMBER }), inner.right());
         p.text(x_num, y, &format!("#{}", snapshot.number), fg(if is_cursor { FG } else { DIM }), inner.right());
         p.text(x_time, y, &snapshot.time.format("%H:%M:%S%.3f").to_string(), fg(FAINT), inner.right());
+        // The program's own time since the stop before, the debugger's hold left out.
+        if let Some(ms) = snapshot.ran_ms {
+            p.text(x_ran, y, &ran(ms), fg(DIM), x_reason - 1);
+        }
         p.segs(x_reason, y, &reason(snapshot), x_loc - 1);
         let location = snapshot.top().map(|f| f.location()).unwrap_or_default();
         let loc_style = if is_live {
@@ -352,4 +358,9 @@ fn reason(snapshot: &Snapshot) -> Vec<Seg<'static>> {
 
 fn format_number(v: f64) -> String {
     if v.fract() == 0.0 && v.abs() < 1e12 { format!("{v:.0}") } else { format!("{v:.2}") }
+}
+
+/// `+12ms`, `+1.4s`: how long the program ran.
+pub fn ran(ms: u64) -> String {
+    if ms < 1000 { format!("+{ms}ms") } else { format!("+{:.1}s", ms as f64 / 1000.0) }
 }
