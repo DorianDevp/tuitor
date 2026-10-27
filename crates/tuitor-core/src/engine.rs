@@ -1546,7 +1546,9 @@ impl Engine {
             };
             let sid = self.next_session;
             self.next_session += 1;
-            let mut session = Session::new(sid, run.name, spec, config, run.tag);
+            // Named with when it ran, apart from this tuitor's sessions.
+            let when = run.history.first().map(|s| s.time.format(" · %d.%m %H:%M").to_string()).unwrap_or_default();
+            let mut session = Session::new(sid, format!("{}{when}", run.name), spec, config, run.tag);
             session.state = SessionState::Exited;
             session.history = run.history.into_iter().map(|s| Snapshot { live: false, ..s }).collect();
             session.commit = run.commit;
