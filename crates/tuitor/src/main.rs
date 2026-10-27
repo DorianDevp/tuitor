@@ -3,6 +3,7 @@ mod callpaths;
 mod clipboard;
 mod command;
 mod compare;
+mod coverage;
 mod doctor;
 mod editor;
 mod flow;

@@ -52,6 +52,8 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool)
     let reserved = usize::from(footer.is_some()) + usize::from(summary.is_some());
     let height = usize::from(inner.bottom().saturating_sub(y)).saturating_sub(reserved);
     let offset = tab.ui.bps.window(height, rows.len());
+    // Which runs reached each breakpoint, the program's or a test's, per tab as asked for.
+    let mut reaches = std::collections::HashMap::new();
     for (i, row) in rows.iter().enumerate().skip(offset).take(height) {
         let selected = focus && i == tab.ui.bps.pos;
         match row {
@@ -99,12 +101,21 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool)
                     vec![seg(format!("line gone: {text}"), italic(YELLOW_DIM))]
                 } else if !bp.enabled {
                     vec![seg("disabled", italic(GHOST))]
-                } else if bp.verified() == Some(false) {
+                } else if bp.verified() == Some(false) && bp.hits == 0 {
                     vec![seg(bp.adapter_message().unwrap_or("not verified").to_owned(), italic(RED_DIM))]
-                } else if !bp.in_set(active) {
-                    vec![seg("records only", italic(FAINT))]
                 } else {
-                    vec![]
+                    let reach = reaches.entry(*owner).or_insert_with(|| owner_tab.reach());
+                    let reached = reach.get(id).map(reached).unwrap_or_default();
+                    if !bp.in_set(active) {
+                        let mut segs = vec![seg("records only", italic(FAINT))];
+                        if !reached.is_empty() {
+                            segs.push(seg(" · ", fg(GHOST)));
+                        }
+                        segs.extend(reached);
+                        segs
+                    } else {
+                        reached
+                    }
                 };
                 let sets_x = p.segs_right(hits_x.saturating_sub(1), y, &memberships(bp, owner_tab), cond_x);
                 p.segs(cond_x, y, &detail, sets_x.saturating_sub(1));
@@ -141,6 +152,27 @@ pub fn draw(p: &mut Painter<'_>, app: &App, area: Rect, focus: bool, wide: bool)
     }
 }
 
+/// The runs that reached a breakpoint: `the program 2 · MoneyTest->testBulk`, the program's
+/// alone marked, as no test reaches it.
+fn reached(reach: &crate::coverage::Reach) -> Vec<Seg<'static>> {
+    let mut segs = Vec::new();
+    if reach.runtime > 0 {
+        segs.push(seg(format!("program {}", reach.runtime), fg(DIM)));
+    }
+    if reach.runtime_only() {
+        segs.push(seg(" · no test", fg(YELLOW_DIM)));
+    }
+    if !reach.tests.is_empty() {
+        if reach.runtime > 0 {
+            segs.push(seg(" · ", fg(GHOST)));
+        }
+        // `App\Tests\MoneyTest->testBulkRebate` reads as `MoneyTest->testBulkRebate`.
+        let names: Vec<&str> = reach.tests.iter().map(|t| t.rsplit('\\').next().unwrap_or(t)).collect();
+        segs.push(seg(format!("tests: {}", names.join(", ")), fg(GREEN_DIM)));
+    }
+    segs
+}
+
 /// How a breakpoint is drawn. Its colour is that of the set it is shown in (the active one
 /// when it is in it, else the first it joined), whole when it is in the active set and so
 /// stops the program; its shape is what it does: ● stops, ◐ stops when its condition or hit
@@ -150,9 +182,11 @@ pub fn glyph(bp: &Breakpoint, active: SetId, hit: bool) -> (&'static str, Color)
     if bp.lost {
         return ("⊘", YELLOW_DIM);
     }
+    // A breakpoint hit was taken, whatever the adapter says of it since: vscode-php-debug
+    // calls every breakpoint unverified once Xdebug's connection of a request is closed.
     let shape = if !bp.enabled {
         "○"
-    } else if bp.verified() == Some(false) {
+    } else if bp.verified() == Some(false) && bp.hits == 0 {
         "◌"
     } else if hit {
         "◉"

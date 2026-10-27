@@ -283,6 +283,17 @@ the variables and the watches together, a level at a time: measured per hit on t
 JavaScript examples, 4 to 6 ms with gdb, 3 to 5 ms with Xdebug and about 260 ms with js-debug.
 The commands and the details are in [docs/sets.md](docs/sets.md).
 
+### What the tests reach
+
+tuitor runs no tests and sets nothing up for them: a test runs the same code as the program,
+from another place. It tells the runs apart by their stacks: a run with a frame in a test file
+(`*Test.php`, `*.spec.ts`, `*_test.go`, a `tests/` directory) came from that test, any other from
+the program. BREAKPOINTS says of each breakpoint which runs reached it, `program 3 · tests:
+MoneyTest->testBulkRebate`, and `no test` where the program's runs reach it and no test's does,
+over the runs in memory and those kept on disk; `/coverage` lists those places. Breakpoints
+that only record, such as the sets PATHS makes of a path, map a path's stages this way without
+stopping anything, and COMPARE lines up what a request carried there with what a test did.
+
 ### Comparing sets
 
 COMPARE (`g d`, `/compare`) lines up what two sets recorded, each in a run of its own, such as

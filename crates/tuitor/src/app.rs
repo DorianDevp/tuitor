@@ -812,6 +812,7 @@ impl App {
             Action::CompareNewer => self.compare_run(1),
             Action::Rebase(arg) => self.rebase(arg),
             Action::RebaseSet => self.rebase_set(),
+            Action::Coverage => self.coverage(),
             Action::WatchAdd(expr) => {
                 let tab = self.tab_mut();
                 let expr = match expr {

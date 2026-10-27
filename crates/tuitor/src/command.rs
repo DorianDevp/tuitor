@@ -115,6 +115,7 @@ pub enum Action {
     CompareNewer,
     Rebase(Option<String>),
     RebaseSet,
+    Coverage,
     /// The call trees through the SOURCE line, in PATHS.
     Paths,
     /// In PATHS: the end-to-end path through the stage under the cursor, marked as a set.
@@ -460,6 +461,13 @@ pub static COMMANDS: &[Spec] = &[
         help: "the rebases in git's reflog, and what was decided by hand in each (a number opens that one)",
         group: Group::Breakpoints,
         parse: |a| Ok(Action::Rebase(text(a))),
+    },
+    Spec {
+        name: "coverage",
+        arg: Arg::None,
+        help: "which breakpoints the program's runs reached and no test's did, over the runs kept",
+        group: Group::Breakpoints,
+        parse: simple!(Action::Coverage),
     },
     Spec {
         name: "rebase set",
