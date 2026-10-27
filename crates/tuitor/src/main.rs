@@ -7,6 +7,7 @@ mod doctor;
 mod editor;
 mod flow;
 mod installer;
+mod job;
 mod keymap;
 mod mappings;
 mod model;

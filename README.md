@@ -336,7 +336,11 @@ each takes and lists the recent command lines; a number alone goes to that line 
   A path of a program in a container goes through the session's `pathMappings`.
 - `E` opens the SOURCE line, or the selected breakpoint, in your editor: the `editor`
   command of `config.toml`; else, inside Neovim's terminal, that Neovim, beside tuitor;
-  else `$VISUAL` or `$EDITOR` in tuitor's terminal until it exits.
+  else `$VISUAL` or `$EDITOR` in tuitor's terminal. That one runs as a shell's job: ctrl-z
+  in it stops it and brings tuitor back, the top bar says it is stopped, and `E` goes back
+  to it as it was left, with its files and cursor, until it exits.
+- `ctrl-z` stops tuitor itself as a job of the shell that started it, as it stops other
+  programs, and `fg` brings it back; the adapters and the programs they debug go on.
 
 ### Doctor
 
@@ -369,6 +373,7 @@ named (`tuitor doctor php gdb`), needs is missing.
 | `g s` `g S` | next, previous session of the tab | `!` | doctor |
 | `q` `esc` | back out of a popup, zoom, history | `/` `:` `?` | command line, all commands |
 | `Q` `ctrl-c` | quit | `enter` | expand, open, start |
+| `ctrl-z` | back to the shell, until `fg` | | |
 
 In a pane: BREAKPOINTS `a` this session or all, `e` condition, `h` hit count, `l` log,
 `space` on/off, `d` delete, `D` delete its set; CONFIG `a` add, `m` map a path, `M`

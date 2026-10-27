@@ -167,6 +167,7 @@ pub enum Action {
     Install(Option<String>),
     Palette(Option<String>),
     Help,
+    Suspend,
     Quit,
 }
 
@@ -821,6 +822,13 @@ pub static COMMANDS: &[Spec] = &[
         help: "list commands and their keys",
         group: Group::App,
         parse: simple!(Action::Help),
+    },
+    Spec {
+        name: "suspend",
+        arg: Arg::None,
+        help: "stop tuitor and go back to the shell, until fg",
+        group: Group::App,
+        parse: simple!(Action::Suspend),
     },
     Spec {
         name: "quit",

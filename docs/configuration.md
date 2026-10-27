@@ -93,4 +93,8 @@ args = ["exec", "--", "rust-analyzer"]
 ```
 
 Without `editor`, `E` opens the Neovim tuitor runs in, beside tuitor, else `$VISUAL` or
-`$EDITOR` in tuitor's terminal until it exits.
+`$EDITOR` in tuitor's terminal. An editor in tuitor's terminal runs in a process group of its
+own, given the terminal as a shell gives it to a job: ctrl-z in it stops it and brings tuitor
+back, and `E` resumes it where it was left. Quitting tuitor with it stopped asks first, then
+hangs it up as a closing terminal would; Neovim and Vim keep a swap file of what was not
+saved.

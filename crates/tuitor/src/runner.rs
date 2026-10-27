@@ -18,6 +18,7 @@ use tuitor_core::config::LaunchConfig;
 
 use crate::app::App;
 use crate::editor::Editor;
+use crate::job::{self, Job, Turn};
 use crate::signals::Signals;
 use crate::tab::TabId;
 use crate::ui;
@@ -61,8 +62,12 @@ async fn event_loop(
         app.start(config);
     }
     let mut input = EventStream::new();
+    let input = &mut input;
     // Editors running beside tuitor, until they say how opening the file went.
     let mut beside = JoinSet::new();
+    // The editor that ran in tuitor's terminal and stopped, ctrl-z in it, for `edit` to resume.
+    let mut stopped = Stopped(None);
+    let stopped = &mut stopped.0;
     // The time in the top bar needs one redraw a second.
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     let started = Instant::now();
@@ -78,14 +83,28 @@ async fn event_loop(
             event = input.next() => match event {
                 Some(Ok(Event::Key(key))) if key.kind != KeyEventKind::Release => {
                     app.on_key(key);
-                    match app.editor.take() {
-                        Some(editor) if editor.terminal => {
-                            let result = in_terminal(terminal, &mut input, &editor).await?;
-                            app.edited(result);
+                    if std::mem::take(&mut app.suspend) {
+                        let result = suspend(terminal, input).await?;
+                        app.resumed(result);
+                    }
+                    let resume = std::mem::take(&mut app.resume_editor).then(|| stopped.take()).flatten();
+                    let turn = match (resume, app.editor.take()) {
+                        (Some(job), _) => Some(in_terminal(terminal, input, Ok(job)).await?),
+                        (None, Some(editor)) if editor.terminal => {
+                            Some(in_terminal(terminal, input, Err(&editor)).await?)
                         }
-                        Some(editor) => {
+                        (None, Some(editor)) => {
                             beside.spawn(editor.run_beside());
+                            None
                         }
+                        (None, None) => None,
+                    };
+                    match turn {
+                        Some(Turn::Stopped(job)) => {
+                            app.editor_stopped(job.name());
+                            *stopped = Some(job);
+                        }
+                        Some(Turn::Ended(result)) => app.edited(result),
                         None => {}
                     }
                 }
@@ -108,23 +127,76 @@ async fn event_loop(
     }
 }
 
-/// Hands the terminal to `editor` until it exits: the screen is the shell's again, and keys
-/// go to the editor, since crossterm reads them only for a stream that is polled.
+/// An editor that stopped, hung up when tuitor's loop ends however it ends.
+struct Stopped(Option<Job>);
+
+impl Drop for Stopped {
+    fn drop(&mut self) {
+        if let Some(job) = self.0.take() {
+            job.hang_up();
+        }
+    }
+}
+
+/// Hands the terminal to an editor, `job` one that stopped or else a new one started from
+/// `editor`, until it stops or exits: the screen is the shell's again, and keys go to the
+/// editor, since crossterm reads them only for a stream that is polled.
 async fn in_terminal(
     terminal: &mut DefaultTerminal,
     input: &mut EventStream,
-    editor: &Editor,
-) -> Result<Result<String, String>> {
+    job: Result<Job, &Editor>,
+) -> Result<Turn> {
+    release(terminal, input)?;
+    let turn = match job {
+        Ok(job) => {
+            job.resume();
+            job.turn().await
+        }
+        Err(editor) => match Job::start(editor) {
+            Ok(job) => job.turn().await,
+            Err(err) => Turn::Ended(Err(err)),
+        },
+    };
+    reclaim(terminal)?;
+    Ok(turn)
+}
+
+/// ctrl-z: stops tuitor as a job of the shell that started it, the screen the shell's again,
+/// until the shell continues it (`fg`); refused when no shell would.
+async fn suspend(terminal: &mut DefaultTerminal, input: &mut EventStream) -> Result<Result<String, String>> {
+    if !job::can_suspend() {
+        return Ok(Err("nothing would bring tuitor back: it was not started by a shell with job control".into()));
+    }
+    #[cfg(unix)]
+    let mut continued = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::from_raw(
+        nix::sys::signal::Signal::SIGCONT as i32,
+    ))?;
+    release(terminal, input)?;
+    let stopped = job::suspend_self();
+    #[cfg(unix)]
+    if stopped.is_ok() {
+        continued.recv().await;
+    }
+    reclaim(terminal)?;
+    Ok(stopped.map(|()| "back from the shell".into()))
+}
+
+/// Puts the terminal back as the shell had it, for another program to have.
+fn release(terminal: &mut DefaultTerminal, input: &mut EventStream) -> Result<()> {
     // The stream's thread would go on reading keys; a new one starts reading when polled.
     drop(std::mem::replace(input, EventStream::new()));
     ratatui::try_restore()?;
     terminal.show_cursor()?;
-    let result = editor.run_in_terminal().await;
+    Ok(())
+}
+
+/// Takes the terminal back for tuitor after another program had it.
+fn reclaim(terminal: &mut DefaultTerminal) -> Result<()> {
     enable_raw_mode()?;
     crossterm::execute!(std::io::stdout(), EnterAlternateScreen, Clear(ClearType::All))?;
-    // ratatui draws only what changed since its last frame, but the editor drew over that;
-    // a new terminal draws all of the next one. (`Terminal::clear` would ask the terminal
-    // where the cursor is, which not every terminal answers.)
+    // ratatui draws only what changed since its last frame, but the other program drew over
+    // that; a new terminal draws all of the next one. (`Terminal::clear` would ask the
+    // terminal where the cursor is, which not every terminal answers.)
     *terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
-    Ok(result)
+    Ok(())
 }

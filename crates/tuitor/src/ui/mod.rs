@@ -282,7 +282,14 @@ fn views(p: &mut Painter<'_>, app: &App, area: Rect) {
         }
     }
     let clock = Local::now().format("%H:%M:%S ").to_string();
-    p.segs_right(area.right().saturating_sub(1), y, &[seg(clock, fg(DIM))], x + 2);
+    let mut right = Vec::new();
+    // An editor stopped in tuitor's terminal waits with what it has open until `edit`.
+    if let Some(name) = &app.ui.stopped_editor {
+        let key = app.keymap.key_for(app.focus().name(), "edit").unwrap_or_else(|| "/edit".into());
+        right.extend([seg(name.clone(), fg(WHITE)), seg(format!(" stopped, {key}   "), fg(DIM))]);
+    }
+    right.push(seg(clock, fg(DIM)));
+    p.segs_right(area.right().saturating_sub(1), y, &right, x + 2);
 }
 
 /// The project tabs, right-aligned in `area` with a column to spare. Returns where they start.

@@ -111,6 +111,10 @@ pub struct Ui {
     closing: Option<TabId>,
     /// A set with breakpoints that `set delete` was asked for; asking again deletes them.
     pub(crate) deleting: Option<(TabId, SetId)>,
+    /// The editor that stopped in tuitor's terminal, by name, which `edit` resumes.
+    pub stopped_editor: Option<String>,
+    /// `quit` was asked for with an editor stopped; asking again quits.
+    quitting: bool,
 }
 
 impl Ui {
@@ -147,6 +151,10 @@ pub struct App {
     pub settings: Settings,
     /// The editor `edit` asked for, for the loop to run: it owns the terminal.
     pub editor: Option<Editor>,
+    /// `edit` with an editor stopped in tuitor's terminal: the loop resumes it.
+    pub resume_editor: bool,
+    /// `suspend`: the loop stops tuitor until its shell continues it.
+    pub suspend: bool,
     pub ui: Ui,
     pub sources: RefCell<Sources>,
     pub adapters: Adapters,
@@ -207,6 +215,8 @@ impl App {
             keymap,
             settings,
             editor: None,
+            resume_editor: false,
+            suspend: false,
             ui: Ui {
                 overlay: None,
                 status: None,
@@ -216,6 +226,8 @@ impl App {
                 animating: Cell::new(None),
                 closing: None,
                 deleting: None,
+                stopped_editor: None,
+                quitting: false,
             },
             sources: Default::default(),
             adapters,
@@ -616,8 +628,25 @@ impl App {
         }
     }
 
+    /// The editor that had tuitor's terminal stopped, ctrl-z in it: `edit` resumes it.
+    pub fn editor_stopped(&mut self, name: &str) {
+        let again = self.keymap.key_for(self.focus().name(), "edit").unwrap_or_else(|| "/edit".into());
+        self.edited(Ok(format!("{name} stopped: {again} goes back to it")));
+        self.ui.stopped_editor = Some(name.to_owned());
+    }
+
+    /// Shows how tuitor's own stop went, ctrl-z, once the shell continued it.
+    pub fn resumed(&mut self, result: Result<String, String>) {
+        let (message, level) = match result {
+            Ok(message) => (message, Level::Info),
+            Err(message) => (message, Level::Warn),
+        };
+        self.ui.status = Some(Status { key: None, command: Some("/suspend".into()), message, level });
+    }
+
     /// Shows how opening the editor went, once it is known.
     pub fn edited(&mut self, result: Result<String, String>) {
+        self.ui.stopped_editor = None;
         let (message, level) = match result {
             Ok(message) => (message, Level::Info),
             Err(message) => (message, Level::Error),
@@ -637,9 +666,12 @@ impl App {
     }
 
     fn apply(&mut self, action: Action, spec: &'static command::Spec) -> Outcome {
-        // Asking to close a tab, or delete a set, is answered by the very next command.
+        // Asking to close a tab, delete a set or quit is answered by the very next command.
         if action != Action::TabClose {
             self.ui.closing = None;
+        }
+        if action != Action::Quit {
+            self.ui.quitting = false;
         }
         if !matches!(action, Action::SetDelete(_)) {
             self.ui.deleting = None;
@@ -919,8 +951,21 @@ impl App {
                 Ok(String::new())
             }
             Action::Quit => {
+                if let Some(name) = self.ui.stopped_editor.clone().filter(|_| !self.ui.quitting) {
+                    self.ui.quitting = true;
+                    let key = |command| self.keymap.key_for(self.focus().name(), command);
+                    let back = key("edit").unwrap_or_else(|| "/edit".into());
+                    let again = key("quit").unwrap_or_else(|| "/quit".into());
+                    return Err(Refusal::warn(format!(
+                        "{name} is stopped with what it has open: {back} goes back to it, {again} again quits and hangs it up"
+                    )));
+                }
                 self.quit = true;
                 Ok("bye".into())
+            }
+            Action::Suspend => {
+                self.suspend = true;
+                Ok(String::new())
             }
         }
     }
@@ -1831,6 +1876,10 @@ impl App {
 
     /// `edit`: the selected breakpoint, or the SOURCE line, for the loop to open in the editor.
     fn edit(&mut self) -> Outcome {
+        if let Some(name) = &self.ui.stopped_editor {
+            self.resume_editor = true;
+            return Ok(format!("back to {name}, as it was left"));
+        }
         let (path, line) = match self.selected_bp() {
             Some((tab, id)) => {
                 let bp = self.tabs.get(tab).and_then(|t| t.engine.breakpoints().get(id)).ok_or("gone")?;
