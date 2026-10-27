@@ -117,8 +117,14 @@ fn header_style() -> ratatui::style::Style {
 /// A side's column head: its set, by colour, and its run.
 fn label(path: &Path<'_>, tab: &Tab, style: ratatui::style::Style) -> Vec<Seg<'static>> {
     let name = sets::name(tab.engine.breakpoints(), path.set);
-    let name = format!("{name} {}", path.run.label(tab.engine.sessions())).to_uppercase();
-    vec![seg("● ", bold(set_color(path.set, true))), seg(name, style)]
+    let sessions = tab.engine.sessions();
+    let name = format!("{name} {}", path.run.label(sessions)).to_uppercase();
+    let mut segs = vec![seg("● ", bold(set_color(path.set, true))), seg(name, style)];
+    // Which code the run was of: before and after a rebase are two commits.
+    if let Some(commit) = path.run.commit(sessions) {
+        segs.push(seg(format!(" {}", commit.rsplit('@').next().unwrap_or(commit)), fg(FAINT)));
+    }
+    segs
 }
 
 /// The stop, and when after its run began.

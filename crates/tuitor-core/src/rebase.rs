@@ -140,6 +140,17 @@ pub struct LostLine {
     pub comment: bool,
 }
 
+/// `branch@sha` of `HEAD` in the repository `dir` is in, or the commit alone when detached;
+/// none outside a repository.
+pub fn head(dir: &Path) -> Option<String> {
+    let sha = git(dir, &["rev-parse", "--short", "HEAD"]).ok()?;
+    let branch = git(dir, &["symbolic-ref", "--short", "-q", "HEAD"]).ok();
+    Some(match branch.as_deref().map(str::trim).filter(|b| !b.is_empty()) {
+        Some(branch) => format!("{branch}@{}", sha.trim()),
+        None => sha.trim().to_owned(),
+    })
+}
+
 /// The repository's top directory, for a directory in it.
 pub fn top(dir: &Path) -> Result<PathBuf> {
     Ok(PathBuf::from(git(dir, &["rev-parse", "--show-toplevel"])?.trim()))

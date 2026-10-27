@@ -64,6 +64,10 @@ pub struct Session {
     pub threads: Vec<Thread>,
     /// Every stop, oldest first. Numbers are 1-based indices.
     pub history: Vec<Snapshot>,
+    /// The repository's `HEAD` when it started, `branch@sha`: which code its stops are of.
+    pub commit: Option<String>,
+    /// Its stops are kept on disk already: it was saved as it ended, or read back from there.
+    pub(crate) saved: bool,
     pub exception_filters: Vec<ExceptionFilter>,
     /// Variable paths the user expanded; re-fetched at every stop.
     pub expanded: BTreeSet<VarPath>,
@@ -117,6 +121,8 @@ impl Session {
             capabilities: Capabilities::default(),
             threads: Vec::new(),
             history: Vec::new(),
+            commit: None,
+            saved: false,
             exception_filters: Vec::new(),
             expanded: BTreeSet::new(),
             sources: HashMap::new(),

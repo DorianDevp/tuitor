@@ -35,6 +35,8 @@ use crate::tmpdir::TempDir;
 
 const OUTPUT_LINES: usize = 10_000;
 const EVENT_LINES: usize = 1_000;
+/// Runs kept on disk per workspace, the newest; each is read back as an ended session.
+const KEPT_RUNS: usize = 12;
 const KILL_GRACE: Duration = Duration::from_secs(2);
 /// Why tuitor turns down `runInTerminal`: its terminal is its own screen.
 const NO_TERMINAL: &str = "the program is to run in a terminal, which tuitor cannot give it; \
@@ -171,6 +173,9 @@ pub struct Engine {
     /// When each file with breakpoints was last read for them, and its size then: a file
     /// that changed since has its breakpoints' lines found again.
     stamps: HashMap<PathBuf, (Option<SystemTime>, u64)>,
+    /// Where the runs of this workspace are kept once their sessions end; none for a tab with
+    /// no project.
+    recordings: Option<PathBuf>,
 }
 
 impl Engine {
@@ -184,7 +189,8 @@ impl Engine {
                 Persisted::default()
             }
         };
-        let engine = Engine {
+        let recordings = options.state_file.as_ref().and_then(|_| persist::recordings_dir(&options.workspace));
+        let mut engine = Engine {
             tx,
             adapters: options.adapters,
             workspace: options.workspace,
@@ -198,7 +204,9 @@ impl Engine {
             notices,
             releasing: Vec::new(),
             stamps: HashMap::new(),
+            recordings,
         };
+        engine.restore_runs();
         (engine, rx)
     }
 
@@ -285,6 +293,7 @@ impl Engine {
         self.log_event(sid, "starting", format!("{} · {}", config.name, describe(&transport)));
         let mut session = Session::new(sid, name, spec, config, tag);
         session.tmp = tmp;
+        session.commit = crate::rebase::head(&self.workspace);
         self.sessions.push(session);
         self.connect(sid, transport);
         Ok(sid)
@@ -969,6 +978,7 @@ impl Engine {
         let name = self.unique(format!("{} › {title}", parent_session.name), None);
         let detail = format!("{title} · child of {}", parent_session.name);
         let tag = parent_session.tag.clone();
+        let commit = parent_session.commit.clone();
         let config =
             LaunchConfig { name: title, adapter: spec.name.clone(), request, arguments: configuration.clone() };
 
@@ -978,6 +988,7 @@ impl Engine {
         let mut session = Session::new(sid, name, spec, config, tag);
         session.parent = Some(parent);
         session.tmp = tmp;
+        session.commit = commit;
         self.sessions.push(session);
         // The code runs in the children, so breakpoints go to them from now on.
         self.breakpoints.unbind_session(parent);
@@ -1485,6 +1496,7 @@ impl Engine {
     /// is ended, and its temporary directory removed once it has exited, since until then
     /// it, or a browser it started, may still write there.
     fn release(&mut self, sid: SessionId) {
+        self.save_run(sid);
         let Ok(session) = self.session_mut(sid) else { return };
         let (client, tmp) = (session.client.take(), session.tmp.take());
         if client.is_none() && tmp.is_none() {
@@ -1497,6 +1509,50 @@ impl Engine {
             }
             drop(tmp);
         }));
+    }
+
+    /// Keeps an ended session's stops on disk, once, so that a later tuitor has them.
+    fn save_run(&mut self, sid: SessionId) {
+        let Some(dir) = self.recordings.clone() else { return };
+        let Ok(session) = self.session_mut(sid) else { return };
+        if session.saved || session.history.is_empty() {
+            return;
+        }
+        session.saved = true;
+        let run = persist::SavedRun {
+            name: session.name.clone(),
+            tag: session.tag.clone(),
+            config: Value::Object(session.config.arguments.clone()),
+            commit: session.commit.clone(),
+            history: session.history.clone(),
+        };
+        if let Err(err) = persist::save_run(&dir, &run, KEPT_RUNS) {
+            self.notice(Some(sid), Level::Warn, format!("keeping the run's stops: {err:#}"));
+        }
+    }
+
+    /// Reads the runs kept from earlier tuitors back as ended sessions, oldest first, so that
+    /// HISTORY, TIMELINE and COMPARE have their stops.
+    fn restore_runs(&mut self) {
+        let Some(dir) = &self.recordings else { return };
+        for run in persist::load_saved_runs(dir, KEPT_RUNS) {
+            let Ok(config) = LaunchConfig::from_value(run.config) else { continue };
+            let spec = match self.adapters.get(&config.adapter) {
+                Some(spec) => spec.clone(),
+                None => match serde_json::from_value::<AdapterSpec>(serde_json::json!({})) {
+                    Ok(spec) => spec,
+                    Err(_) => continue,
+                },
+            };
+            let sid = self.next_session;
+            self.next_session += 1;
+            let mut session = Session::new(sid, run.name, spec, config, run.tag);
+            session.state = SessionState::Exited;
+            session.history = run.history.into_iter().map(|s| Snapshot { live: false, ..s }).collect();
+            session.commit = run.commit;
+            session.saved = true;
+            self.sessions.push(session);
+        }
     }
 
     fn session_ref(&self, sid: SessionId) -> Result<&Session> {

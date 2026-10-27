@@ -152,7 +152,12 @@ stops side by side and a trend.
 ### Recorded stops
 
 Every stop is recorded with what was read there: the stack, the variables of the frames
-looked at, the watches. `[` and `]` step through the recorded stops and `}` returns to
+looked at, the watches. When a session ends its stops are kept on disk with the commit the
+code was at, the newest twelve runs of a project, and the next tuitor reads them back as ended
+sessions: HISTORY, TIMELINE and COMPARE have them as if they were its own. A run before a
+rebase and one after it, or on two commits checked out in turn, line up in COMPARE by their
+breakpoints, which follow their lines from one commit to the other; COMPARE says which commit
+each side's code was at and starts at the first hit where the two part. `[` and `]` step through the recorded stops and `}` returns to
 the live one; an older stop is shown read-only, and nothing is read from the program
 again. HISTORY (`g h`) is every variable at every stop, with a chart of the value under
 the cursor and the full snapshot of the stop.
@@ -470,8 +475,6 @@ way.
 - VS Code's `preLaunchTask` is not run: start a dev server or a build yourself.
 - STACK shows the thread that stopped; there is no list of threads to switch to.
 - No function or data breakpoints, disassembly, memory view, or setting a variable.
-- COMPARE has values only for the runs of the tuitor that is running: recorded stops are not
-  saved, and FLOW remembers earlier runs by their stacks alone.
 - PATHS asks one of four language servers, so it covers PHP, TypeScript and JavaScript, Rust
   and Go; C and C++ have none. It sees what the server sees: calls a framework makes by name, an
   event dispatcher's and those through interfaces come only from runs FLOW remembers, and

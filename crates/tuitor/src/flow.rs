@@ -190,6 +190,11 @@ pub struct RunRef {
 
 impl RunRef {
     /// `run #4`, or the session's name for a run that is not remembered.
+    /// The commit the run's code was at, `branch@sha`, when the session knew it.
+    pub fn commit<'a>(&self, sessions: &'a [Session]) -> Option<&'a str> {
+        sessions.iter().find(|s| s.id == self.session).and_then(|s| s.commit.as_deref())
+    }
+
     pub fn label(&self, sessions: &[Session]) -> String {
         match self.number {
             Some(number) => format!("run #{number}"),

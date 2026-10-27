@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::breakpoints::{Breakpoint, SetId};
 use crate::flow::Run;
+use crate::snapshot::Snapshot;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Persisted {
@@ -43,6 +44,58 @@ pub fn state_file(workspace: &Path) -> Option<PathBuf> {
         .map(|c| if c == '/' || c == '\\' || c == ':' { '%' } else { c })
         .collect();
     Some(state_dir()?.join(format!("{name}.json")))
+}
+
+/// Where the runs recorded in a workspace are kept, a file each: a directory named like its
+/// [`state_file`].
+pub fn recordings_dir(workspace: &Path) -> Option<PathBuf> {
+    let file = state_file(workspace)?;
+    Some(file.parent()?.join("recordings").join(file.file_stem()?))
+}
+
+/// A session's recorded stops, kept after it and its tuitor ended.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SavedRun {
+    pub name: String,
+    pub tag: String,
+    /// The launch configuration as it was given, for the adapter and the name.
+    pub config: serde_json::Value,
+    /// The repository's `HEAD` when the session started, `branch@sha`.
+    #[serde(default)]
+    pub commit: Option<String>,
+    pub history: Vec<Snapshot>,
+}
+
+/// Saves `run` in `dir`, named after its first stop so that names sort by time, and keeps the
+/// newest `keep` runs.
+pub fn save_run(dir: &Path, run: &SavedRun, keep: usize) -> Result<()> {
+    let Some(first) = run.history.first() else { return Ok(()) };
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let tag: String = run.name.chars().map(|c| if c.is_alphanumeric() { c } else { '-' }).collect();
+    let file = dir.join(format!("{}-{tag}.json", first.time.format("%Y%m%dT%H%M%S%.3f")));
+    std::fs::write(&file, serde_json::to_vec(run)?).with_context(|| format!("writing {}", file.display()))?;
+    let mut files = run_files(dir);
+    while files.len() > keep {
+        let _ = std::fs::remove_file(files.remove(0));
+    }
+    Ok(())
+}
+
+/// The newest `keep` runs kept in `dir`, oldest first; a file that does not read is left out.
+pub fn load_saved_runs(dir: &Path, keep: usize) -> Vec<SavedRun> {
+    let files = run_files(dir);
+    let newest = &files[files.len().saturating_sub(keep)..];
+    newest.iter().filter_map(|f| serde_json::from_slice(&std::fs::read(f).ok()?).ok()).collect()
+}
+
+fn run_files(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .collect();
+    files.sort();
+    files
 }
 
 /// The runs remembered for a workspace, named like its [`state_file`].
@@ -208,5 +261,33 @@ mod tests {
         let recent = load_recent(&file).expect("load");
         assert_eq!((recent.len(), recent[0].as_path()), (RECENT_PROJECTS, Path::new("/w/39")));
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn runs_are_kept_newest_last_and_only_so_many() {
+        let dir = std::env::temp_dir().join(format!("tuitor-saved-runs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let stop = |minute: u32| -> Snapshot {
+            use chrono::TimeZone;
+            let time = chrono::Local.with_ymd_and_hms(2026, 10, 27, 18, minute, 0).single().expect("time");
+            serde_json::from_value(serde_json::json!({
+                "number": 1, "time": time, "thread_id": 1, "reason": "breakpoint", "description": null,
+                "hit_breakpoints": [], "sets": [], "silent": false, "frames": [], "watches": [], "live": true
+            }))
+            .expect("stop")
+        };
+        for minute in [5, 1, 9] {
+            let run = SavedRun {
+                name: format!("php {minute}"),
+                tag: "php".into(),
+                config: serde_json::json!({"name": "Listen", "type": "php"}),
+                commit: Some("main@abc1234".into()),
+                history: vec![stop(minute)],
+            };
+            save_run(&dir, &run, 2).expect("save");
+        }
+        let names: Vec<String> = load_saved_runs(&dir, 10).into_iter().map(|r| r.name).collect();
+        assert_eq!(names, ["php 5", "php 9"], "the oldest went");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

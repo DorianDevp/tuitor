@@ -4,7 +4,7 @@
 //! those of this one.
 
 use tuitor_core::breakpoints::SetId;
-use tuitor_core::compare::{Entry, Recording, align};
+use tuitor_core::compare::{Entry, Recording, align, differences};
 use tuitor_core::session::SessionId;
 use tuitor_core::snapshot::Snapshot;
 
@@ -106,6 +106,16 @@ impl Tab {
         Side { run: Some((run.session, run.stops.start)), ..side }
     }
 
+    /// The first hit where the two paths part: one hit it and the other not, or both did and
+    /// read different values.
+    pub fn first_difference(&self) -> Option<usize> {
+        let compared = self.compared()?;
+        compared.entries.iter().position(|entry| match (entry.a, entry.b) {
+            (Some(a), Some(b)) => differences(a, b).iter().any(|(_, delta)| delta.differs()),
+            _ => true,
+        })
+    }
+
     pub fn compared(&self) -> Option<Compared<'_>> {
         let comparison = self.comparison()?;
         let (a, b) = (self.path(comparison.a)?, self.path(comparison.b)?);
@@ -145,7 +155,7 @@ impl App {
             comparison.ok_or("nothing to compare yet: no set recorded a stop in two runs, nor two sets")?;
         let tab = self.tab_mut();
         tab.ui.comparison = Some(comparison);
-        tab.ui.compare.pos = 0;
+        tab.ui.compare.pos = tab.first_difference().unwrap_or(0);
         tab.ui.view = View::Compare;
         tab.ui.zoom = false;
         tab.set_focus(Pane::Compare);
@@ -165,7 +175,7 @@ impl App {
             comparison.b = tab.shifted(comparison.b, delta);
         }
         tab.ui.comparison = Some(comparison);
-        tab.ui.compare.pos = 0;
+        tab.ui.compare.pos = tab.first_difference().unwrap_or(0);
         self.compare_summary()
     }
 
@@ -178,8 +188,17 @@ impl App {
         let only = |a: bool| compared.entries.iter().filter(|e| !e.both() && e.a.is_some() == a).count();
         let bps = tab.engine.breakpoints();
         let side = |path: &Path<'_>| format!("{} {}", name(bps, path.set), path.run.label(sessions));
+        let commits = (compared.a.run.commit(sessions), compared.b.run.commit(sessions));
+        let across = match commits {
+            (Some(a), Some(b)) if a != b => format!("; the code of {a} against {b}"),
+            _ => String::new(),
+        };
+        let first = match tab.first_difference() {
+            Some(i) => format!("; they part at hit {} of {}", i + 1, compared.entries.len()),
+            None => "; no value differs".into(),
+        };
         Ok(format!(
-            "{} against {}: {both} hits on both, {} on the first alone, {} on the second alone",
+            "{} against {}: {both} hits on both, {} on the first alone, {} on the second alone{first}{across}",
             side(&compared.a),
             side(&compared.b),
             only(true),

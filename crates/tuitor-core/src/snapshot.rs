@@ -5,13 +5,14 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 
 use chrono::{DateTime, Local};
+use serde::{Deserialize, Serialize};
 
 use crate::breakpoints::{BreakpointId, SetId};
 
 /// Names from the scope down to a nested variable, e.g. `["Locals", "$order", "items"]`.
 pub type VarPath = Vec<String>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
     /// 1-based stop number within its session.
     pub number: u32,
@@ -33,7 +34,7 @@ pub struct Snapshot {
     pub live: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Frame {
     pub id: i64,
     pub name: String,
@@ -52,7 +53,7 @@ pub struct Frame {
     pub scopes: Option<Vec<ScopeVars>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScopeVars {
     pub name: String,
     /// Arguments/locals: fetched and shown expanded unless the user collapsed them.
@@ -63,7 +64,7 @@ pub struct ScopeVars {
     pub vars: Option<Vec<Var>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Var {
     pub name: String,
     pub value: String,
@@ -76,7 +77,7 @@ pub struct Var {
     pub children: Option<Vec<Var>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WatchValue {
     pub expr: String,
     pub value: Result<String, String>,

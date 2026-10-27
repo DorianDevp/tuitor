@@ -49,7 +49,9 @@ impl View {
             "breakpoints" | "bp" | "b" => (View::Project, Some(Pane::Breakpoints)),
             "config" => (View::Project, Some(Pane::Config)),
             other => {
-                return Err(format!("unknown view `{other}` (overview, code, history, flow, project, compare, rebase)"));
+                return Err(format!(
+                    "unknown view `{other}` (overview, code, history, flow, project, compare, rebase)"
+                ));
             }
         })
     }
