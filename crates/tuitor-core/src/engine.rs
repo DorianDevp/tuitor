@@ -24,6 +24,7 @@ use tuitor_dap::types::{
 use tuitor_dap::{AdapterCommand, Client, Event, Incoming, Transport};
 
 use crate::breakpoints::{Breakpoint, BreakpointId, Breakpoints, SetId, Toggle};
+use crate::build;
 use crate::capture::{self, Capture, canonical, short_error};
 use crate::config::{AdapterSpec, Adapters, INSTALL_HELP, LaunchConfig, Missing, RequestKind, TransportKind};
 use crate::install::Package;
@@ -114,6 +115,20 @@ enum Msg {
         expr: String,
         result: DapResult<String>,
     },
+    /// What the commands run in a failed build step's container printed, and the newest
+    /// release of a PECL package the step installs.
+    Probed {
+        sid: SessionId,
+        printed: String,
+        newest: Option<String>,
+    },
+    /// Time to look at a failed build step, once its output is in.
+    Diagnose {
+        sid: SessionId,
+        attempt: u32,
+        /// How many lines of output there were at the attempt before.
+        seen: usize,
+    },
     Threads {
         sid: SessionId,
         result: DapResult<ThreadsResponse>,
@@ -183,6 +198,8 @@ pub struct Engine {
     recordings: Option<PathBuf>,
     /// "My code only": a step into library code goes on until the project's code.
     my_code: bool,
+    /// Commands adapters asked a terminal for, which the UI runs in its own.
+    terminals: Vec<Vec<String>>,
 }
 
 impl Engine {
@@ -213,6 +230,7 @@ impl Engine {
             stamps: HashMap::new(),
             recordings,
             my_code: saved.my_code,
+            terminals: Vec::new(),
         };
         engine.restore_runs();
         (engine, rx)
@@ -777,6 +795,8 @@ impl Engine {
                 self.push_output(sid, OutputKind::Repl, &format!("{text}\n"));
                 self.notice(Some(sid), level, text);
             }
+            Msg::Probed { sid, printed, newest } => self.on_probed(sid, &printed, newest.as_deref()),
+            Msg::Diagnose { sid, attempt, seen } => self.when_output_is_in(sid, attempt, seen),
             Msg::Threads { sid, result } => {
                 if let (Ok(session), Ok(response)) = (self.session_mut(sid), result) {
                     session.threads = response.threads;
@@ -823,7 +843,10 @@ impl Engine {
             }
         });
         let Ok(session) = self.session_mut(sid) else { return };
-        let args = InitializeArguments::new(session.adapter.adapter_id());
+        let mut args = InitializeArguments::new(session.adapter.adapter_id());
+        // BuildKit gives a build step's shell through `runInTerminal`, which tuitor answers;
+        // other adapters would ask it for the program, which needs a terminal tuitor cannot give.
+        args.supports_run_in_terminal_request = session.adapter.name == "dockerfile";
         session.client = Some(client.clone());
         self.call::<Initialize>(sid, &client, args, move |result| Msg::Initialized { sid, result });
     }
@@ -971,7 +994,13 @@ impl Engine {
                 }
                 Err(err) => (Level::Error, format!("startDebugging: {err:#}")),
             },
-            "runInTerminal" => (Level::Error, NO_TERMINAL.to_owned()),
+            "runInTerminal" => match self.run_in_terminal(sid, request) {
+                Ok(()) => {
+                    let _ = client.respond(request, true, serde_json::json!({}));
+                    return;
+                }
+                Err(err) => (Level::Error, format!("{NO_TERMINAL} ({err})")),
+            },
             other => (Level::Warn, format!("tuitor does not support `{other}`")),
         };
         let _ = client.respond_error(request, &refusal);
@@ -982,6 +1011,38 @@ impl Engine {
             return self.fail(self.root(sid), refusal);
         }
         self.notice(Some(sid), level, refusal);
+    }
+
+    /// A terminal for the command an adapter gives: BuildKit's for a shell in a build step's
+    /// container. For the probes of a failed step, a pseudo-terminal of tuitor's own; else the
+    /// UI's terminal, which the user has until the shell exits. Other adapters' programs are
+    /// still turned down: tuitor's terminal is its screen while they run.
+    fn run_in_terminal(&mut self, sid: SessionId, request: &RequestMessage) -> Result<()> {
+        let args: Vec<String> = request
+            .arguments
+            .get("args")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+            .unwrap_or_default();
+        let session = self.session_mut(sid)?;
+        if session.adapter.name != "dockerfile" || args.is_empty() {
+            bail!("only a build step's shell runs in tuitor's terminal");
+        }
+        match session.probing.as_mut().filter(|p| !p.started) {
+            Some(probing) => {
+                probing.started = true;
+                let script = build::script(&probing.probes);
+                let package = build::pecl_package(&probing.failure).map(|(name, _)| name);
+                let tx = self.tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let printed = build::run_probes(&args, &script, Duration::from_secs(60));
+                    let newest = package.as_deref().and_then(build::pecl_newest);
+                    let _ = tx.send(EngineMsg(Msg::Probed { sid, printed, newest }));
+                });
+            }
+            None => self.terminals.push(args),
+        }
+        Ok(())
     }
 
     /// Starts the session an adapter asks for with `startDebugging`, as a child of the one
@@ -1173,6 +1234,10 @@ impl Engine {
                         self.notice(Some(sid), Level::Warn, body.output.trim().to_owned());
                     }
                     self.push_output(sid, kind, &body.output);
+                    // A failed build step's held lines come once it goes on: say what they add.
+                    if body.output.contains(" ERROR: ") {
+                        self.say_build_failure(sid);
+                    }
                 }
             }
             Event::Breakpoint(body) => self.breakpoints.rebind(sid, &body.breakpoint),
@@ -1330,6 +1395,116 @@ impl Engine {
         // Paths expanded while the stop was being read, or whose reading failed, load now.
         self.load_expanded(sid, Some(0), &[]);
         self.notice(Some(sid), Level::Info, format!("{name} stopped: {reason} at {location} · #{number}"));
+        if reason == "exception" && self.session_ref(sid).is_ok_and(|s| s.adapter.name == "dockerfile") {
+            self.when_output_is_in(sid, 0, 0);
+        }
+    }
+
+    /// The adapter's answers can come before its output: the stop is read while the step's
+    /// lines are still on their way. BuildKit holds a failed step's last lines, its `ERROR`
+    /// among them, while it stays stopped, so the step is looked at once its output stops
+    /// coming for a moment, and again when those lines come (see `on_event`).
+    fn when_output_is_in(&mut self, sid: SessionId, attempt: u32, seen: usize) {
+        let lines = self.output.iter().filter(|l| l.session == sid).count();
+        if (attempt > 0 && lines == seen) || attempt >= 10 {
+            return self.diagnose_build(sid);
+        }
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            let _ = tx.send(EngineMsg(Msg::Diagnose { sid, attempt: attempt + 1, seen: lines }));
+        });
+    }
+
+    /// A build step failed: says what of it failed and what the Dockerfile shows at once, then
+    /// asks the adapter for a terminal into the failed step's container to run the probes in
+    /// (see [`crate::build`]).
+    fn diagnose_build(&mut self, sid: SessionId) {
+        let Some(top) = self.session_ref(sid).ok().and_then(Session::latest).and_then(|s| s.frames.first()).cloned()
+        else {
+            return;
+        };
+        let lines: Vec<&str> = self.output.iter().filter(|l| l.session == sid).map(|l| l.text.as_str()).collect();
+        let dockerfile = top.path.as_deref().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
+        let failure = build::Failure::new(&top.name, build::instruction_start(&dockerfile, top.line), &lines);
+        let item = build::failed_item(&failure);
+        let foreign = build::foreign_variables(&dockerfile, &failure);
+        let probes = build::probes(&failure, item.as_ref().map(|i| i.0.as_str()), &foreign);
+        // What is known before any probe, in case none answers.
+        for line in build::explain(&failure, item.as_ref(), &foreign, &[], None) {
+            self.push_output(sid, OutputKind::Console, &format!("▸ {line}\n"));
+        }
+        let Some(client) = self.session_ref(sid).ok().and_then(|s| s.client.clone()) else { return };
+        if let Ok(session) = self.session_mut(sid) {
+            session.probing = Some(build::Probing {
+                failure,
+                item,
+                foreign,
+                probes,
+                started: false,
+                answered: None,
+                said: Vec::new(),
+            });
+        }
+        // `exec` asks tuitor for a terminal with `runInTerminal`; see `on_reverse_request`.
+        self.push_output(sid, OutputKind::Console, "▸ looking into the failed step's container…\n");
+        tokio::spawn(async move {
+            let _ = capture::evaluate(&client, "exec", Some(top.id), "repl").await;
+        });
+    }
+
+    /// The probes' answers: what the failure is, said on OUTPUT and the status line.
+    fn on_probed(&mut self, sid: SessionId, printed: &str, newest: Option<&str>) {
+        let Some(probing) = self.session_mut(sid).ok().and_then(|s| s.probing.as_mut()) else { return };
+        probing.answered = Some((build::answers(&probing.probes, printed), newest.map(str::to_owned)));
+        self.say_build_failure(sid);
+    }
+
+    /// Says what is known of a failed build step and was not said yet, from its output as it
+    /// is now and the probes' answers.
+    fn say_build_failure(&mut self, sid: SessionId) {
+        let Some(probing) = self.session_ref(sid).ok().and_then(|s| s.probing.clone()) else { return };
+        let Some((answers, newest)) = &probing.answered else { return };
+        let lines: Vec<&str> = self.output.iter().filter(|l| l.session == sid).map(|l| l.text.as_str()).collect();
+        let failure = build::Failure::new(&probing.failure.step, probing.failure.line, &lines);
+        let item = build::failed_item(&failure).or(probing.item.clone());
+        let said = build::explain(&failure, item.as_ref(), &probing.foreign, answers, newest.as_deref());
+        let new: Vec<String> = said.iter().filter(|l| !probing.said.contains(l)).cloned().collect();
+        if new.is_empty() {
+            return;
+        }
+        for line in &new {
+            self.push_output(sid, OutputKind::Console, &format!("▸ {line}\n"));
+        }
+        let why: Vec<&str> = said.iter().skip(1).map(|l| l.trim()).collect();
+        self.notice(Some(sid), Level::Warn, format!("{}: {}", said[0], why.join("; ")));
+        if let Some(probing) = self.session_mut(sid).ok().and_then(|s| s.probing.as_mut()) {
+            probing.said = said;
+        }
+    }
+
+    /// The commands an adapter asked a terminal for, for the UI to give them its own.
+    pub fn take_terminal(&mut self) -> Option<Vec<String>> {
+        self.terminals.pop()
+    }
+
+    /// `exec` in the failed or stopped build step: a shell in its container, in tuitor's
+    /// terminal until it exits.
+    pub fn shell(&mut self, sid: SessionId) -> Result<()> {
+        let session = self.session_ref(sid)?;
+        if session.adapter.name != "dockerfile" {
+            bail!("a shell is for a build step: start a Dockerfile's build");
+        }
+        let client = session.client.clone().ok_or_else(|| anyhow!("{} is not connected", session.name))?;
+        let frame = session
+            .live()
+            .and_then(|s| s.frames.first())
+            .map(|f| f.id)
+            .ok_or_else(|| anyhow!("the build is not stopped"))?;
+        tokio::spawn(async move {
+            let _ = capture::evaluate(&client, "exec", Some(frame), "repl").await;
+        });
+        Ok(())
     }
 
     fn on_frame_read(

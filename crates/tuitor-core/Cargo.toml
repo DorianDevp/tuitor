@@ -19,5 +19,9 @@ toml.workspace = true
 tracing.workspace = true
 yaml-rust2.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+# A pseudo-terminal for a shell in a failed build step's container, which wants a console.
+nix.workspace = true
+
 [lints]
 workspace = true

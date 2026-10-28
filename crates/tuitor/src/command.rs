@@ -119,6 +119,7 @@ pub enum Action {
     Inspect,
     Filter(Option<String>),
     MyCode,
+    Shell,
     BpExport(Option<String>),
     BpImport(Option<String>),
     /// The call trees through the SOURCE line, in PATHS.
@@ -466,6 +467,13 @@ pub static COMMANDS: &[Spec] = &[
         help: "the rebases in git's reflog, and what was decided by hand in each (a number opens that one)",
         group: Group::Breakpoints,
         parse: |a| Ok(Action::Rebase(text(a))),
+    },
+    Spec {
+        name: "shell",
+        arg: Arg::None,
+        help: "a shell in the container of the build step stopped at, failed or not; exit it to come back",
+        group: Group::Run,
+        parse: simple!(Action::Shell),
     },
     Spec {
         name: "bp export",

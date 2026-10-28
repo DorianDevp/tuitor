@@ -2,6 +2,7 @@
 //! but knows nothing about terminals; the UI renders what it exposes.
 
 pub mod breakpoints;
+pub mod build;
 mod capture;
 pub mod compare;
 pub mod compose;

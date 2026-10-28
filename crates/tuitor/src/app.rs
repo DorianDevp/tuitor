@@ -717,6 +717,22 @@ impl App {
         })
     }
 
+    /// A command an adapter asked a terminal for, for the loop to run in tuitor's: a shell in
+    /// a build step's container. It goes as an editor does, and an editor waiting goes first.
+    pub fn take_terminal(&mut self) {
+        if self.editor.is_some() {
+            return;
+        }
+        let Some(args) = self.tab_mut().engine.take_terminal() else { return };
+        let Some((program, rest)) = args.split_first() else { return };
+        self.editor = Some(Editor {
+            program: program.clone(),
+            args: rest.to_vec(),
+            terminal: true,
+            place: "the build step's container".into(),
+        });
+    }
+
     /// Says something that did not come from a command, on the status line.
     pub fn say(&mut self, message: &str) {
         self.ui.status = Some(Status { key: None, command: None, message: message.to_owned(), level: Level::Info });
@@ -852,6 +868,11 @@ impl App {
             Action::RebaseSet => self.rebase_set(),
             Action::Coverage => self.coverage(),
             Action::Filter(text) => self.filter(text),
+            Action::Shell => {
+                let sid = self.tab().ui.session.or_else(|| self.tab().active().map(|s| s.id)).ok_or("no session")?;
+                self.tab_mut().engine.shell(sid).map_err(|e| e.to_string())?;
+                Ok("a shell in the build step's container; exit it to come back".into())
+            }
             Action::BpExport(file) => self.bp_export(file),
             Action::BpImport(file) => self.bp_import(file),
             Action::MyCode => Ok(if self.tab_mut().engine.toggle_my_code() {

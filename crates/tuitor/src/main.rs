@@ -90,6 +90,18 @@ enum Command {
         #[arg(last = true)]
         args: Vec<String>,
     },
+    /// Debug a container image's build through BuildKit's debugger (docker buildx 0.38+): breakpoints on
+    /// Dockerfile lines, and a failed step explained, e.g. `tuitor build api/Dockerfile --target builder`
+    Build {
+        /// The Dockerfile; `Dockerfile` in the project's directory by default.
+        dockerfile: Option<PathBuf>,
+        /// The build context; the Dockerfile's directory by default.
+        #[arg(long)]
+        context: Option<PathBuf>,
+        /// The stage to build.
+        #[arg(long)]
+        target: Option<String>,
+    },
     /// Wait for Xdebug to connect (PHP on this machine or in a container).
     Listen {
         #[arg(long, default_value_t = 9003)]
@@ -160,6 +172,9 @@ fn main() -> Result<ExitCode> {
         }
         Some(Command::Exec { adapter, program, args }) => Some(exec_config(adapter, program, args, &workspace)?),
         Some(Command::Listen { port, maps }) => Some(listen_config(*port, maps, &workspace)?),
+        Some(Command::Build { dockerfile, context, target }) => {
+            Some(build_config(dockerfile.as_deref(), context.as_deref(), target.as_deref(), &workspace)?)
+        }
         None => match &cli.config {
             Some(name) => Some(named(&first, name)?),
             // The one configuration of the only project starts by itself.
@@ -224,6 +239,30 @@ fn exec_config(adapter: &str, program: &Path, args: &[String], workspace: &Path)
     extra.insert("cwd".into(), Value::String(workspace.display().to_string()));
     let name = program.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "program".into());
     Ok(LaunchConfig::adhoc(&name, adapter, RequestKind::Launch, extra))
+}
+
+fn build_config(
+    dockerfile: Option<&Path>,
+    context: Option<&Path>,
+    target: Option<&str>,
+    workspace: &Path,
+) -> Result<LaunchConfig> {
+    let file = workspace.join(dockerfile.unwrap_or(Path::new("Dockerfile")));
+    let file = std::fs::canonicalize(&file).with_context(|| format!("Dockerfile {}", file.display()))?;
+    let context = match context {
+        Some(dir) => {
+            std::fs::canonicalize(workspace.join(dir)).with_context(|| format!("context {}", dir.display()))?
+        }
+        None => file.parent().map_or_else(|| workspace.to_path_buf(), Path::to_path_buf),
+    };
+    let mut extra = Map::new();
+    extra.insert("dockerfile".into(), Value::String(file.display().to_string()));
+    extra.insert("contextPath".into(), Value::String(context.display().to_string()));
+    if let Some(target) = target {
+        extra.insert("target".into(), Value::String(target.to_owned()));
+    }
+    let name = format!("build {}", file.file_name().map(|n| n.to_string_lossy()).unwrap_or_default());
+    Ok(LaunchConfig::adhoc(&name, "dockerfile", RequestKind::Launch, extra))
 }
 
 fn listen_config(port: u16, maps: &[String], workspace: &Path) -> Result<LaunchConfig> {

@@ -289,6 +289,37 @@ the variables and the watches together, a level at a time: measured per hit on t
 JavaScript examples, 4 to 6 ms with gdb, 3 to 5 ms with Xdebug and about 260 ms with js-debug.
 The commands and the details are in [docs/sets.md](docs/sets.md).
 
+### Image builds
+
+`tuitor build [Dockerfile] [--context dir] [--target stage]` debugs a container image's build
+through BuildKit's own debugger, `docker buildx dap build` (buildx 0.38 and later; experimental,
+which tuitor turns on for it). A configuration of `"type": "dockerfile"` with `dockerfile`,
+`contextPath` and `target`, as Docker's VS Code extension writes it, does the same. A breakpoint
+goes on a line of the Dockerfile and the build stops there; STACK is the step, LOCALS its
+arguments and its file system.
+
+A step that fails stops the build on its line, and tuitor says what failed and why, each with
+where it knows it from. The failed step's last line seldom says either: `cp: cannot stat
+'modules/*'`, `make: *** Error 1`, `E: Unable to locate package jq`.
+
+- **What it was at.** Of the command's words, the one its output names last before the error.
+  For `docker-php-ext-install`, the extension whose source directory the step touched last: "at
+  `opcache`, 4 of the 5 it names".
+- **What the Dockerfile shows.** A variable the step uses that only an earlier RUN sets: "`$packages`
+  is set by the RUN at Dockerfile:3, a shell of its own: in this RUN it is empty".
+- **What the failed step's container shows.** tuitor runs commands in it, through BuildKit's
+  `exec`, on a pseudo-terminal of its own:
+  - whether a PHP extension is in the image already: "`php -m` in the failed step lists `Zend
+    OPcache`: PHP 8.5 has opcache in it already";
+  - where a header the compiler could not find is, and which headers are like it;
+  - whether apt has a package;
+  - what a variable holds.
+
+  For a `pecl install` it also asks PECL for the package's newest release.
+
+`/shell` opens a shell in the container of the step the build stopped at, failed or not, in
+tuitor's terminal until it exits.
+
 ### What the tests reach
 
 tuitor runs no tests and sets nothing up for them: a test runs the same code as the program,
@@ -503,7 +534,8 @@ way.
 
 - A program that needs a terminal of its own (the adapter's `runInTerminal` request, as
   `"console": "integratedTerminal"` makes js-debug send) is refused; use
-  `"internalConsole"`.
+  `"internalConsole"`. BuildKit's shell in a build step is the one command tuitor runs in its
+  terminal.
 - VS Code's `preLaunchTask` is not run: start a dev server or a build yourself.
 - STACK shows the thread that stopped; there is no list of threads to switch to.
 - No function or data breakpoints, disassembly, memory view, or setting a variable.

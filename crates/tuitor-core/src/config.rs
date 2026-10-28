@@ -40,6 +40,9 @@ pub struct AdapterSpec {
     /// Source file extensions this adapter debugs; breakpoints in them go to its sessions.
     #[serde(default)]
     pub extensions: Vec<String>,
+    /// Names of files it debugs whatever their extension: `Dockerfile`, and `Dockerfile.dev`.
+    #[serde(default)]
+    pub file_names: Vec<String>,
     /// Short label shown next to the session name.
     #[serde(default)]
     pub tag: String,
@@ -72,11 +75,29 @@ impl AdapterSpec {
             env: BTreeMap::new(),
             address: None,
             extensions: exts.iter().map(|s| (*s).to_owned()).collect(),
+            file_names: Vec::new(),
             tag: tag.to_owned(),
             adapter_id: None,
             launch_type: None,
             install_dir: None,
         }
+    }
+
+    /// BuildKit's debugger for a Dockerfile's build, `docker buildx dap build`, experimental
+    /// in buildx 0.38. Its configurations are those of Docker's VS Code extension: `dockerfile`,
+    /// `contextPath`, `target`.
+    fn dockerfile() -> Self {
+        let mut spec = Self::builtin(
+            "dockerfile",
+            TransportKind::Stdio,
+            "docker",
+            &["buildx", "dap", "build"],
+            &["dockerfile", "containerfile"],
+            "docker",
+        );
+        spec.env.insert("BUILDX_EXPERIMENTAL".into(), "1".into());
+        spec.file_names = vec!["Dockerfile".into(), "Containerfile".into()];
+        spec
     }
 
     /// js-debug's standalone server, for one of the debug types its VS Code extension
@@ -101,9 +122,15 @@ impl AdapterSpec {
     }
 
     pub fn handles(&self, path: &Path) -> bool {
-        path.extension()
+        let by_extension = path
+            .extension()
             .and_then(|e| e.to_str())
-            .is_some_and(|ext| self.extensions.iter().any(|e| e.eq_ignore_ascii_case(ext)))
+            .is_some_and(|ext| self.extensions.iter().any(|e| e.eq_ignore_ascii_case(ext)));
+        // A file named for what it is, as `Dockerfile` or `Dockerfile.dev` is.
+        let name = path.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+        let by_name =
+            self.file_names.iter().map(|n| n.to_lowercase()).any(|n| name == n || name.starts_with(&format!("{n}.")));
+        by_extension || by_name
     }
 
     pub fn adapter_id(&self) -> &str {
@@ -277,6 +304,7 @@ impl Default for Adapters {
             AdapterSpec::js_debug("pwa-chrome", &js_debug, "pwa-chrome"),
             AdapterSpec::js_debug("chrome", &js_debug, "pwa-chrome"),
             AdapterSpec::delve(),
+            AdapterSpec::dockerfile(),
         ];
         Self { specs: specs.into_iter().map(|s| (s.name.clone(), s)).collect() }
     }
@@ -549,6 +577,17 @@ mod tests {
                 assert!(spec.handles(Path::new(file)), "{name} should handle {file}");
             }
         }
+    }
+
+    #[test]
+    fn a_dockerfile_goes_to_buildkit_by_its_name() {
+        let adapters = Adapters::default();
+        let docker = adapters.get("dockerfile").expect("dockerfile");
+        for file in ["/w/Dockerfile", "/w/api/Dockerfile.dev", "/w/web.Dockerfile", "/w/Containerfile"] {
+            assert!(docker.handles(Path::new(file)), "{file}");
+        }
+        assert!(!docker.handles(Path::new("/w/docker-compose.yaml")));
+        assert_eq!(docker.env.get("BUILDX_EXPERIMENTAL").map(String::as_str), Some("1"));
     }
 
     #[test]

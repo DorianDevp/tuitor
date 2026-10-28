@@ -87,26 +87,7 @@ async fn event_loop(
                         let result = suspend(terminal, input).await?;
                         app.resumed(result);
                     }
-                    let resume = std::mem::take(&mut app.resume_editor).then(|| stopped.take()).flatten();
-                    let turn = match (resume, app.editor.take()) {
-                        (Some(job), _) => Some(in_terminal(terminal, input, Ok(job)).await?),
-                        (None, Some(editor)) if editor.terminal => {
-                            Some(in_terminal(terminal, input, Err(&editor)).await?)
-                        }
-                        (None, Some(editor)) => {
-                            beside.spawn(editor.run_beside());
-                            None
-                        }
-                        (None, None) => None,
-                    };
-                    match turn {
-                        Some(Turn::Stopped(job)) => {
-                            app.editor_stopped(job.name());
-                            *stopped = Some(job);
-                        }
-                        Some(Turn::Ended(result)) => app.edited(result),
-                        None => {}
-                    }
+                    run_editor(terminal, input, app, &mut beside, stopped).await?;
                 }
                 Some(Ok(_)) => {}
                 Some(Err(err)) => return Err(err.into()),
@@ -118,6 +99,9 @@ async fn event_loop(
                     app.on_engine(tab, msg);
                 }
                 app.after_engine();
+                // An adapter that asked for a terminal, as BuildKit does for a build step's shell.
+                app.take_terminal();
+                run_editor(terminal, input, app, &mut beside, stopped).await?;
             }
             _ = tick.tick() => {}
             _ = tokio::time::sleep(frame.unwrap_or_default()), if frame.is_some() => {}
@@ -125,6 +109,36 @@ async fn event_loop(
             code = signals.recv() => return Ok(code),
         }
     }
+}
+
+/// Runs the editor, or the command, the app asked for: in tuitor's terminal, which it has until
+/// it stops or exits, or beside tuitor; or resumes the one that stopped.
+async fn run_editor(
+    terminal: &mut DefaultTerminal,
+    input: &mut EventStream,
+    app: &mut App,
+    beside: &mut JoinSet<Result<String, String>>,
+    stopped: &mut Option<Job>,
+) -> Result<()> {
+    let resume = std::mem::take(&mut app.resume_editor).then(|| stopped.take()).flatten();
+    let turn = match (resume, app.editor.take()) {
+        (Some(job), _) => Some(in_terminal(terminal, input, Ok(job)).await?),
+        (None, Some(editor)) if editor.terminal => Some(in_terminal(terminal, input, Err(&editor)).await?),
+        (None, Some(editor)) => {
+            beside.spawn(editor.run_beside());
+            None
+        }
+        (None, None) => None,
+    };
+    match turn {
+        Some(Turn::Stopped(job)) => {
+            app.editor_stopped(job.name());
+            *stopped = Some(job);
+        }
+        Some(Turn::Ended(result)) => app.edited(result),
+        None => {}
+    }
+    Ok(())
 }
 
 /// An editor that stopped, hung up when tuitor's loop ends however it ends.

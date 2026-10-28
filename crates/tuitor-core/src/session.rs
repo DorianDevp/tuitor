@@ -73,6 +73,9 @@ pub struct Session {
     /// Steps left to take on into the program's own code, after a step into library code with
     /// "my code only": the stops in between are not the user's.
     pub(crate) skipping: u32,
+    /// A failed build step being looked into: the commands to run in its container once the
+    /// adapter gives a terminal for them, and what is known of the failure.
+    pub(crate) probing: Option<crate::build::Probing>,
     pub exception_filters: Vec<ExceptionFilter>,
     /// Variable paths the user expanded; re-fetched at every stop.
     pub expanded: BTreeSet<VarPath>,
@@ -137,6 +140,7 @@ impl Session {
             saved: false,
             held_since: None,
             skipping: 0,
+            probing: None,
             exception_filters: Vec::new(),
             expanded: BTreeSet::new(),
             sources: HashMap::new(),
