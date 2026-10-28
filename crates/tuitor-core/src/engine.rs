@@ -833,6 +833,18 @@ impl Engine {
             Ok(connection) => connection,
             Err(err) => return self.fail(sid, format!("adapter: {err}")),
         };
+        // A session that ended while it connected, as a child does whose parent ended, is not
+        // started: its connection is closed.
+        let parent_ended = |e: &Engine| {
+            e.session(sid).and_then(|s| s.parent).is_some_and(|p| !e.session(p).is_some_and(Session::is_alive))
+        };
+        if !self.session(sid).is_some_and(Session::is_alive) || parent_ended(self) {
+            if let Ok(session) = self.session_mut(sid) {
+                session.state = SessionState::Exited;
+                session.client = Some(client);
+            }
+            return self.release(sid);
+        }
         let tx = self.tx.clone();
         tokio::spawn(async move {
             while let Some(incoming) = incoming.recv().await {
@@ -1107,6 +1119,16 @@ impl Engine {
 
     /// Ends the child sessions of a parent that ended: they ran part of its program.
     fn end_children(&mut self, parent: SessionId) {
+        // A child still connecting ends here: its connection is closed as it comes
+        // (`on_connected`), instead of running on as the child of a session that ended.
+        let connecting: Vec<SessionId> =
+            self.children(parent).filter(|c| c.is_alive() && c.client.is_none()).map(|c| c.id).collect();
+        for sid in connecting {
+            if let Ok(session) = self.session_mut(sid) {
+                session.state = SessionState::Exited;
+            }
+            self.log_event(sid, "closed", "its parent ended before it connected".into());
+        }
         let children: Vec<(SessionId, Client)> =
             self.children(parent).filter(|c| c.is_alive()).filter_map(|c| Some((c.id, c.client.clone()?))).collect();
         for (sid, client) in children {
