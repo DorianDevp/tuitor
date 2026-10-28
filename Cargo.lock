@@ -1607,6 +1607,7 @@ dependencies = [
  "chrono",
  "dirs",
  "flate2",
+ "nix",
  "serde",
  "serde_json",
  "thiserror",
@@ -1623,6 +1624,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "futures",
+ "nix",
  "serde",
  "serde_json",
  "thiserror",

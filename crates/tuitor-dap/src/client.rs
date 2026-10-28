@@ -296,6 +296,12 @@ impl Client {
     pub async fn kill_and_wait(&self) {
         let child = self.inner.child.lock().unwrap_or_else(PoisonError::into_inner).take();
         if let Some(mut child) = child {
+            // The adapter's own process group goes with it: `docker buildx dap` runs as the
+            // docker CLI and its buildx plugin, and a plugin left over goes on holding a build.
+            #[cfg(unix)]
+            if let Some(pid) = child.id().and_then(|id| i32::try_from(id).ok()) {
+                let _ = nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pid), nix::sys::signal::Signal::SIGKILL);
+            }
             // An error means it had exited already.
             let _ = child.kill().await;
         }

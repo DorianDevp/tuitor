@@ -15,5 +15,8 @@ tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+nix.workspace = true
+
 [lints]
 workspace = true
