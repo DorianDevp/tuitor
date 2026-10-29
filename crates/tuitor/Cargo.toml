@@ -1,9 +1,18 @@
 [package]
 name = "tuitor"
-description = "A terminal debugger built like a trading terminal"
+description = "A terminal debugger for every language: it records every stop, so you can step back through them and compare runs."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "../../README.md"
+# Only what builds the binary: the examples, assets and docs stay in the repository.
+include = ["src/**/*", "Cargo.toml", "../../README.md"]
 
 [dependencies]
 tuitor-core.workspace = true
