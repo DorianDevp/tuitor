@@ -154,7 +154,7 @@ jobs:
       # Links between the book's pages and to its files, not the web, so that a site being down
       # fails no pull request. The demos are left out: the visuals workflow records them once a
       # change is on master. So is print.html, where mdBook leaves the paths of <video> as the
-      # page they came from had them.
+      # page they came from had them, and 404.html, whose links go from the site's root (/tuitor/).
       - uses: lycheeverse/lychee-action@v2
         with:
           args: >-
@@ -162,6 +162,7 @@ jobs:
             --root-dir "${{ github.workspace }}/docs/book"
             --exclude "assets/demo/"
             --exclude-path docs/book/print.html
+            --exclude-path docs/book/404.html
             "docs/book/**/*.html"
           fail: true
       - name: The pictures and demos views.toml names exist
