@@ -1,0 +1,30 @@
+name: Adapter or language request
+description: Support for a debug adapter or language tuitor does not have built in.
+labels: [adapter]
+body:
+  - type: input
+    id: language
+    attributes:
+      label: Language or runtime
+      placeholder: Python
+    validations:
+      required: true
+  - type: input
+    id: adapter
+    attributes:
+      label: DAP adapter
+      description: Its name and where it is published.
+      placeholder: debugpy, https://github.com/microsoft/debugpy
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: Did you try it through `adapters.toml`?
+      description: What worked and what did not. See https://doriandevp.github.io/tuitor/configuration.html#adapterstoml
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Contributing
+      options:
+        - label: I can help add it (see CONTRIBUTING.md, "Add an adapter").
