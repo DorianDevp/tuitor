@@ -1,0 +1,14 @@
+[
+  {
+    "key": "alt+f9",
+    "command": "workbench.action.tasks.runTask",
+    "args": "tuitor: toggle breakpoint",
+    "when": "editorTextFocus"
+  },
+  {
+    "key": "alt+f8",
+    "command": "workbench.action.tasks.runTask",
+    "args": "tuitor: show line",
+    "when": "editorTextFocus"
+  }
+]

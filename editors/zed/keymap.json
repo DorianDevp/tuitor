@@ -1,0 +1,9 @@
+[
+  {
+    "context": "Editor",
+    "bindings": {
+      "alt-f9": ["task::Spawn", { "task_name": "tuitor: toggle breakpoint" }],
+      "alt-f8": ["task::Spawn", { "task_name": "tuitor: show line" }]
+    }
+  }
+]

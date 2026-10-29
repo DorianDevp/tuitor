@@ -1,0 +1,4 @@
+[
+  { "keys": ["alt+f9"], "command": "tuitor", "args": { "command": "bp toggle" } },
+  { "keys": ["alt+f8"], "command": "tuitor", "args": { "command": "show" } }
+]

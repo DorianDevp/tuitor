@@ -1,0 +1,5 @@
+# tuitor from Helix (25.01 or newer, for %{…} expansions): add to ~/.config/helix/config.toml.
+# F9 toggles a breakpoint on the cursor's line, F8 shows that line in tuitor.
+[keys.normal]
+F9 = ":sh tuitor send bp toggle %{buffer_name}:%{cursor_line}"
+F8 = ":sh tuitor send show %{buffer_name}:%{cursor_line}"
