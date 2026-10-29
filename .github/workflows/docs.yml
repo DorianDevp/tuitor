@@ -1,0 +1,54 @@
+# The documentation site: docs/ built with mdBook, with llms-full.txt and sitemap.xml, published
+# to GitHub Pages (https://doriandevp.github.io/tuitor/). Pages must use "GitHub Actions" as
+# its source (Settings → Pages).
+name: Docs
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "docs/**"
+      - "assets/**"
+      - "README.md"
+      - "CHANGELOG.md"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deployment at a time, and one that started is not cut short.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: mdbook@0.5.4
+      - run: mdbook build docs
+      - name: llms-full.txt and sitemap.xml
+        run: |
+          if [ -x docs/llms-full.sh ]; then docs/llms-full.sh; fi
+          if [ -x docs/sitemap.sh ]; then docs/sitemap.sh; fi
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/book
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,10 +1,8 @@
 # Adapters
 
-tuitor starts the adapter that a launch configuration's `type` names, talks the Debug
-Adapter Protocol to it, and ends it with the session. Programs are looked up on `PATH`
-only. Adapters released as VS Code extensions are unpacked into `<adapters>`:
-`${XDG_DATA_HOME:-~/.local/share}/tuitor/adapters` (macOS:
-`~/Library/Application Support/tuitor/adapters`).
+A launch configuration's `type` picks the adapter. Programs are looked up on `PATH`; adapters
+released as VS Code extensions are unpacked into `<adapters>`, which is
+`${XDG_DATA_HOME:-~/.local/share}/tuitor/adapters` (macOS: `~/Library/Application Support/tuitor/adapters`).
 
 | type | runs | debugs |
 |---|---|---|
@@ -15,10 +13,10 @@ only. Adapters released as VS Code extensions are unpacked into `<adapters>`:
 | `pwa-node`, `node` | `node <adapters>/js-debug/js-debug/src/dapDebugServer.js ${port} 127.0.0.1` | JavaScript, TypeScript in Node.js |
 | `pwa-chrome`, `chrome` | the same js-debug | JavaScript, TypeScript in Chrome or Chromium |
 | `go` | `dlv dap --listen 127.0.0.1:${port}` (Delve) | Go |
+| `dockerfile` | `docker buildx dap build` (BuildKit) | Dockerfile builds ([guide](guides/dockerfile.md)) |
 
-`tuitor configs` prints this list as it resolves on your machine, and
-`~/.config/tuitor/adapters.toml` overrides or adds entries (see
-[configuration.md](configuration.md#adapterstoml)).
+`tuitor configs` prints this list as resolved on your machine. `~/.config/tuitor/adapters.toml`
+overrides or adds entries ([Configuration](configuration.md#adapterstoml)).
 
 ## js-debug
 
@@ -41,7 +39,7 @@ and CONFIG points out one that names none.
 tuitor does not run VS Code's `preLaunchTask`: start a dev server such as `ng serve`
 yourself. For Angular's application builder no `sourceMapPathOverrides` are needed;
 `"webRoot": "${workspaceFolder}"` puts `src/app/…` in the project
-([`examples/angular`](../examples/angular)).
+([`examples/angular`](https://github.com/DorianDevp/tuitor/tree/master/examples/angular)).
 
 ## Delve
 
@@ -138,12 +136,9 @@ directory on `PATH`.
 
 ## Processes
 
-An adapter tuitor starts runs in a process group of its own, so that ctrl-c at the
-terminal and the terminal closing reach tuitor alone, which then ends the adapter in
-order. It gets a temporary directory of its own as `TMPDIR`, `tuitor-<pid>-<n>` in
-`$XDG_RUNTIME_DIR` or else the system's temporary directory, which the programs it starts
-inherit and tuitor removes once the adapter has exited; js-debug would otherwise leave the
-profile of every browser it started there. `env` in `adapters.toml` can set another
-`TMPDIR`. SIGTERM, SIGHUP and SIGINT end tuitor as `Q` does: it disconnects the adapters,
-removes their directories and puts the terminal back, then exits with 128 and the
-signal's number.
+- Each adapter runs in its own process group, so ctrl-c and a closing terminal reach only tuitor,
+  which then ends the adapter in order.
+- Each adapter gets its own `TMPDIR` (`tuitor-<pid>-<n>` in `$XDG_RUNTIME_DIR` or the system
+  temporary directory), removed when it exits. `env` in `adapters.toml` can override it.
+- SIGTERM, SIGHUP and SIGINT end tuitor like `Q`: adapters disconnected, terminal restored, exit
+  code 128 + the signal number.
