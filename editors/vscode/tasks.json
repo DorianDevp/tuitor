@@ -1,0 +1,23 @@
+{
+  // tuitor from VS Code, Cursor or VSCodium: copy into .vscode/tasks.json (or your user tasks),
+  // and the bindings in keybindings.json into your keybindings.
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "tuitor: toggle breakpoint",
+      "type": "process",
+      "command": "tuitor",
+      "args": ["send", "bp", "toggle", "${file}:${lineNumber}"],
+      "presentation": { "reveal": "silent", "close": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "tuitor: show line",
+      "type": "process",
+      "command": "tuitor",
+      "args": ["send", "show", "${file}:${lineNumber}"],
+      "presentation": { "reveal": "silent", "close": true },
+      "problemMatcher": []
+    }
+  ]
+}

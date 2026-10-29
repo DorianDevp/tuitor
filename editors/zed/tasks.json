@@ -1,0 +1,18 @@
+// tuitor from Zed: copy into ~/.config/zed/tasks.json, and the bindings in keymap.json into
+// ~/.config/zed/keymap.json.
+[
+  {
+    "label": "tuitor: toggle breakpoint",
+    "command": "tuitor send bp toggle \"$ZED_FILE:$ZED_ROW\"",
+    "allow_concurrent_runs": true,
+    "reveal": "never",
+    "hide": "on_success"
+  },
+  {
+    "label": "tuitor: show line",
+    "command": "tuitor send show \"$ZED_FILE:$ZED_ROW\"",
+    "allow_concurrent_runs": true,
+    "reveal": "never",
+    "hide": "on_success"
+  }
+]
