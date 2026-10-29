@@ -128,7 +128,9 @@ jobs:
       - name: Install the servers
         run: |
           go install golang.org/x/tools/gopls@latest
-          npm install --global --no-audit --no-fund typescript typescript-language-server intelephense
+          # typescript-language-server runs tsserver.js, which TypeScript 7 no longer ships; the
+          # TypeScript example pins 7, so it falls back to this one.
+          npm install --global --no-audit --no-fund typescript@6 typescript-language-server intelephense
           npm ci --prefix examples/typescript --no-audit --no-fund
           npm ci --prefix examples/angular --no-audit --no-fund
       - name: Run the tests
