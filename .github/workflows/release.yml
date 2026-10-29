@@ -21,7 +21,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - id: version
         run: |
           version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "tuitor") | .version')
@@ -54,7 +54,7 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
       TARGET: ${{ matrix.target }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -75,7 +75,7 @@ jobs:
       - name: Smoke test
         if: matrix.target != 'x86_64-apple-darwin'
         run: target/${{ matrix.target }}/release/tuitor --version
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.target }}
           path: |
@@ -93,8 +93,8 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: dist-*
           path: dist
@@ -144,7 +144,7 @@ jobs:
             echo "::notice::CARGO_REGISTRY_TOKEN is not set: crates.io skipped"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         if: steps.gate.outputs.skip != 'true'
       - uses: dtolnay/rust-toolchain@stable
         if: steps.gate.outputs.skip != 'true'
@@ -177,9 +177,9 @@ jobs:
             echo "::notice::HOMEBREW_TAP_TOKEN is not set: the Homebrew tap is not updated"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         if: steps.gate.outputs.skip != 'true'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         if: steps.gate.outputs.skip != 'true'
         with:
           pattern: dist-*
@@ -226,9 +226,9 @@ jobs:
             echo "::notice::$VERSION is a pre-release: the AUR is left alone"
             echo "skip=true" >> "$GITHUB_OUTPUT" ;;
           esac
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         if: steps.gate.outputs.skip != 'true'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         if: steps.gate.outputs.skip != 'true' && matrix.package == 'tuitor-bin'
         with:
           pattern: dist-*-linux-*
