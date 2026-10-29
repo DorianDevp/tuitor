@@ -8,6 +8,8 @@
 - **No** function or data breakpoints, disassembly, memory view, or setting a variable.
 - **PATHS** covers PHP, TypeScript/JavaScript, Rust and Go (four language servers); not C/C++. It sees
   only what the server sees (see [PATHS](sets.md#paths)).
+  For TypeScript 7 projects, install TypeScript 6 too (`npm i -g typescript@6`):
+  typescript-language-server needs its `tsserver.js`, which TypeScript 7 no longer ships.
 - **Terminal:** needs truecolour and Unicode symbols; otherwise colours are approximate and glyphs
   missing.
 - **Platforms:** developed and tested on Linux; macOS and Windows are untested.
