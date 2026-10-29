@@ -18,6 +18,8 @@ mod paths;
 mod picker;
 mod places;
 mod rebase;
+#[cfg(unix)]
+mod remote;
 mod runner;
 mod script;
 mod search;
@@ -112,6 +114,13 @@ enum Command {
     },
     /// Show the projects, launch configurations and adapters tuitor sees.
     Configs,
+    /// Run a command line in the tuitor that has this directory's project, e.g. from an editor:
+    /// `tuitor send bp toggle src/main.rs:12`, `tuitor send show src/main.rs:12`.
+    Send {
+        /// The command line, as typed after `/` in tuitor.
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        words: Vec<String>,
+    },
     /// Check what debugging needs: each adapter, and what the project's configurations need
     /// (a free port, Xdebug, a browser). Exits with 1 when something needed is missing.
     Doctor {
@@ -140,6 +149,13 @@ enum Command {
 
 fn main() -> Result<ExitCode> {
     let cli = Cli::parse();
+    // A client of another tuitor, which needs none of what follows.
+    if let Some(Command::Send { words }) = &cli.command {
+        #[cfg(unix)]
+        return remote::send(words);
+        #[cfg(not(unix))]
+        bail!("`tuitor send` needs a Unix socket, which this system has not: {}", words.join(" "));
+    }
     let config_dir = dirs::config_dir().map(|d| d.join("tuitor"));
     let _log = init_logging();
 
@@ -152,6 +168,8 @@ fn main() -> Result<ExitCode> {
     let others = cli.open.iter().map(|dir| directory(dir)).collect::<Result<Vec<_>>>()?;
 
     let start = match &cli.command {
+        // Answered above.
+        Some(Command::Send { .. }) => None,
         Some(Command::Configs) => {
             let mut projects = vec![first];
             projects.extend(others.iter().map(|dir| Project::open(dir, &store, None)));
