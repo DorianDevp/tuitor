@@ -609,9 +609,7 @@ mod tests {
         let printed = "@@tuitor 0\n[]\n@@tuitor end\n";
         let said = explain(&f, None, &foreign, &answers(&probes, printed), None).join("\n");
         assert!(
-            said.contains(
-                "`$packages` is set by the RUN at Dockerfile:3, a shell of its own: in this RUN it is empty"
-            ),
+            said.contains("`$packages` is set by the RUN at Dockerfile:3, a shell of its own: in this RUN it is empty"),
             "{said}"
         );
     }

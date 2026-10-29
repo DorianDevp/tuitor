@@ -579,10 +579,7 @@ f3\0HEAD@{5}\0commit: third
         repo.commit("start");
         repo.git(&["checkout", "-q", "-b", "feature"]);
         repo.write("total.php", "<?php\nfunction total($o) {\n    $sum = $o->base;\n    return $sum;\n}\n");
-        repo.write(
-            "Dockerfile",
-            "FROM alpine\nRUN apk add curl nginx\nCOPY ./site.conf /etc/site.conf\nCOPY . /app\n",
-        );
+        repo.write("Dockerfile", "FROM alpine\nRUN apk add curl nginx\nCOPY ./site.conf /etc/site.conf\nCOPY . /app\n");
         repo.commit("feature: start from the base");
         repo.git(&["checkout", "-q", "main"]);
         repo.write("total.php", "<?php\nfunction total($o) {\n    $sum = $o->opening;\n    return $sum;\n}\n");
