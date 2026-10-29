@@ -730,6 +730,7 @@ impl App {
             args: rest.to_vec(),
             terminal: true,
             place: "the build step's container".into(),
+            stdin: None,
         });
     }
 
