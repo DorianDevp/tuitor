@@ -153,6 +153,8 @@ pub enum Action {
     ScrollDown,
     ScrollUp,
     Line(Option<u32>),
+    /// A file at a line in SOURCE, as an editor sends it with `tuitor send show`.
+    Show(Option<Location>),
     Top,
     Bottom,
     Left,
@@ -693,6 +695,13 @@ pub static COMMANDS: &[Spec] = &[
         help: "go to line n in SOURCE; a number alone does the same (:42)",
         group: Group::Navigate,
         parse: |a| a.map(line_number).transpose().map(Action::Line),
+    },
+    Spec {
+        name: "show",
+        arg: Arg::Required("‹file:line›"),
+        help: "show a file at a line in SOURCE, as an editor asks with `tuitor send show`",
+        group: Group::Navigate,
+        parse: |arg| arg.map(Location::parse).transpose().map(Action::Show),
     },
     Spec {
         name: "top",

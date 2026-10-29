@@ -952,6 +952,10 @@ impl App {
                 let Some(line) = line else { return self.prompt(spec) };
                 self.go_to_line(line)
             }
+            Action::Show(location) => {
+                let Some(location) = location else { return self.prompt(spec) };
+                self.show(location)
+            }
             Action::Top => self.nav(isize::MIN / 2),
             Action::Bottom => self.nav(isize::MAX / 2),
             Action::Left => self.horizontal(-1),
@@ -1965,6 +1969,50 @@ impl App {
         tab.ui.zoom = false;
         tab.browse(path, place.line);
         Ok(format!("{shown}:{}{printed}", place.line))
+    }
+
+    /// `show file:line`: the file at the line in SOURCE, in CODE.
+    fn show(&mut self, location: Location) -> Outcome {
+        let path = match &location.file {
+            Some(file) => self.resolve_file(file)?,
+            None => self.breakpoint_file()?,
+        };
+        let shown = project_relative(&path, self.tab().engine.workspace());
+        let tab = self.tab_mut();
+        tab.ui.view = View::Code;
+        tab.ui.zoom = false;
+        tab.browse(path, location.line);
+        Ok(format!("{shown}:{}", location.line))
+    }
+
+    /// A command line another program sent, `tuitor send` from an editor: it runs in the tab
+    /// whose project the sender is in, which becomes the active one. When no tab's project
+    /// holds the sender, it runs in the active tab only if the request says to.
+    #[cfg(unix)]
+    pub fn remote(&mut self, request: &crate::remote::Request) -> crate::remote::Reply {
+        use crate::remote::Reply;
+        let holder = self
+            .tabs
+            .iter()
+            .filter(|(_, tab)| {
+                let workspace = tab.engine.workspace();
+                !workspace.as_os_str().is_empty() && request.cwd.starts_with(workspace)
+            })
+            .max_by_key(|(_, tab)| tab.engine.workspace().components().count())
+            .map(|(id, _)| id);
+        match holder {
+            Some(id) => {
+                self.tabs.activate(id);
+            }
+            None if !request.any => return Reply::Elsewhere,
+            None => {}
+        }
+        self.execute(&request.line, None);
+        match &self.ui.status {
+            Some(Status { message, level: Level::Info, .. }) => Reply::Done(message.clone()),
+            Some(Status { message, .. }) => Reply::Refused(message.clone()),
+            None => Reply::Done(String::new()),
+        }
     }
 
     /// The place the line under the cursor of OUTPUT or EVENTS names, if it names one, and the

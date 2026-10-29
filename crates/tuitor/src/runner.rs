@@ -26,6 +26,12 @@ use crate::ui;
 /// Messages of every tab's engine, each labelled with its tab.
 pub type Inbox = UnboundedReceiver<(TabId, EngineMsg)>;
 
+#[cfg(unix)]
+type Remote = crate::remote::Asked;
+/// Nothing comes from other programs without Unix sockets.
+#[cfg(not(unix))]
+type Remote = std::convert::Infallible;
+
 /// Runs until the user quits or a signal says to, then ends every session; returns the
 /// status to exit with.
 pub async fn run(
@@ -34,8 +40,20 @@ pub async fn run(
     start: Option<LaunchConfig>,
     mut signals: Signals,
 ) -> Result<ExitCode> {
+    // Command lines from editors, `tuitor send`; the socket goes when the listener is dropped.
+    #[cfg(unix)]
+    let (_listener, mut remote) = match crate::remote::listen() {
+        Ok((listener, rx)) => (Some(listener), rx),
+        Err(err) => {
+            tracing::warn!("not listening for `tuitor send`: {err:#}");
+            app.execute_error(&format!("`tuitor send` cannot reach this tuitor: {err:#}"));
+            (None, tokio::sync::mpsc::unbounded_channel().1)
+        }
+    };
+    #[cfg(not(unix))]
+    let mut remote = tokio::sync::mpsc::unbounded_channel::<Remote>().1;
     let mut terminal = ratatui::init();
-    let result = event_loop(&mut terminal, &mut app, &mut inbox, start, &mut signals).await;
+    let result = event_loop(&mut terminal, &mut app, &mut inbox, &mut remote, start, &mut signals).await;
     restore(terminal);
     app.shutdown().await;
     result
@@ -55,6 +73,7 @@ async fn event_loop(
     terminal: &mut DefaultTerminal,
     app: &mut App,
     inbox: &mut Inbox,
+    remote: &mut UnboundedReceiver<Remote>,
     config: Option<LaunchConfig>,
     signals: &mut Signals,
 ) -> Result<ExitCode> {
@@ -102,6 +121,20 @@ async fn event_loop(
                 // An adapter that asked for a terminal, as BuildKit does for a build step's shell.
                 app.take_terminal();
                 run_editor(terminal, input, app, &mut beside, stopped).await?;
+            }
+            Some(asked) = remote.recv() => {
+                #[cfg(unix)]
+                {
+                    let reply = app.remote(&asked.request);
+                    let _ = asked.answer.send(reply);
+                    if std::mem::take(&mut app.suspend) {
+                        let result = suspend(terminal, input).await?;
+                        app.resumed(result);
+                    }
+                    run_editor(terminal, input, app, &mut beside, stopped).await?;
+                }
+                #[cfg(not(unix))]
+                match asked {}
             }
             _ = tick.tick() => {}
             _ = tokio::time::sleep(frame.unwrap_or_default()), if frame.is_some() => {}
