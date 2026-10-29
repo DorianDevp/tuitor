@@ -1,0 +1,260 @@
+# A release, from a tag vX.Y.Z whose version is the workspace's: binaries for Linux (static,
+# musl) and macOS, a GitHub release with the CHANGELOG.md section as notes, then crates.io,
+# the Homebrew tap, the AUR and nothing else. Each publish job is skipped, with a notice, while
+# its secret is not set; see packaging/RELEASING.md.
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    name: tag matches Cargo.toml
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "tuitor") | .version')
+          tag=${GITHUB_REF_NAME#v}
+          if [ "$version" != "$tag" ]; then
+            echo "::error::tag $GITHUB_REF_NAME is not the version in Cargo.toml ($version)"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build ${{ matrix.target }}
+    needs: version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Static: one binary for every distribution, and for tuitor-bin and Homebrew on Linux.
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-24.04
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+          # Built, not tested: tuitor is developed and tested on Linux.
+          - target: aarch64-apple-darwin
+            os: macos-15
+          - target: x86_64-apple-darwin
+            os: macos-15
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: cargo build --release --locked -p tuitor --target "$TARGET"
+      - name: Package
+        shell: bash
+        run: |
+          name="tuitor-$VERSION-$TARGET"
+          mkdir -p "dist/$name"
+          cp "target/$TARGET/release/tuitor" "dist/$name/"
+          strip "dist/$name/tuitor"
+          cp README.md LICENSE CHANGELOG.md "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          cd dist
+          if command -v sha256sum >/dev/null; then sha256sum "$name.tar.gz"; else shasum -a 256 "$name.tar.gz"; fi > "$name.tar.gz.sha256"
+          cat "$name.tar.gz.sha256"
+      # A binary that does not start is not released.
+      - name: Smoke test
+        if: matrix.target != 'x86_64-apple-darwin'
+        run: target/${{ matrix.target }}/release/tuitor --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
+  release:
+    name: GitHub release
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+      - name: Notes from CHANGELOG.md
+        run: |
+          awk -v v="$VERSION" '
+            /^## \[/ { if (on) exit; if (index($0, "## [" v "]") == 1) { on = 1; next } }
+            on
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::warning::CHANGELOG.md has no section [$VERSION]"
+            echo "tuitor $VERSION" > notes.md
+          fi
+          cat >> notes.md <<EOF
+
+          ## Install
+
+          - Linux, static: \`tuitor-$VERSION-x86_64-unknown-linux-musl.tar.gz\`, \`tuitor-$VERSION-aarch64-unknown-linux-musl.tar.gz\`
+          - macOS (built but not yet tested): \`tuitor-$VERSION-aarch64-apple-darwin.tar.gz\`, \`tuitor-$VERSION-x86_64-apple-darwin.tar.gz\`
+          - \`cargo install tuitor\`, \`brew install DorianDevp/tuitor/tuitor\`, \`yay -S tuitor-bin\`, \`nix run github:DorianDevp/tuitor\`
+
+          Each archive has a \`.sha256\` beside it.
+          EOF
+          cat notes.md
+      - name: Create or update the release
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            prerelease=()
+            case $VERSION in *-*) prerelease=(--prerelease) ;; esac
+            gh release create "$GITHUB_REF_NAME" dist/* --title "tuitor $VERSION" --notes-file notes.md "${prerelease[@]}"
+          fi
+
+  crates-io:
+    name: crates.io
+    needs: [version, release]
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - id: gate
+        run: |
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "::notice::CARGO_REGISTRY_TOKEN is not set: crates.io skipped"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v5
+        if: steps.gate.outputs.skip != 'true'
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.gate.outputs.skip != 'true'
+      # In the order they depend on each other; a crate already at this version is left, so
+      # that the job can run again after a failure.
+      - name: Publish
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          for crate in tuitor-dap tuitor-core tuitor-code tuitor; do
+            if curl -fsS -A "tuitor-release (https://github.com/DorianDevp/tuitor)" \
+              "https://crates.io/api/v1/crates/$crate/$VERSION" >/dev/null 2>&1; then
+              echo "$crate $VERSION is on crates.io already"
+              continue
+            fi
+            cargo publish --locked -p "$crate"
+          done
+
+  homebrew:
+    name: Homebrew tap
+    needs: [version, release]
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TAP: ${{ vars.HOMEBREW_TAP || 'DorianDevp/homebrew-tuitor' }}
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - id: gate
+        run: |
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "::notice::HOMEBREW_TAP_TOKEN is not set: the Homebrew tap is not updated"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v5
+        if: steps.gate.outputs.skip != 'true'
+      - uses: actions/download-artifact@v4
+        if: steps.gate.outputs.skip != 'true'
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+      - name: Write the formula
+        if: steps.gate.outputs.skip != 'true'
+        run: packaging/render.sh packaging/homebrew/tuitor.rb.tmpl dist > tuitor.rb && cat tuitor.rb
+      - name: Push it to the tap
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          git clone --depth 1 "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${TAP}.git" tap
+          mkdir -p tap/Formula
+          cp tuitor.rb tap/Formula/tuitor.rb
+          cd tap
+          git add Formula/tuitor.rb
+          if git diff --cached --quiet; then
+            echo "The formula is up to date"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "tuitor $VERSION"
+          git push
+
+  aur:
+    name: AUR ${{ matrix.package }}
+    needs: [version, release]
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [tuitor-bin, tuitor]
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+    steps:
+      - id: gate
+        run: |
+          if [ -z "$AUR_SSH_PRIVATE_KEY" ]; then
+            echo "::notice::AUR_SSH_PRIVATE_KEY is not set: ${{ matrix.package }} is not published to the AUR"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+          case $VERSION in *-*)
+            echo "::notice::$VERSION is a pre-release: the AUR is left alone"
+            echo "skip=true" >> "$GITHUB_OUTPUT" ;;
+          esac
+      - uses: actions/checkout@v5
+        if: steps.gate.outputs.skip != 'true'
+      - uses: actions/download-artifact@v4
+        if: steps.gate.outputs.skip != 'true' && matrix.package == 'tuitor-bin'
+        with:
+          pattern: dist-*-linux-*
+          path: dist
+          merge-multiple: true
+      # The source package builds from GitHub's archive of the tag, checksummed here.
+      - name: Source archive checksum
+        if: steps.gate.outputs.skip != 'true' && matrix.package == 'tuitor'
+        run: |
+          mkdir -p dist
+          curl -fsSL -o "dist/tuitor-$VERSION-source.tar.gz" \
+            "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/v$VERSION.tar.gz"
+          (cd dist && sha256sum "tuitor-$VERSION-source.tar.gz" > "tuitor-$VERSION-source.tar.gz.sha256")
+      - name: Write the PKGBUILD
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          mkdir -p out
+          packaging/render.sh "packaging/aur/${{ matrix.package }}/PKGBUILD" dist > out/PKGBUILD
+          cat out/PKGBUILD
+      - uses: KSXGitHub/github-actions-deploy-aur@v4
+        if: steps.gate.outputs.skip != 'true'
+        with:
+          pkgname: ${{ matrix.package }}
+          pkgbuild: out/PKGBUILD
+          commit_username: ${{ vars.AUR_USERNAME || 'Dorian Donoch' }}
+          commit_email: ${{ vars.AUR_EMAIL || secrets.AUR_EMAIL }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: "Update to ${{ needs.version.outputs.version }}"
+          ssh_keyscan_types: rsa,ecdsa,ed25519
