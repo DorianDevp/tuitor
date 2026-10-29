@@ -1,0 +1,51 @@
+name: Bug report
+description: Something in tuitor does not work as it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Ideally with one of the examples in `examples/`.
+      placeholder: |
+        1. cd examples/go && ./run.sh
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: "`tuitor --version`"
+    validations:
+      required: true
+  - type: dropdown
+    id: adapter
+    attributes:
+      label: Adapter
+      options: [vscode-php-debug + Xdebug, js-debug (Node.js), js-debug (Chrome), Delve, gdb, lldb-dap, CodeLLDB, BuildKit (tuitor build), other / none]
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS and terminal
+      placeholder: Arch Linux, kitty 0.40, inside tmux
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`tuitor doctor` output"
+      render: text
+  - type: textarea
+    id: log
+    attributes:
+      label: Log excerpt
+      description: Run with `TUITOR_LOG=dap=trace` and paste the relevant part of `~/.local/state/tuitor/tuitor.log`. Remove anything private.
+      render: text
