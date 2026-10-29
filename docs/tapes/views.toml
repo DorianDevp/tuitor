@@ -1,0 +1,195 @@
+# Which screenshots (docs/screenshots/render.sh) and demos (docs/tapes/<name>.tape) the
+# visuals workflow makes again, by the files that a change to shows in them. Paths are globs
+# from the repository's root (`*` crosses directories). docs/tapes/changed.py reads this.
+#
+# A change to a file in [all] makes every picture and demo again: what draws every screen
+# (the frame, bars, colours, logo, key hints), and the tools that make the pictures. Logic
+# that only changes what a view shows is listed under that view, so a change to app.rs alone
+# makes nothing again; run the workflow by hand with "all" when a change shows everywhere.
+
+[all]
+paths = [
+    "crates/tuitor/src/ui/mod.rs",
+    "crates/tuitor/src/ui/paint.rs",
+    "crates/tuitor/src/ui/theme.rs",
+    "crates/tuitor/src/ui/logo.rs",
+    "crates/tuitor/src/default_keys.toml",
+    "crates/tuitor-core/src/palette.rs",
+    "docs/screenshots/render.sh",
+    "docs/screenshots/ansi2html.py",
+    "docs/tapes/settings.tape",
+    "docs/tapes/home.sh",
+]
+
+# Screenshots: assets/screenshots/<name>.png.
+
+[screenshot.overview]
+paths = [
+    "crates/tuitor/src/ui/source.rs",
+    "crates/tuitor/src/ui/syntax.rs",
+    "crates/tuitor/src/ui/locals.rs",
+    "crates/tuitor/src/ui/stack.rs",
+    "crates/tuitor/src/ui/watch.rs",
+    "crates/tuitor/src/ui/logs.rs",
+    "crates/tuitor/src/ui/breakpoints.rs",
+    "crates/tuitor-core/src/snapshot.rs",
+    "docs/screenshots/php.tsc",
+    "docs/screenshots/php-trace.tsc",
+    "examples/php/*",
+]
+
+[screenshot.flow]
+paths = [
+    "crates/tuitor/src/ui/flow.rs",
+    "crates/tuitor/src/flow.rs",
+    "crates/tuitor-core/src/flow.rs",
+    "crates/tuitor-core/src/trace.rs",
+    "docs/screenshots/php.tsc",
+    "docs/screenshots/php-trace.tsc",
+    "examples/php/*",
+]
+
+[screenshot.history]
+paths = [
+    "crates/tuitor/src/ui/history.rs",
+    "crates/tuitor/src/timeline.rs",
+    "crates/tuitor-core/src/snapshot.rs",
+    "docs/screenshots/php.tsc",
+    "docs/screenshots/php-trace.tsc",
+    "examples/php/*",
+]
+
+[screenshot.tabs]
+paths = [
+    "crates/tuitor/src/tab.rs",
+    "crates/tuitor/src/ui/stack.rs",
+    "crates/tuitor/src/ui/source.rs",
+    "docs/screenshots/tabs.tsc",
+    "examples/angular/src/*",
+    "examples/angular/.vscode/*",
+]
+
+[screenshot.code]
+paths = [
+    "crates/tuitor/src/ui/outline.rs",
+    "crates/tuitor/src/outline.rs",
+    "crates/tuitor/src/ui/source.rs",
+    "crates/tuitor/src/ui/syntax.rs",
+    "crates/tuitor/src/ui/flow.rs",
+    "crates/tuitor/src/flow.rs",
+    "docs/screenshots/tabs.tsc",
+    "examples/angular/src/*",
+]
+
+[screenshot.doctor]
+paths = [
+    "crates/tuitor/src/ui/doctor.rs",
+    "crates/tuitor/src/doctor.rs",
+    "crates/tuitor-core/src/doctor.rs",
+    "docs/screenshots/tabs.tsc",
+]
+
+[screenshot.project]
+paths = [
+    "crates/tuitor/src/ui/breakpoints.rs",
+    "crates/tuitor/src/ui/config.rs",
+    "crates/tuitor-core/src/config.rs",
+    "docs/screenshots/go.tsc",
+    "examples/go/*",
+]
+
+[screenshot.palette]
+paths = [
+    "crates/tuitor/src/ui/overlays.rs",
+    "crates/tuitor/src/overlay.rs",
+    "crates/tuitor/src/command.rs",
+    "docs/screenshots/go.tsc",
+]
+
+[screenshot.sets]
+paths = [
+    "crates/tuitor/src/ui/breakpoints.rs",
+    "crates/tuitor/src/sets.rs",
+    "crates/tuitor-core/src/breakpoints.rs",
+    "docs/screenshots/php-paths.tsc",
+    "examples/php-paths/*",
+]
+
+[screenshot.compare]
+paths = [
+    "crates/tuitor/src/ui/compare.rs",
+    "crates/tuitor/src/compare.rs",
+    "crates/tuitor-core/src/compare.rs",
+    "docs/screenshots/php-paths.tsc",
+    "examples/php-paths/*",
+]
+
+[screenshot.timeline]
+paths = [
+    "crates/tuitor/src/ui/history.rs",
+    "crates/tuitor/src/timeline.rs",
+    "docs/screenshots/php-paths.tsc",
+    "examples/php-paths/*",
+]
+
+[screenshot.paths]
+paths = [
+    "crates/tuitor/src/ui/callpaths.rs",
+    "crates/tuitor/src/callpaths.rs",
+    "crates/tuitor/src/paths.rs",
+    "crates/tuitor-code/src/*",
+    "docs/screenshots/php-paths.tsc",
+    "docs/screenshots/php-paths-flow.tsc",
+    "examples/php-paths/*",
+]
+
+# Demos: assets/demo/<name>.webm, .mp4 and the poster .png, from docs/tapes/<name>.tape.
+
+[tape.overview]
+paths = [
+    "docs/tapes/overview.tape",
+    "crates/tuitor/src/ui/source.rs",
+    "crates/tuitor/src/ui/syntax.rs",
+    "crates/tuitor/src/ui/locals.rs",
+    "crates/tuitor/src/ui/stack.rs",
+    "crates/tuitor/src/ui/watch.rs",
+    "crates/tuitor/src/ui/logs.rs",
+    "crates/tuitor/src/ui/breakpoints.rs",
+    "crates/tuitor/src/ui/history.rs",
+    "crates/tuitor/src/ui/overlays.rs",
+    "crates/tuitor/src/timeline.rs",
+    "crates/tuitor-core/src/snapshot.rs",
+    "examples/c/*",
+]
+
+[tape.history]
+paths = [
+    "docs/tapes/history.tape",
+    "crates/tuitor/src/ui/history.rs",
+    "crates/tuitor/src/timeline.rs",
+    "crates/tuitor/src/ui/locals.rs",
+    "crates/tuitor/src/ui/source.rs",
+    "crates/tuitor-core/src/snapshot.rs",
+    "examples/c/*",
+]
+
+[tape.sets]
+paths = [
+    "docs/tapes/sets.tape",
+    "crates/tuitor/src/ui/breakpoints.rs",
+    "crates/tuitor/src/ui/history.rs",
+    "crates/tuitor/src/ui/overlays.rs",
+    "crates/tuitor/src/sets.rs",
+    "crates/tuitor-core/src/breakpoints.rs",
+    "examples/c/*",
+]
+
+[tape.build]
+paths = [
+    "docs/tapes/build.tape",
+    "docs/tapes/build/*",
+    "crates/tuitor-core/src/build.rs",
+    "crates/tuitor/src/ui/source.rs",
+    "crates/tuitor/src/ui/logs.rs",
+    "crates/tuitor/src/ui/locals.rs",
+]
