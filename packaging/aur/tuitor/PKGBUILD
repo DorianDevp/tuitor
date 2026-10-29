@@ -1,0 +1,43 @@
+# Maintainer: Dorian Donoch
+# Written by the release workflow from packaging/aur/tuitor/PKGBUILD in
+# https://github.com/DorianDevp/tuitor.
+pkgname=tuitor
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc="Terminal debugger for every language, built on the Debug Adapter Protocol"
+arch=('x86_64' 'aarch64')
+url="https://github.com/DorianDevp/tuitor"
+license=('MIT')
+depends=('gcc-libs' 'glibc')
+makedepends=('cargo')
+optdepends=(
+    'gdb: C, C++, Rust and Zig through gdb'
+    'lldb: C, C++, Rust and Zig through lldb-dap'
+    'nodejs: js-debug and vscode-php-debug run on it'
+    'delve: Go'
+    'xdebug: PHP'
+    'docker-buildx: tuitor build, for Dockerfile builds'
+)
+conflicts=('tuitor-bin')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('@SHA_SOURCE@')
+
+prepare() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --frozen --release -p tuitor
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    install -Dm755 target/release/tuitor "$pkgdir/usr/bin/tuitor"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

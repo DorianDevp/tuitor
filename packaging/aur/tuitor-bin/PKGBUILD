@@ -1,0 +1,33 @@
+# Maintainer: Dorian Donoch
+# Written by the release workflow from packaging/aur/tuitor-bin/PKGBUILD in
+# https://github.com/DorianDevp/tuitor.
+pkgname=tuitor-bin
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc="Terminal debugger for every language, built on the Debug Adapter Protocol (static binary)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/DorianDevp/tuitor"
+license=('MIT')
+provides=('tuitor')
+conflicts=('tuitor')
+# The release already stripped it; there is nothing for a debug package.
+options=('!debug' '!strip')
+optdepends=(
+    'gdb: C, C++, Rust and Zig through gdb'
+    'lldb: C, C++, Rust and Zig through lldb-dap'
+    'nodejs: js-debug and vscode-php-debug run on it'
+    'delve: Go'
+    'xdebug: PHP'
+    'docker-buildx: tuitor build, for Dockerfile builds'
+)
+source_x86_64=("$url/releases/download/v$pkgver/tuitor-$pkgver-x86_64-unknown-linux-musl.tar.gz")
+source_aarch64=("$url/releases/download/v$pkgver/tuitor-$pkgver-aarch64-unknown-linux-musl.tar.gz")
+sha256sums_x86_64=('@SHA_X86_64_UNKNOWN_LINUX_MUSL@')
+sha256sums_aarch64=('@SHA_AARCH64_UNKNOWN_LINUX_MUSL@')
+
+package() {
+    cd "tuitor-$pkgver-$CARCH-unknown-linux-musl"
+    install -Dm755 tuitor "$pkgdir/usr/bin/tuitor"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
