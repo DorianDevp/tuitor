@@ -185,7 +185,7 @@ impl Palette {
         let spec = self.items.get(self.selected)?.spec;
         if matches!(spec.arg, Arg::Required(_)) {
             self.input = format!("/{} ", spec.name);
-            self.items.truncate(0);
+            self.items.clear();
             self.items.push(PaletteItem { spec, key: None, matched: Vec::new() });
             return None;
         }
