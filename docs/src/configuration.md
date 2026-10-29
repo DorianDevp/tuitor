@@ -33,7 +33,7 @@ CONFIG to adjust what a default cannot know:
 
 | file | |
 |---|---|
-| `~/.config/tuitor/keys.toml` | key bindings over the [defaults](../crates/tuitor/src/default_keys.toml) |
+| `~/.config/tuitor/keys.toml` | key bindings over the [defaults](https://github.com/DorianDevp/tuitor/blob/master/crates/tuitor/src/default_keys.toml) |
 | `~/.config/tuitor/adapters.toml` | adapters: replace a built-in one, or add one |
 | `~/.config/tuitor/projects.toml` | tuitor's own launch configurations, by project path; written by `/config` |
 | `~/.config/tuitor/config.toml` | the editor `E` runs; the language servers `P` asks |
@@ -74,9 +74,10 @@ extensions = ["php"]        # breakpoints in these files go to this adapter
 ## config.toml
 
 ```toml
-# Split at spaces, {file} and {line} replaced in each word.
-editor = "code --goto {file}:{line}"
-editor_terminal = false     # it has a window of its own; true (the default) hands it the terminal
+editor = "hx"               # an editor's name: tuitor passes file and line as that editor takes them
+# editor = "code --goto {file}:{line}"   # or a command, split at spaces, {file} and {line} replaced
+# editor_terminal = false   # optional: true hands tuitor's terminal to the editor until it exits;
+                            # defaults to true for a command, to the editor's own way for a name
 
 # The language server of each language, if not the one on PATH: command, args and the
 # server's initializationOptions; a field left out keeps the default.
@@ -92,8 +93,10 @@ args = ["exec", "--", "rust-analyzer"]
 [lsp.go]                    # gopls
 ```
 
-Without `editor`, `E` opens the Neovim tuitor runs in, beside tuitor, else `$VISUAL` or
-`$EDITOR` in tuitor's terminal. An editor in tuitor's terminal runs in a process group of its
+Without `editor`, `E` opens the editor whose terminal tuitor runs in (Neovim, Vim, Kakoune, Emacs,
+Zed, VS Code and its forks), else `$VISUAL` or `$EDITOR` in tuitor's terminal. See [Editors](editors.md).
+
+An editor in tuitor's terminal runs in a process group of its
 own, given the terminal as a shell gives it to a job: ctrl-z in it stops it and brings tuitor
 back, and `E` resumes it where it was left. Quitting tuitor with it stopped asks first, then
 hangs it up as a closing terminal would; Neovim and Vim keep a swap file of what was not

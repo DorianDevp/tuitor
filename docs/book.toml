@@ -1,0 +1,20 @@
+[book]
+title = "tuitor"
+description = "A terminal debugger for every language: it records every stop, so you can step back and compare runs."
+authors = ["Dorian Donoch"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[output.html]
+site-url = "/tuitor/"
+git-repository-url = "https://github.com/DorianDevp/tuitor"
+edit-url-template = "https://github.com/DorianDevp/tuitor/edit/master/docs/{path}"
+default-theme = "navy"
+preferred-dark-theme = "navy"
+
+[output.html.search]
+enable = true

@@ -1,0 +1,50 @@
+# tuitor
+
+> tuitor is a terminal debugger for every language: it records every stop, so you can step back and compare runs. It is a Debug Adapter Protocol (DAP) client that uses the same adapters and the same .vscode/launch.json as VS Code, and debugs PHP (Xdebug), JavaScript and TypeScript (Node.js, Chrome), Go (Delve), C, C++, Rust and Zig (gdb, lldb-dap, CodeLLDB) and Dockerfile builds (BuildKit). One ~9 MB binary, MIT licensed, developed on Linux.
+
+Key facts:
+- Install: `cargo install tuitor --locked`, `brew install DorianDevp/tuitor/tuitor`, AUR `tuitor-bin`, `nix run github:DorianDevp/tuitor`. Adapters: `tuitor install <adapter>`, checked by `tuitor doctor`.
+- Every stop is recorded; `[` and `]` step back through stops; HISTORY shows every variable at every stop. It does not reverse execution.
+- Breakpoint sets: the active set stops the program, other sets record and let it run; COMPARE lines up two runs, also across commits.
+- Not supported: `preLaunchTask`, `"console": "integratedTerminal"`, thread list, data breakpoints, memory view. No built-in Python adapter (debugpy can be added in adapters.toml).
+- Full docs in one file: https://doriandevp.github.io/tuitor/llms-full.txt
+
+## Docs
+
+- [Introduction](https://doriandevp.github.io/tuitor/introduction.html): what tuitor is and who it is for
+- [Install](https://doriandevp.github.io/tuitor/install.html): packages and adapters
+- [Quick start](https://doriandevp.github.io/tuitor/quick-start.html): examples, first session, commands
+- [Editors](https://doriandevp.github.io/tuitor/editors.html): opening files in your editor and setting breakpoints from it
+- [Keys](https://doriandevp.github.io/tuitor/keys.html): every default key
+- [Configuration](https://doriandevp.github.io/tuitor/configuration.html): launch configurations and config files
+- [Adapters](https://doriandevp.github.io/tuitor/adapters.html): built-in adapters and manual installation
+
+## Guides
+
+- [Debug PHP with Xdebug in the terminal](https://doriandevp.github.io/tuitor/guides/php.html)
+- [Debug PHP in Docker](https://doriandevp.github.io/tuitor/guides/php-docker.html)
+- [Debug Node.js and TypeScript in the terminal](https://doriandevp.github.io/tuitor/guides/node.html)
+- [Debug JavaScript in Chrome from the terminal](https://doriandevp.github.io/tuitor/guides/browser.html)
+- [Debug Go with Delve in the terminal](https://doriandevp.github.io/tuitor/guides/go.html)
+- [Debug C, C++, Rust and Zig in the terminal](https://doriandevp.github.io/tuitor/guides/native.html)
+- [Debug a Dockerfile build](https://doriandevp.github.io/tuitor/guides/dockerfile.html)
+
+## Features
+
+- [The screen, CODE and tabs](https://doriandevp.github.io/tuitor/features/screen.html)
+- [Recorded stops: HISTORY and TIMELINE](https://doriandevp.github.io/tuitor/features/history.html)
+- [FLOW](https://doriandevp.github.io/tuitor/features/flow.html)
+- [Breakpoints and configurations](https://doriandevp.github.io/tuitor/features/breakpoints.html)
+- [Sets, COMPARE and PATHS](https://doriandevp.github.io/tuitor/sets.html)
+- [Rebases](https://doriandevp.github.io/tuitor/features/rebases.html)
+- [Commands and DOCTOR](https://doriandevp.github.io/tuitor/features/commands.html)
+
+## Optional
+
+- [tuitor vs nvim-dap](https://doriandevp.github.io/tuitor/vs/nvim-dap.html)
+- [tuitor vs gdb's TUI and gdb-dashboard](https://doriandevp.github.io/tuitor/vs/gdb.html)
+- [tuitor vs the VS Code debugger](https://doriandevp.github.io/tuitor/vs/vscode.html)
+- [FAQ](https://doriandevp.github.io/tuitor/faq.html)
+- [Limitations](https://doriandevp.github.io/tuitor/limitations.html)
+- [Development](https://doriandevp.github.io/tuitor/development.html)
+- [Source code](https://github.com/DorianDevp/tuitor)
