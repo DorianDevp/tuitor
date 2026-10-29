@@ -4,6 +4,13 @@ description = "Call paths to a line of code and the lines along them, asked of l
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["lsp", "language-server", "call-hierarchy", "debugger", "static-analysis"]
+categories = ["development-tools", "development-tools::debugging"]
+readme = false
 
 [dependencies]
 # For its Content-Length framing, which LSP shares with DAP.

@@ -4,6 +4,13 @@ description = "Debugger engine: sessions, breakpoints, snapshots — no terminal
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["debugger", "dap", "debug-adapter-protocol", "breakpoints", "snapshot"]
+categories = ["development-tools::debugging"]
+readme = false
 
 [dependencies]
 tuitor-dap.workspace = true

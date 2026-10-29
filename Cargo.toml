@@ -7,12 +7,20 @@ exclude = ["examples"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+# Let chains, and the newest of the dependencies' own rust-version.
+rust-version = "1.88"
 license = "MIT"
+authors = ["Dorian Donoch"]
+repository = "https://github.com/DorianDevp/tuitor"
+homepage = "https://doriandevp.github.io/tuitor/"
+keywords = ["debugger", "dap", "tui", "terminal", "debug-adapter-protocol"]
+categories = ["development-tools::debugging", "command-line-utilities"]
 
 [workspace.dependencies]
-tuitor-dap = { path = "crates/tuitor-dap" }
-tuitor-core = { path = "crates/tuitor-core" }
-tuitor-code = { path = "crates/tuitor-code" }
+# The versions are for crates.io, where each is published on its own.
+tuitor-dap = { path = "crates/tuitor-dap", version = "0.1.0" }
+tuitor-core = { path = "crates/tuitor-core", version = "0.1.0" }
+tuitor-code = { path = "crates/tuitor-code", version = "0.1.0" }
 
 anyhow = "1"
 bytes = "1"
