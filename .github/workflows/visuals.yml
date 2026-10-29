@@ -1,0 +1,232 @@
+# Screenshots (docs/screenshots/render.sh) and demos (docs/tapes/*.tape, recorded with VHS) made
+# again when the code of the views they show changes, as docs/tapes/views.toml maps them. On a
+# pull request they are attached to the run and listed in a comment; on master they are
+# committed. By hand: all of them, or some by name.
+name: Visuals
+
+on:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "examples/**"
+      - "docs/screenshots/**"
+      - "docs/tapes/**"
+      - ".github/workflows/visuals.yml"
+  push:
+    branches: [master]
+    paths:
+      - "crates/**"
+      - "examples/**"
+      - "docs/screenshots/**"
+      - "docs/tapes/**"
+      - ".github/workflows/visuals.yml"
+  workflow_dispatch:
+    inputs:
+      all:
+        description: Make every screenshot and demo again
+        type: boolean
+        default: false
+      only:
+        description: Or only these, by name (e.g. "history sets overview")
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: visuals-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  detect:
+    name: what changed
+    runs-on: ubuntu-24.04
+    outputs:
+      screenshots: ${{ steps.views.outputs.screenshots }}
+      tapes: ${{ steps.views.outputs.tapes }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: views
+        env:
+          EVENT: ${{ github.event_name }}
+          ALL: ${{ inputs.all }}
+          ONLY: ${{ inputs.only }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          case $EVENT in
+            workflow_dispatch)
+              if [ "$ALL" = true ]; then args=(--all)
+              elif [ -n "$ONLY" ]; then read -ra names <<<"$ONLY"; args=(--only "${names[@]}")
+              else args=(--all); fi ;;
+            pull_request) args=(--base "$PR_BASE" --head "$PR_HEAD") ;;
+            *) args=(--base "$PUSH_BEFORE" --head "$GITHUB_SHA") ;;
+          esac
+          python3 -I docs/tapes/changed.py "${args[@]}" | tee -a "$GITHUB_OUTPUT"
+
+  render:
+    name: render
+    needs: detect
+    if: needs.detect.outputs.screenshots != '' || needs.detect.outputs.tapes != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    env:
+      SCREENSHOTS: ${{ needs.detect.outputs.screenshots }}
+      TAPES: ${{ needs.detect.outputs.tapes }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p tuitor --locked
+      - name: Fonts
+        run: |
+          fonts="$HOME/.local/share/fonts"
+          mkdir -p "$fonts"
+          # Iosevka, as render.sh and the tapes name it.
+          curl -fsSL https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Iosevka.tar.xz |
+            tar -xJ -C "$fonts" --wildcards 'IosevkaNerdFontMono-*.ttf'
+          # Unifont's upper planes, for the octants of tuitor's logo that Iosevka lacks.
+          curl -fsSL -o "$fonts/unifont_upper.otf" \
+            https://unifoundry.com/pub/unifont/unifont-16.0.04/font-builds/unifont_upper-16.0.04.otf
+          fc-cache -f
+          fc-list | grep -i -e iosevka -e unifont | head
+
+      # What the screenshots' scenes need: the PHP, Angular, Go and php-paths examples.
+      - uses: actions/setup-node@v4
+        if: env.SCREENSHOTS != ''
+        with:
+          node-version: 22
+      - uses: shivammathur/setup-php@v2
+        if: env.SCREENSHOTS != ''
+        with:
+          php-version: "8.4"
+          extensions: xdebug
+          coverage: xdebug
+      - uses: actions/setup-go@v5
+        if: env.SCREENSHOTS != ''
+        with:
+          go-version: stable
+          cache: false
+      - name: Adapters, intelephense, ImageMagick and Chromium
+        if: env.SCREENSHOTS != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends imagemagick
+          target/debug/tuitor install vscode-php-debug --yes
+          target/debug/tuitor install js-debug --yes
+          target/debug/tuitor install delve --yes
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          npm install --global --no-audit --no-fund intelephense
+          # The examples' launch.json start /usr/bin/chromium; the runner has Google Chrome.
+          if [ ! -x /usr/bin/chromium ]; then sudo ln -s "$(command -v google-chrome)" /usr/bin/chromium; fi
+      - name: Screenshots
+        if: env.SCREENSHOTS != ''
+        env:
+          MAGICK: convert
+        run: |
+          read -ra names <<<"$SCREENSHOTS"
+          docs/screenshots/render.sh "${names[@]}"
+
+      # What the tapes need: gdb for the C example, Docker's buildx for the build.
+      - name: gdb
+        if: env.TAPES != ''
+        run: sudo apt-get install -y --no-install-recommends gdb
+      - uses: docker/setup-buildx-action@v3
+        if: contains(env.TAPES, 'build')
+        with:
+          version: latest
+          driver: docker
+      - name: buildx can debug builds
+        id: buildx
+        if: contains(env.TAPES, 'build')
+        run: |
+          version=$(docker buildx version | awk '{ print $2 }')
+          echo "buildx $version"
+          if ! printf '%s\n' v0.38.0 "$version" | sort -V -C; then
+            echo "::warning::buildx $version is older than 0.38: the build demo is left as it is"
+            echo "old=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: charmbracelet/vhs-action@v2
+        if: env.TAPES != ''
+      - name: Demos
+        if: env.TAPES != ''
+        env:
+          SKIP_BUILD: ${{ steps.buildx.outputs.old }}
+        run: |
+          export TUITOR="$PWD/target/debug/tuitor"
+          for tape in $TAPES; do
+            if [ "$tape" = build ] && [ "$SKIP_BUILD" = true ]; then continue; fi
+            echo "==> $tape"
+            vhs "docs/tapes/$tape.tape"
+          done
+
+      - name: What changed
+        id: changed
+        run: |
+          git add --intent-to-add assets/screenshots assets/demo
+          files=$(git diff --name-only -- assets/screenshots assets/demo)
+          echo "$files"
+          {
+            echo "files<<EOF"
+            echo "$files"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'pull_request' && steps.changed.outputs.files != ''
+        with:
+          name: visuals
+          path: |
+            assets/screenshots/*.png
+            assets/demo/*
+      - name: Comment on the pull request
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@v7
+        env:
+          FILES: ${{ steps.changed.outputs.files }}
+        with:
+          script: |
+            const marker = '<!-- tuitor-visuals -->';
+            const files = process.env.FILES.split('\n').filter(Boolean);
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const asked = `screenshots: ${process.env.SCREENSHOTS || 'none'} · demos: ${process.env.TAPES || 'none'}`;
+            const body = files.length
+              ? `${marker}\n**Visuals made again** (${asked}). They differ in:\n\n${files.map(f => `- \`${f}\``).join('\n')}\n\nDownload them from the \`visuals\` artifact of [this run](${run}); master commits them once this is merged.`
+              : `${marker}\n**Visuals made again** (${asked}): none differs from master.`;
+            const { data: comments } = await github.rest.issues.listComments({
+              ...context.repo, issue_number: context.issue.number, per_page: 100,
+            });
+            const mine = comments.find(c => c.body && c.body.startsWith(marker));
+            if (mine) {
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: mine.id, body });
+            } else {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number, body });
+            }
+
+      # On master: commit what differs, then deploy the docs, which a push made with this
+      # workflow's token does not start.
+      - name: Commit to master
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master' && steps.changed.outputs.files != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets/screenshots assets/demo
+          git commit -m "Render screenshots and demos again for ${GITHUB_SHA::7} [skip ci]"
+          git pull --rebase origin master
+          git push origin HEAD:master
+          gh workflow run docs.yml --ref master
