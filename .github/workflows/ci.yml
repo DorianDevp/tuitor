@@ -1,0 +1,195 @@
+# Lints, tests (with real adapters and language servers), the minimum Rust, the docs, and the
+# Nix flake, on every push and pull request.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  lint:
+    name: fmt and clippy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  msrv:
+    name: Rust 1.88 (rust-version)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.88
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --all-targets --locked
+
+  test:
+    name: tests (with gdb)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # gdb 14 or newer, built with Python, for its DAP server; Ubuntu 24.04 has 15.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gdb
+      - run: |
+          git config --global user.name "tuitor CI"
+          git config --global user.email "ci@users.noreply.github.com"
+      - run: cargo test --workspace --locked
+
+  adapters:
+    name: tests with ${{ matrix.adapter }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        adapter: [php, js, go]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: adapters
+      # vscode-php-debug and js-debug run on Node.js (20.18 or newer).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: shivammathur/setup-php@v2
+        if: matrix.adapter == 'php'
+        with:
+          php-version: "8.4"
+          extensions: xdebug
+          # Loads Xdebug; the test asks for its debug mode itself.
+          coverage: xdebug
+      - uses: actions/setup-go@v5
+        if: matrix.adapter == 'go'
+        with:
+          go-version: stable
+          cache: false
+      - run: cargo build -p tuitor --locked
+      # The adapters as users get them: tuitor install, from their authors' releases.
+      - name: Install the adapter
+        run: |
+          case ${{ matrix.adapter }} in
+            php) target/debug/tuitor install vscode-php-debug --yes ;;
+            js) target/debug/tuitor install js-debug --yes ;;
+            go) target/debug/tuitor install delve --yes ;;
+          esac
+      - name: Run the ${{ matrix.adapter }} tests
+        run: |
+          adapters="${XDG_DATA_HOME:-$HOME/.local/share}/tuitor/adapters"
+          case ${{ matrix.adapter }} in
+            php)
+              TUITOR_PHP=$(command -v php)
+              export TUITOR_PHP TUITOR_PHP_ADAPTER="$adapters/vscode-php-debug/extension/out/phpDebug.js"
+              ;;
+            js) export TUITOR_JS_ADAPTER="$adapters/js-debug/js-debug/src/dapDebugServer.js" ;;
+            go)
+              TUITOR_DLV="$(go env GOPATH)/bin/dlv"
+              export TUITOR_DLV
+              ;;
+          esac
+          cargo test -p tuitor-core --locked --test ${{ matrix.adapter }} -- --ignored
+
+  language-servers:
+    name: tests with language servers
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rust-analyzer
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+      - name: Install the servers
+        run: |
+          go install golang.org/x/tools/gopls@latest
+          npm install --global --no-audit --no-fund typescript typescript-language-server intelephense
+          npm ci --prefix examples/typescript --no-audit --no-fund
+          npm ci --prefix examples/angular --no-audit --no-fund
+      - name: Run the tests
+        env:
+          TUITOR_RUST_ANALYZER: rust-analyzer
+          TUITOR_TYPESCRIPT_LANGUAGE_SERVER: typescript-language-server
+          TUITOR_INTELEPHENSE: intelephense
+        run: TUITOR_GOPLS="$(go env GOPATH)/bin/gopls" cargo test -p tuitor-code --locked --test servers -- --ignored
+
+  docs:
+    name: docs build and links
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: mdbook@0.5.4
+      - run: mdbook build docs
+      - name: Post-build files (llms-full.txt, sitemap.xml)
+        run: |
+          if [ -x docs/llms-full.sh ]; then docs/llms-full.sh; fi
+          if [ -x docs/sitemap.sh ]; then docs/sitemap.sh; fi
+      # Links between the book's pages and to its files, not the web, so that a site being down
+      # fails no pull request. The demos are left out: the visuals workflow records them once a
+      # change is on master. So is print.html, where mdBook leaves the paths of <video> as the
+      # page they came from had them.
+      - uses: lycheeverse/lychee-action@v2
+        with:
+          args: >-
+            --offline --no-progress
+            --root-dir "${{ github.workspace }}/docs/book"
+            --exclude "assets/demo/"
+            --exclude-path docs/book/print.html
+            "docs/book/**/*.html"
+          fail: true
+      - name: The pictures and demos views.toml names exist
+        run: python3 -I docs/tapes/changed.py --check
+
+  nix:
+    name: nix build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      # flake.lock is committed once it exists; until then this run writes one, to download.
+      - name: Lock the flake's inputs if they are not
+        id: lock
+        run: |
+          if [ ! -f flake.lock ]; then
+            nix flake lock
+            echo "locked=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::flake.lock is missing: download the flake-lock artifact of this run and commit it."
+          fi
+      - run: nix flake check --print-build-logs
+      - run: nix build --print-build-logs
+      - run: ./result/bin/tuitor --version
+      - uses: actions/upload-artifact@v4
+        if: steps.lock.outputs.locked == 'true'
+        with:
+          name: flake-lock
+          path: flake.lock
