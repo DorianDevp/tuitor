@@ -24,7 +24,7 @@ jobs:
     name: fmt and clippy
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -36,8 +36,8 @@ jobs:
     name: Rust 1.88 (rust-version)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@1.88
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.120
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace --all-targets --locked
 
@@ -45,7 +45,7 @@ jobs:
     name: tests (with gdb)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # gdb 14 or newer, built with Python, for its DAP server; Ubuntu 24.04 has 15.
@@ -63,13 +63,13 @@ jobs:
       matrix:
         adapter: [php, js, go]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: adapters
       # vscode-php-debug and js-debug run on Node.js (20.18 or newer).
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - uses: shivammathur/setup-php@v2
@@ -79,7 +79,7 @@ jobs:
           extensions: xdebug
           # Loads Xdebug; the test asks for its debug mode itself.
           coverage: xdebug
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         if: matrix.adapter == 'go'
         with:
           go-version: stable
@@ -113,15 +113,15 @@ jobs:
     name: tests with language servers
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rust-analyzer
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: stable
           cache: false
@@ -144,7 +144,7 @@ jobs:
     name: docs build and links
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: taiki-e/install-action@v2
         with:
           tool: mdbook@0.5.4
@@ -174,7 +174,7 @@ jobs:
     name: nix build
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@v31
         with:
           extra_nix_config: |
@@ -191,7 +191,7 @@ jobs:
       - run: nix flake check --print-build-logs
       - run: nix build --print-build-logs
       - run: ./result/bin/tuitor --version
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: steps.lock.outputs.locked == 'true'
         with:
           name: flake-lock
