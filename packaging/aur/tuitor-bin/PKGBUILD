@@ -7,7 +7,7 @@ pkgrel=1
 pkgdesc="Terminal debugger for every language, built on the Debug Adapter Protocol (static binary)"
 arch=('x86_64' 'aarch64')
 url="https://github.com/DorianDevp/tuitor"
-license=('MIT')
+license=('gpl3')
 provides=('tuitor')
 conflicts=('tuitor')
 # The release already stripped it; there is nothing for a debug package.

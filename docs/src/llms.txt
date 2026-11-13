@@ -1,6 +1,6 @@
 # tuitor
 
-> tuitor is a terminal debugger for every language: it records every stop, so you can step back and compare runs. It is a Debug Adapter Protocol (DAP) client that uses the same adapters and the same .vscode/launch.json as VS Code, and debugs PHP (Xdebug), JavaScript and TypeScript (Node.js, Chrome), Go (Delve), C, C++, Rust and Zig (gdb, lldb-dap, CodeLLDB) and Dockerfile builds (BuildKit). One ~9 MB binary, MIT licensed, developed on Linux.
+> tuitor is a terminal debugger for every language: it records every stop, so you can step back and compare runs. It is a Debug Adapter Protocol (DAP) client that uses the same adapters and the same .vscode/launch.json as VS Code, and debugs PHP (Xdebug), JavaScript and TypeScript (Node.js, Chrome), Go (Delve), C, C++, Rust and Zig (gdb, lldb-dap, CodeLLDB) and Dockerfile builds (BuildKit). One ~9 MB binary, GPLv3 licensed, developed on Linux.
 
 Key facts:
 - Install: `cargo install tuitor --locked`, `brew install DorianDevp/tuitor/tuitor`, AUR `tuitor-bin`, `nix run github:DorianDevp/tuitor`. Adapters: `tuitor install <adapter>`, checked by `tuitor doctor`.

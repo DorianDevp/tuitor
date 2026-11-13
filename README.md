@@ -8,7 +8,7 @@
 
 [![CI](https://github.com/DorianDevp/tuitor/actions/workflows/ci.yml/badge.svg)](https://github.com/DorianDevp/tuitor/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/tuitor.svg)](https://crates.io/crates/tuitor)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-doriandevp.github.io%2Ftuitor-orange.svg)](https://doriandevp.github.io/tuitor/)
 
 [![tuitor stopped at a breakpoint: values inline in SOURCE, LOCALS with what changed, watches with their trend. Click to watch the demo.](assets/demo/overview.png)](https://doriandevp.github.io/tuitor/)
@@ -108,4 +108,4 @@ Bug reports, adapters and language servers are welcome. See [CONTRIBUTING.md](CO
 
 ## License
 
-[MIT](LICENSE)
+[GNU General Public License v3](LICENSE)

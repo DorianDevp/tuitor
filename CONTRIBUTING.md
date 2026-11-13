@@ -81,5 +81,5 @@ Keep pages short: commands first, then one or two sentences per feature.
 - Run fmt, clippy and the tests before opening a pull request.
 - Update the docs and `CHANGELOG.md` (under Unreleased) for user-visible changes.
 
-By contributing you agree that your work is licensed under the [MIT License](LICENSE). Please follow
+By contributing you agree that your work is licensed under the [GNU General Public License v3](LICENSE). Please follow
 the [Code of Conduct](CODE_OF_CONDUCT.md).
