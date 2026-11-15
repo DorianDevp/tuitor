@@ -26,7 +26,11 @@ use crate::flow::FlowState;
 #[derive(Subcommand)]
 pub enum Verb {
     /// Be in the session until `leave`: calls that move the program on wait for this peer's vote.
-    Join,
+    Join {
+        /// This peer's calls go at once, without waiting for the others' votes.
+        #[arg(long)]
+        su: bool,
+    },
     Leave,
     /// The stop: where, the stack with the code around each frame, variables, watches, votes, notes.
     Show {
@@ -133,11 +137,14 @@ impl Context {
 
 pub async fn run(context: Context, verb: Verb) -> Result<ExitCode> {
     match verb {
-        Verb::Join => {
+        Verb::Join { su } => {
             let replayed = context.replay()?;
             context.append(&replayed.journal, Body::Join { pid: None })?;
+            if su {
+                context.append(&replayed.journal, Body::Su)?;
+            }
             crate::shared::ensure_monitor(&replayed.journal, &context.name, &context.workspace);
-            println!("{} is in {}", context.peer, context.name);
+            println!("{} is in {}{}", context.peer, context.name, if su { " as su" } else { "" });
         }
         Verb::Leave => {
             let replayed = context.replay()?;

@@ -24,8 +24,9 @@ tuitor session pair --as bot wait stop        # until the program stops, then th
 
 Continue, the steps, pause, stop and restart wait until every peer in the session said yes; one
 no drops them. Alone in a session, they run at once. Breakpoints, sets, watches, expanding
-variables, eval and notes need no vote. A peer that joined with `--su` (`tuitor --session pair --su`)
-moves the program on at once, without votes; the others' calls still wait for its yes.
+variables, eval and notes need no vote. A peer that joined with `--su` (`tuitor --session pair --su`,
+or `tuitor session pair join --su` on the command line) moves the program on at once, without votes;
+the others' calls still wait for its yes.
 
 A call that waits shows in a VOTE popup in the middle of every peer's screen until it is decided:
 
@@ -59,7 +60,7 @@ peer.
 
 | verb | does |
 |---|---|
-| `join`, `leave` | be in the session in between, so that calls wait for this peer's vote |
+| `join [--su]`, `leave` | be in the session in between, so that calls wait for this peer's vote; with `--su`, this peer's calls don't wait for anyone's |
 | `show [--frame n] [--context n]` | the stop: stack with the code around each frame, variables, watches, votes, notes |
 | `wait stop\|proposal\|exit` | until that happens, then `show` |
 | `do ‹command›` | `continue`, `next`, `step in`, `step out`, `pause`, `stop`, `restart`, `start ‹config›`, `eval ‹expr›`, `expand ‹Scope.var.field›`, `frame ‹n›`, `bp ‹file:line›`, `set new`, `watch ‹expr›` |
