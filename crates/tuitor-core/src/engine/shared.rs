@@ -467,7 +467,14 @@ mod binding_tests {
         assert_eq!(other.breakpoints().bound_to(everywhere), None);
         assert_eq!(lines(&other, "Brave hand run"), [1]);
 
+        let ids: Vec<u32> = one.breakpoints().iter().map(|b| b.id).collect();
+        let (first, second) = (ids[0], ids[1]);
+        one.activate_set(everywhere).expect("activate");
+        assert!(!one.breakpoints().passes(&[second]), "a bound set stops in its configuration though not active");
+        assert!(!one.breakpoints().passes(&[first]));
+
         one.bind_set(e2e, None).expect("unbind");
         assert_eq!(lines(&one, "Brave hand run"), [1, 2, 3]);
+        assert!(one.breakpoints().passes(&[second]), "unbound and not active, it records and goes on");
     }
 }

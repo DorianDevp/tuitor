@@ -539,15 +539,20 @@ impl Breakpoints {
     }
 
     /// Whether a stop at breakpoints `hits` goes on by itself: none of them is in the active
-    /// set. A stop at none, or at one that is gone, waits.
+    /// set or in a set bound to a configuration, which stops in that configuration's sessions,
+    /// the only ones it goes to. A stop at none, or at one that is gone, waits.
     pub fn passes(&self, hits: &[BreakpointId]) -> bool {
-        !hits.is_empty() && hits.iter().all(|id| self.get(*id).is_some_and(|b| !b.in_set(self.active)))
+        !hits.is_empty() && hits.iter().all(|id| self.get(*id).is_some_and(|b| !self.stops_at(b)))
     }
 
-    /// Whether any enabled breakpoint is outside the active set, so that a stop at a
+    /// Whether any enabled breakpoint goes on by itself when hit, so that a stop at a
     /// breakpoint the adapter does not name may be one to go on from.
     pub fn any_passing(&self) -> bool {
-        self.items.iter().any(|b| b.enabled && !b.in_set(self.active))
+        self.items.iter().any(|b| b.enabled && !self.stops_at(b))
+    }
+
+    fn stops_at(&self, bp: &Breakpoint) -> bool {
+        bp.in_set(self.active) || bp.sets.iter().any(|s| self.bound.contains_key(s))
     }
 
     /// The sets of breakpoints `hits` that are still there, the active one first when it is
