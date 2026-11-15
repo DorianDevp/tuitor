@@ -417,45 +417,43 @@ mod tests {
 }
 
 impl Engine {
-    /// Binds `set` to the sessions of configuration `config` alone, or to every session again,
-    /// and sends each file's breakpoints anew.
-    pub fn bind_set(&mut self, set: crate::breakpoints::SetId, config: Option<String>) -> Result<()> {
-        self.breakpoints.bind_set(set, config)?;
-        for file in self.breakpoints.files() {
-            self.breakpoints_changed(&file);
-        }
-        self.save();
-        Ok(())
+    /// [`Engine::toggle_breakpoint`] for the sessions of configuration `config` alone, or for
+    /// every session with `None`; a breakpoint of another configuration on the line stays.
+    pub fn toggle_breakpoint_for(
+        &mut self,
+        path: &std::path::Path,
+        line: u32,
+        config: Option<String>,
+    ) -> crate::breakpoints::Toggle {
+        let path = super::canonical(path);
+        let toggle = self.breakpoints.toggle_for(path.clone(), line, config);
+        self.breakpoints_changed(&path);
+        self.follow_file(&path, true);
+        toggle
+    }
+
+    /// The configuration of the session `sid` runs in: its own, or the one of the session that
+    /// started it.
+    pub fn configuration_of(&self, sid: SessionId) -> Option<String> {
+        self.session(self.root(sid)).map(|s| s.config.name.clone())
     }
 }
 
 #[cfg(test)]
-mod binding_tests {
+mod configuration_tests {
     use std::path::{Path, PathBuf};
 
     use super::*;
     use crate::config::Adapters;
 
     #[test]
-    fn a_bound_set_goes_only_to_its_configuration_and_the_binding_travels_with_the_breakpoints() {
+    fn a_breakpoint_for_one_configuration_travels_with_it_to_another_engine() {
         let options =
             EngineOptions { adapters: Adapters::default(), workspace: PathBuf::from("/tmp"), state_file: None };
         let mut one = Engine::new(options).0;
         let file = Path::new("/tmp/main.ts");
-        let everywhere = one.breakpoints().active_set();
-        one.toggle_breakpoint(file, 1);
-        let e2e = one.new_set();
-        one.toggle_breakpoint(file, 2);
-        one.bind_set(e2e, Some("Brave e2e".into())).expect("bind");
-        one.toggle_breakpoint(file, 3);
-        let lines = |engine: &Engine, config: &str| {
-            let (ids, sources) = engine.breakpoints().for_adapter_in(file, true, config);
-            assert_eq!(ids.len(), sources.len());
-            sources.iter().map(|s| s.line).collect::<Vec<_>>()
-        };
-        assert_eq!(lines(&one, "Brave hand run"), [1]);
-        assert_eq!(lines(&one, "brave e2e"), [1, 2, 3]);
-
+        one.toggle_breakpoint_for(file, 17, Some("Brave hand run".into()));
+        one.toggle_breakpoint_for(file, 17, Some("Brave e2e".into()));
         let mut other = Engine::new(EngineOptions {
             adapters: Adapters::default(),
             workspace: PathBuf::from("/tmp"),
@@ -463,18 +461,8 @@ mod binding_tests {
         })
         .0;
         other.apply(&State::Breakpoints(one.persisted()));
-        assert_eq!(other.breakpoints().bound_to(e2e), Some("Brave e2e"));
-        assert_eq!(other.breakpoints().bound_to(everywhere), None);
-        assert_eq!(lines(&other, "Brave hand run"), [1]);
-
-        let ids: Vec<u32> = one.breakpoints().iter().map(|b| b.id).collect();
-        let (first, second) = (ids[0], ids[1]);
-        one.activate_set(everywhere).expect("activate");
-        assert!(!one.breakpoints().passes(&[second]), "a bound set stops in its configuration though not active");
-        assert!(!one.breakpoints().passes(&[first]));
-
-        one.bind_set(e2e, None).expect("unbind");
-        assert_eq!(lines(&one, "Brave hand run"), [1, 2, 3]);
-        assert!(one.breakpoints().passes(&[second]), "unbound and not active, it records and goes on");
+        let mut configs: Vec<Option<String>> = other.breakpoints().iter().map(|b| b.config.clone()).collect();
+        configs.sort();
+        assert_eq!(configs, [Some("Brave e2e".to_owned()), Some("Brave hand run".to_owned())]);
     }
 }

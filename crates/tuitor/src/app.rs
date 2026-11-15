@@ -878,7 +878,7 @@ impl App {
             Action::BpImport(file) => self.bp_import(file),
             Action::Vote(answer) => self.vote(answer),
             Action::Note(text) => self.note(text),
-            Action::SetBind(config) => self.set_bind(config),
+            Action::BpFor(config) => self.bp_for(config),
             Action::MyCode => Ok(if self.tab_mut().engine.toggle_my_code() {
                 "my code only: a step into library code goes on until the project's code".into()
             } else {
@@ -1443,18 +1443,31 @@ impl App {
             None => (self.breakpoint_file()?, tab.ui.source.cursor.max(1)),
         };
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let config = tab.ui.session.and_then(|sid| tab.engine.configuration_of(sid));
         let engine = &mut self.tab_mut().engine;
-        Ok(match engine.toggle_breakpoint(&path, line) {
+        let toggle = engine.toggle_breakpoint_for(&path, line, config.clone());
+        let said = breakpoint_said(toggle, &name, line, config.as_deref());
+        Ok(match toggle {
             // Into the active set; which one that is matters once there are more.
-            Toggle::Added(id) if engine.breakpoints().sets().len() > 1 => {
+            Toggle::Added(_) if engine.breakpoints().sets().len() > 1 => {
                 let set = sets::name(engine.breakpoints(), engine.breakpoints().active_set());
-                format!("added #{id} at {name}:{line} to {set}")
+                format!("{said}, in {set}")
             }
-            Toggle::Added(id) => format!("added #{id} at {name}:{line}"),
-            Toggle::Removed(id) => format!("removed #{id} at {name}:{line}"),
+            _ => said,
         })
     }
+}
 
+/// What toggling a breakpoint did, and for which configuration's sessions.
+pub(crate) fn breakpoint_said(toggle: Toggle, file: &str, line: u32, config: Option<&str>) -> String {
+    let only = config.map(|c| format!(" for {c}")).unwrap_or_else(|| " for every session".into());
+    match toggle {
+        Toggle::Added(id) => format!("added #{id} at {file}:{line}{only}"),
+        Toggle::Removed(id) => format!("removed #{id} at {file}:{line}{only}"),
+    }
+}
+
+impl App {
     /// `e` / `l` / `h` on a breakpoint: with an argument it sets the value (`-` clears),
     /// without one it opens the palette pre-filled with the current value.
     fn bp_edit(&mut self, value: Option<String>, spec: &'static command::Spec, field: BpField) -> Outcome {

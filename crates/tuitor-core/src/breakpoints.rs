@@ -1,5 +1,7 @@
 //! Breakpoints live in the engine, not in a session: they survive restarts and are
-//! sent to every session whose adapter handles the file's extension.
+//! sent to every session whose adapter handles the file's extension. A breakpoint set for one
+//! configuration goes only to that configuration's sessions, so that debuggers running side
+//! by side on the same files each stop at their own.
 //!
 //! Each breakpoint is in one set or more, and one set is active. Every enabled breakpoint
 //! goes to the adapter whatever its sets: a stop at a breakpoint of the active set waits for
@@ -48,10 +50,9 @@ pub struct Breakpoint {
     /// until a line that reads as its did comes back.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub lost: bool,
-    /// The configurations its sets are bound to, kept with it so that they are saved: a set
-    /// bound to a configuration goes only to that configuration's sessions.
-    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    pub bound: std::collections::BTreeMap<SetId, String>,
+    /// The configuration, by name, whose sessions alone it goes to; none: every session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<String>,
     #[serde(skip)]
     pub hits: u32,
     #[serde(skip)]
@@ -93,6 +94,11 @@ impl Breakpoint {
     pub fn adapter_message(&self) -> Option<&str> {
         self.bindings.values().find_map(|b| b.message.as_deref())
     }
+
+    /// Whether it goes to the sessions of configuration `config`.
+    pub fn goes_to(&self, config: &str) -> bool {
+        self.config.as_deref().is_none_or(|c| c.eq_ignore_ascii_case(config))
+    }
 }
 
 /// What [`Breakpoints::follow`] did to a file's breakpoints.
@@ -132,22 +138,13 @@ pub struct Breakpoints {
     active: SetId,
     /// The number of the latest `setBreakpoints` sent to a session for a file.
     sent: HashMap<(SessionId, PathBuf), u64>,
-    /// Sets that go only to the sessions of one configuration, by its name.
-    bound: std::collections::BTreeMap<SetId, String>,
 }
 
 impl Default for Breakpoints {
     /// One set, in the first colour [`palette::next`] gives.
     fn default() -> Self {
         let first = palette::next(&[]);
-        Self {
-            items: Vec::new(),
-            next_id: 0,
-            sets: vec![first],
-            active: first,
-            sent: HashMap::new(),
-            bound: std::collections::BTreeMap::new(),
-        }
+        Self { items: Vec::new(), next_id: 0, sets: vec![first], active: first, sent: HashMap::new() }
     }
 }
 
@@ -167,7 +164,6 @@ impl Breakpoints {
             sets.push(if items.is_empty() { palette::next(&[]) } else { SetId::FIRST_OF_OLD });
         }
         let first = sets[0];
-        let mut bound = std::collections::BTreeMap::new();
         for bp in &mut items {
             let mut kept: Vec<SetId> = Vec::new();
             for set in bp.sets.iter().copied().filter(|s| sets.contains(s)) {
@@ -176,13 +172,11 @@ impl Breakpoints {
                 }
             }
             bp.sets = if kept.is_empty() { vec![first] } else { kept };
-            bp.bound.retain(|set, _| sets.contains(set));
-            bound.extend(bp.bound.iter().map(|(set, config)| (*set, config.clone())));
         }
         items.sort_by(|a, b| (&a.path, a.line).cmp(&(&b.path, b.line)));
         let next_id = items.iter().map(|b| b.id).max().unwrap_or(0);
         let active = active.filter(|a| sets.contains(a)).unwrap_or(first);
-        Self { items, next_id, sets, active, sent: HashMap::new(), bound }
+        Self { items, next_id, sets, active, sent: HashMap::new() }
     }
 
     pub fn saved(&self) -> &[Breakpoint] {
@@ -210,6 +204,11 @@ impl Breakpoints {
         self.items.iter().find(|b| b.path == path && b.line == line && !b.lost)
     }
 
+    /// The breakpoint on a line for configuration `config`, or for every session with `None`.
+    pub fn at_for(&self, path: &Path, line: u32, config: Option<&str>) -> Option<&Breakpoint> {
+        self.items.iter().find(|b| b.path == path && b.line == line && !b.lost && b.config.as_deref() == config)
+    }
+
     pub fn in_file<'a>(&'a self, path: &'a Path) -> impl Iterator<Item = &'a Breakpoint> + 'a {
         self.items.iter().filter(move |b| b.path == path)
     }
@@ -229,6 +228,18 @@ impl Breakpoints {
         }
     }
 
+    /// [`Breakpoints::toggle`] of the breakpoint for configuration `config` alone, which
+    /// leaves those of other configurations on the line as they are.
+    pub fn toggle_for(&mut self, path: PathBuf, line: u32, config: Option<String>) -> Toggle {
+        if let Some(existing) = self.at_for(&path, line, config.as_deref()).map(|b| b.id) {
+            self.remove(existing);
+            return Toggle::Removed(existing);
+        }
+        let id = self.add(path, line);
+        self.update(id, |b| b.config = config);
+        Toggle::Added(id)
+    }
+
     /// A breakpoint in the active set.
     pub fn add(&mut self, path: PathBuf, line: u32) -> BreakpointId {
         self.add_in(path, line, self.active)
@@ -236,7 +247,6 @@ impl Breakpoints {
 
     pub fn add_in(&mut self, path: PathBuf, line: u32, set: SetId) -> BreakpointId {
         self.next_id += 1;
-        let bound = self.bound.get(&set).map(|config| (set, config.clone())).into_iter().collect();
         let bp = Breakpoint {
             id: self.next_id,
             path,
@@ -248,47 +258,13 @@ impl Breakpoints {
             sets: vec![set],
             anchor: None,
             lost: false,
-            bound,
+            config: None,
             hits: 0,
             bindings: HashMap::new(),
         };
         let at = self.items.partition_point(|b| (&b.path, b.line) < (&bp.path, bp.line));
         self.items.insert(at, bp);
         self.next_id
-    }
-
-    /// Binds `set` to the sessions of configuration `config` alone, or to every session again.
-    pub fn bind_set(&mut self, set: SetId, config: Option<String>) -> Result<()> {
-        if !self.sets.contains(&set) {
-            bail!("there is no such set");
-        }
-        match &config {
-            Some(config) => self.bound.insert(set, config.clone()),
-            None => self.bound.remove(&set),
-        };
-        for bp in &mut self.items {
-            bp.bound = bp.sets.iter().filter_map(|s| Some((*s, self.bound.get(s)?.clone()))).collect();
-        }
-        Ok(())
-    }
-
-    /// The configuration `set` is bound to.
-    pub fn bound_to(&self, set: SetId) -> Option<&str> {
-        self.bound.get(&set).map(String::as_str)
-    }
-
-    /// [`Breakpoints::for_adapter`] for a session of configuration `config`: a breakpoint goes
-    /// there when one of its sets is bound to no configuration, or to that one.
-    pub fn for_adapter_in(&self, path: &Path, hits: bool, config: &str) -> (Vec<BreakpointId>, Vec<SourceBreakpoint>) {
-        let (ids, sources): (Vec<BreakpointId>, Vec<SourceBreakpoint>) = self.for_adapter(path, hits);
-        ids.into_iter()
-            .zip(sources)
-            .filter(|(id, _)| {
-                self.get(*id).is_some_and(|b| {
-                    b.sets.iter().any(|s| self.bound.get(s).is_none_or(|c| c.eq_ignore_ascii_case(config)))
-                })
-            })
-            .unzip()
     }
 
     pub fn remove(&mut self, id: BreakpointId) -> Option<Breakpoint> {
@@ -311,8 +287,26 @@ impl Breakpoints {
     /// Hit conditions go only to an adapter that counts hits (`hits`): one that does not may
     /// refuse the breakpoint, or take the count for a condition.
     pub fn for_adapter(&self, path: &Path, hits: bool) -> (Vec<BreakpointId>, Vec<SourceBreakpoint>) {
+        self.for_adapter_in(path, hits, None)
+    }
+
+    /// [`Breakpoints::for_adapter`] for a session of configuration `config`: the breakpoints
+    /// for every session and those for that configuration. Two on one line go as one.
+    pub fn for_adapter_in(
+        &self,
+        path: &Path,
+        hits: bool,
+        config: Option<&str>,
+    ) -> (Vec<BreakpointId>, Vec<SourceBreakpoint>) {
+        let mut lines: Vec<u32> = Vec::new();
         self.in_file(path)
             .filter(|b| b.enabled && !b.lost)
+            .filter(|b| config.is_none_or(|c| b.goes_to(c)))
+            .filter(|b| {
+                let first = !lines.contains(&b.line);
+                lines.push(b.line);
+                first
+            })
             .map(|b| {
                 let source = SourceBreakpoint {
                     line: i64::from(b.line),
@@ -539,20 +533,15 @@ impl Breakpoints {
     }
 
     /// Whether a stop at breakpoints `hits` goes on by itself: none of them is in the active
-    /// set or in a set bound to a configuration, which stops in that configuration's sessions,
-    /// the only ones it goes to. A stop at none, or at one that is gone, waits.
+    /// set. A stop at none, or at one that is gone, waits.
     pub fn passes(&self, hits: &[BreakpointId]) -> bool {
-        !hits.is_empty() && hits.iter().all(|id| self.get(*id).is_some_and(|b| !self.stops_at(b)))
+        !hits.is_empty() && hits.iter().all(|id| self.get(*id).is_some_and(|b| !b.in_set(self.active)))
     }
 
-    /// Whether any enabled breakpoint goes on by itself when hit, so that a stop at a
+    /// Whether any enabled breakpoint is outside the active set, so that a stop at a
     /// breakpoint the adapter does not name may be one to go on from.
     pub fn any_passing(&self) -> bool {
-        self.items.iter().any(|b| b.enabled && !self.stops_at(b))
-    }
-
-    fn stops_at(&self, bp: &Breakpoint) -> bool {
-        bp.in_set(self.active) || bp.sets.iter().any(|s| self.bound.contains_key(s))
+        self.items.iter().any(|b| b.enabled && !b.in_set(self.active))
     }
 
     /// The sets of breakpoints `hits` that are still there, the active one first when it is
@@ -587,6 +576,29 @@ mod tests {
         assert_eq!(order, [(b.clone(), 5), (a.clone(), 3), (a.clone(), 20)]);
         assert_eq!(bps.toggle(a.clone(), 20), Toggle::Removed(1));
         assert_eq!(bps.len(), 2);
+    }
+
+    #[test]
+    fn a_breakpoint_for_one_configuration_goes_only_to_its_sessions_and_is_saved_so() {
+        let mut bps = Breakpoints::default();
+        let file = PathBuf::from("/pwa/src/main.ts");
+        let everywhere = bps.add(file.clone(), 3);
+        let Toggle::Added(hand) = bps.toggle_for(file.clone(), 17, Some("Brave hand run".into())) else {
+            panic!("added")
+        };
+        let Toggle::Added(e2e) = bps.toggle_for(file.clone(), 17, Some("Brave e2e".into())) else { panic!("added") };
+        assert_ne!(hand, e2e, "one line, a breakpoint per configuration");
+        assert_eq!(bps.for_adapter_in(&file, true, Some("Brave hand run")).0, [everywhere, hand]);
+        assert_eq!(bps.for_adapter_in(&file, true, Some("brave e2e")).0, [everywhere, e2e]);
+        assert_eq!(bps.for_adapter_in(&file, true, Some("Listen for Xdebug")).0, [everywhere]);
+        assert_eq!(bps.for_adapter(&file, true).0.len(), 2, "a line goes once");
+
+        let text = serde_json::to_string(bps.saved()).expect("save");
+        let restored = Breakpoints::from_saved(serde_json::from_str(&text).expect("load"), bps.sets(), None);
+        assert_eq!(restored.get(e2e).and_then(|b| b.config.as_deref()), Some("Brave e2e"));
+
+        assert_eq!(bps.toggle_for(file.clone(), 17, Some("Brave e2e".into())), Toggle::Removed(e2e));
+        assert!(bps.get(hand).is_some(), "the other configuration's stays");
     }
 
     #[test]

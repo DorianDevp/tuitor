@@ -105,9 +105,9 @@ pub enum Membership {
 }
 
 impl App {
-    /// `/set bind [configuration]`: the active set's breakpoints go only to the sessions of
-    /// that configuration, by its name in launch.json; without one, to every session again.
-    pub(crate) fn set_bind(&mut self, config: Option<String>) -> Outcome {
+    /// `/bp for [configuration]`: a breakpoint on the SOURCE line for the sessions of that
+    /// configuration alone, by its name in launch.json; without one, for every session.
+    pub(crate) fn bp_for(&mut self, config: Option<String>) -> Outcome {
         let config = config.map(|c| c.trim().to_owned()).filter(|c| !c.is_empty());
         let tab = self.tab();
         let config = match config {
@@ -122,14 +122,11 @@ impl App {
                 Some(found.ok_or_else(|| format!("no configuration `{asked}`; there are: {}", names.join(", ")))?)
             }
         };
-        let engine = &mut self.tab_mut().engine;
-        let set = engine.breakpoints().active_set();
-        engine.bind_set(set, config.clone()).map_err(|e| e.to_string())?;
-        let name = name(engine.breakpoints(), set);
-        Ok(match config {
-            Some(config) => format!("set {name} goes only to {config}"),
-            None => format!("set {name} goes to every session"),
-        })
+        let path = tab.source_path().ok_or("no file in SOURCE")?;
+        let line = tab.ui.source.cursor.max(1);
+        let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let toggle = self.tab_mut().engine.toggle_breakpoint_for(&path, line, config.clone());
+        Ok(crate::app::breakpoint_said(toggle, &file, line, config.as_deref()))
     }
 
     /// `/set new [file:line…]`: a set in a new colour, made active. The breakpoints at the

@@ -616,9 +616,12 @@ fn breakpoints(engine: &mut Engine, line: &str) -> Result<String> {
             engine.delete_breakpoint(id)?;
             format!("deleted #{id}")
         }
-        ["bp", at] | ["bp", "toggle", at] => {
+        ["bp", at, rest @ ..] | ["bp", "toggle", at, rest @ ..] if rest.is_empty() || rest[0] == "for" => {
             let (path, line) = location(at)?;
-            format!("{:?} {}:{line}", engine.toggle_breakpoint(&path, line), path.display())
+            let config = rest.get(1..).map(|words| words.join(" ")).filter(|c| !c.is_empty());
+            let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let toggle = engine.toggle_breakpoint_for(&path, line, config.clone());
+            crate::app::breakpoint_said(toggle, &file, line, config.as_deref())
         }
         ["set", "new"] => {
             let set = engine.new_set();
@@ -628,13 +631,6 @@ fn breakpoints(engine: &mut Engine, line: &str) -> Result<String> {
             let set = crate::sets::parse_set(engine.breakpoints(), name).map_err(anyhow::Error::msg)?;
             engine.activate_set(set)?;
             format!("set {name} is active")
-        }
-        ["set", "bind", rest @ ..] => {
-            let set = engine.breakpoints().active_set();
-            let config = Some(rest.join(" ")).filter(|c| !c.is_empty());
-            engine.bind_set(set, config.clone())?;
-            let name = palette::name(set, engine.breakpoints().sets());
-            config.map_or(format!("set {name} goes to every session"), |c| format!("set {name} goes only to {c}"))
         }
         ["watch", "delete", rest @ ..] => {
             let expr = rest.join(" ");

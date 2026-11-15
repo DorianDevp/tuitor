@@ -31,6 +31,18 @@ variables, eval and notes need no vote.
 | `/vote yes`, `/vote no` | answer the call that waits for you (the status line names it) |
 | `/note ‹text›` | a note every peer sees, at the stop and frame on screen |
 
+## Several debuggers on the same files
+
+Each configuration started is a session of its own, all in one tab and one timeline. `b` sets a
+breakpoint for the configuration of the session on screen: a browser debugged twice, once by
+hand and once by a test, stops each at its own breakpoints though they are on the same lines.
+With no session on screen, `b` sets one for every session.
+
+| command | does |
+|---|---|
+| `b`, `/bp toggle` | a breakpoint for the session on screen's configuration |
+| `/bp for ‹configuration›` | a breakpoint on the SOURCE line for that configuration; without one, for every session |
+
 ## On the command line
 
 `tuitor session ‹name› ‹verb›` prints plain text, for scripts and agents. `--as ‹name›` names the

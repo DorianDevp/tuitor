@@ -193,9 +193,9 @@ pub enum Action {
     Vote(Option<String>),
     /// In a shared session: a note every peer sees.
     Note(Option<String>),
-    /// The active set's breakpoints go only to the sessions of a configuration, or to every
-    /// session again.
-    SetBind(Option<String>),
+    /// A breakpoint on the SOURCE line for the sessions of one configuration alone, or for
+    /// every session without one.
+    BpFor(Option<String>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -270,11 +270,11 @@ pub static COMMANDS: &[Spec] = &[
         parse: |a| Ok(Action::Note(text(a))),
     },
     Spec {
-        name: "set bind",
+        name: "bp for",
         arg: Arg::Optional("‹configuration›"),
-        help: "the active set's breakpoints go only to that configuration's sessions; without one, to every session",
+        help: "a breakpoint on the SOURCE line for that configuration's sessions alone; without one, for every session",
         group: Group::Breakpoints,
-        parse: |a| Ok(Action::SetBind(text(a))),
+        parse: |a| Ok(Action::BpFor(text(a))),
     },
     Spec {
         name: "continue",
