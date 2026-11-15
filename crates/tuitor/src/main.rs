@@ -65,6 +65,11 @@ struct Cli {
     #[arg(long, value_name = "NAME")]
     session: Option<String>,
 
+    /// In a shared session: your continue, steps, pause, stop and restart run at once,
+    /// without waiting for the other peers' votes.
+    #[arg(long, requires = "session")]
+    su: bool,
+
     /// The name this tuitor goes by in a shared session; the user's by default.
     #[arg(long = "as", value_name = "PEER", global = true)]
     peer: Option<String>,
@@ -210,7 +215,7 @@ fn main() -> Result<ExitCode> {
     }
     if let Some(name) = &cli.session {
         let peer = shared::peer_name(cli.peer.as_deref());
-        shared::join(shared::Joined { name: name.clone(), workspace: workspace.clone(), peer });
+        shared::join(shared::Joined { name: name.clone(), workspace: workspace.clone(), peer, su: cli.su });
     }
     let first = Project::open(&workspace, &store, cli.launch_json.as_deref());
     let others = cli.open.iter().map(|dir| directory(dir)).collect::<Result<Vec<_>>>()?;

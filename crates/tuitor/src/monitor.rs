@@ -139,7 +139,7 @@ impl Monitor {
                 self.record(Body::Decided { call: proposal.id.clone(), passed: false });
                 let text = format!("{} said no to {}", no, proposal.call.describe());
                 self.record(Body::Reply { call: proposal.id.clone(), ok: false, text });
-            } else if proposal.waiting_for(&attached).is_empty() {
+            } else if self.peers.is_su(&proposal.by) || proposal.waiting_for(&attached).is_empty() {
                 self.record(Body::Decided { call: proposal.id.clone(), passed: true });
                 self.run(engine, &proposal.id, &proposal.call);
             }

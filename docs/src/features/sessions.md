@@ -24,7 +24,8 @@ tuitor session pair --as bot wait stop        # until the program stops, then th
 
 Continue, the steps, pause, stop and restart wait until every peer in the session said yes; one
 no drops them. Alone in a session, they run at once. Breakpoints, sets, watches, expanding
-variables, eval and notes need no vote.
+variables, eval and notes need no vote. A peer that joined with `--su` (`tuitor --session pair --su`)
+moves the program on at once, without votes; the others' calls still wait for its yes.
 
 A call that waits shows in a VOTE popup in the middle of every peer's screen until it is decided:
 

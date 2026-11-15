@@ -32,6 +32,8 @@ pub struct Joined {
     pub name: String,
     pub workspace: PathBuf,
     pub peer: String,
+    /// `--su`: this tuitor's calls move the program on without waiting for votes.
+    pub su: bool,
 }
 
 static JOINED: OnceLock<Joined> = OnceLock::new();
@@ -128,6 +130,9 @@ fn link(joined: &Joined, options: EngineOptions) -> Result<(Engine, UnboundedRec
         engine.apply(&State::Breakpoints(value));
     }
     journal.append(&Record::new(&joined.peer, Body::Join { pid: Some(std::process::id()) }))?;
+    if joined.su {
+        journal.append(&Record::new(&joined.peer, Body::Su))?;
+    }
     ensure_monitor(&journal, &joined.name, &joined.workspace);
     Ok((engine, rx, link))
 }

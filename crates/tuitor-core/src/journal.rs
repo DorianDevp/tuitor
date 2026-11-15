@@ -59,6 +59,8 @@ pub enum Body {
         pid: Option<u32>,
     },
     Leave,
+    /// The peer, joined with `--su`, moves the program on without waiting for votes.
+    Su,
     Call {
         id: String,
         call: Call,
@@ -334,6 +336,7 @@ impl Reader {
 #[derive(Debug, Default)]
 pub struct Peers {
     joined: BTreeMap<String, Option<u32>>,
+    su: BTreeSet<String>,
 }
 
 impl Peers {
@@ -341,9 +344,14 @@ impl Peers {
         match record.body {
             Body::Join { pid } => {
                 self.joined.insert(record.peer.clone(), pid);
+                self.su.remove(&record.peer);
+            }
+            Body::Su => {
+                self.su.insert(record.peer.clone());
             }
             Body::Leave => {
                 self.joined.remove(&record.peer);
+                self.su.remove(&record.peer);
             }
             _ => {}
         }
@@ -352,6 +360,11 @@ impl Peers {
     /// The peers in the session now: a peer kept in by a process is in while it runs.
     pub fn attached(&self) -> BTreeSet<String> {
         self.joined.iter().filter(|(_, pid)| pid.is_none_or(process_alive)).map(|(name, _)| name.clone()).collect()
+    }
+
+    /// Whether `peer` is in the session with `--su`: its calls need no votes.
+    pub fn is_su(&self, peer: &str) -> bool {
+        self.su.contains(peer) && self.attached().contains(peer)
     }
 }
 
@@ -521,6 +534,20 @@ mod tests {
         assert_eq!(proposals.open()[1].no.as_deref(), Some("claude"));
         proposals.see(&Record::new("monitor", Body::Decided { call: "d-1".into(), passed: true }));
         assert_eq!(proposals.open().len(), 1);
+    }
+
+    #[test]
+    fn a_peer_joined_with_su_is_su_while_in_the_session() {
+        let mut peers = Peers::default();
+        peers.see(&Record::new("dorian", Body::Join { pid: None }));
+        peers.see(&Record::new("claude", Body::Join { pid: None }));
+        assert!(!peers.is_su("dorian"));
+        peers.see(&Record::new("dorian", Body::Su));
+        assert!(peers.is_su("dorian") && !peers.is_su("claude"));
+        peers.see(&Record::new("dorian", Body::Leave));
+        assert!(!peers.is_su("dorian"), "su goes with leaving");
+        peers.see(&Record::new("dorian", Body::Join { pid: None }));
+        assert!(!peers.is_su("dorian"), "joining again without --su is not su");
     }
 
     #[test]

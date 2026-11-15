@@ -616,12 +616,23 @@ fn breakpoints(engine: &mut Engine, line: &str) -> Result<String> {
             engine.delete_breakpoint(id)?;
             format!("deleted #{id}")
         }
-        ["bp", at, rest @ ..] | ["bp", "toggle", at, rest @ ..] if rest.is_empty() || rest[0] == "for" => {
+        ["bp", at, rest @ ..] | ["bp", "toggle", at, rest @ ..]
+            if rest.first().is_none_or(|word| *word == "for" || *word == "if") =>
+        {
             let (path, line) = location(at)?;
-            let config = rest.get(1..).map(|words| words.join(" ")).filter(|c| !c.is_empty());
+            let split = rest.iter().position(|word| *word == "if").unwrap_or(rest.len());
+            let config = rest[..split].get(1..).map(|words| words.join(" ")).filter(|c| !c.is_empty());
+            let condition = rest.get(split + 1..).map(|words| words.join(" ")).filter(|c| !c.is_empty());
             let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let toggle = engine.toggle_breakpoint_for(&path, line, config.clone());
-            crate::app::breakpoint_said(toggle, &file, line, config.as_deref())
+            let said = crate::app::breakpoint_said(toggle, &file, line, config.as_deref());
+            match (toggle, condition) {
+                (tuitor_core::breakpoints::Toggle::Added(id), Some(condition)) => {
+                    engine.update_breakpoint(id, |b| b.condition = Some(condition.clone()))?;
+                    format!("{said}, if {condition}")
+                }
+                _ => said,
+            }
         }
         ["set", "new"] => {
             let set = engine.new_set();
