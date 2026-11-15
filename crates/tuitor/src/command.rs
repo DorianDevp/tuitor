@@ -193,6 +193,9 @@ pub enum Action {
     Vote(Option<String>),
     /// In a shared session: a note every peer sees.
     Note(Option<String>),
+    /// The active set's breakpoints go only to the sessions of a configuration, or to every
+    /// session again.
+    SetBind(Option<String>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -265,6 +268,13 @@ pub static COMMANDS: &[Spec] = &[
         help: "shared session: a note every peer sees, at the stop and frame on screen",
         group: Group::Session,
         parse: |a| Ok(Action::Note(text(a))),
+    },
+    Spec {
+        name: "set bind",
+        arg: Arg::Optional("‹configuration›"),
+        help: "the active set's breakpoints go only to that configuration's sessions; without one, to every session",
+        group: Group::Breakpoints,
+        parse: |a| Ok(Action::SetBind(text(a))),
     },
     Spec {
         name: "continue",

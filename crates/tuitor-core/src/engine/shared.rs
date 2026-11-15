@@ -415,3 +415,59 @@ mod tests {
         assert!(!engine.session(1).expect("shared").is_alive());
     }
 }
+
+impl Engine {
+    /// Binds `set` to the sessions of configuration `config` alone, or to every session again,
+    /// and sends each file's breakpoints anew.
+    pub fn bind_set(&mut self, set: crate::breakpoints::SetId, config: Option<String>) -> Result<()> {
+        self.breakpoints.bind_set(set, config)?;
+        for file in self.breakpoints.files() {
+            self.breakpoints_changed(&file);
+        }
+        self.save();
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod binding_tests {
+    use std::path::{Path, PathBuf};
+
+    use super::*;
+    use crate::config::Adapters;
+
+    #[test]
+    fn a_bound_set_goes_only_to_its_configuration_and_the_binding_travels_with_the_breakpoints() {
+        let options =
+            EngineOptions { adapters: Adapters::default(), workspace: PathBuf::from("/tmp"), state_file: None };
+        let mut one = Engine::new(options).0;
+        let file = Path::new("/tmp/main.ts");
+        let everywhere = one.breakpoints().active_set();
+        one.toggle_breakpoint(file, 1);
+        let e2e = one.new_set();
+        one.toggle_breakpoint(file, 2);
+        one.bind_set(e2e, Some("Brave e2e".into())).expect("bind");
+        one.toggle_breakpoint(file, 3);
+        let lines = |engine: &Engine, config: &str| {
+            let (ids, sources) = engine.breakpoints().for_adapter_in(file, true, config);
+            assert_eq!(ids.len(), sources.len());
+            sources.iter().map(|s| s.line).collect::<Vec<_>>()
+        };
+        assert_eq!(lines(&one, "Brave hand run"), [1]);
+        assert_eq!(lines(&one, "brave e2e"), [1, 2, 3]);
+
+        let mut other = Engine::new(EngineOptions {
+            adapters: Adapters::default(),
+            workspace: PathBuf::from("/tmp"),
+            state_file: None,
+        })
+        .0;
+        other.apply(&State::Breakpoints(one.persisted()));
+        assert_eq!(other.breakpoints().bound_to(e2e), Some("Brave e2e"));
+        assert_eq!(other.breakpoints().bound_to(everywhere), None);
+        assert_eq!(lines(&other, "Brave hand run"), [1]);
+
+        one.bind_set(e2e, None).expect("unbind");
+        assert_eq!(lines(&one, "Brave hand run"), [1, 2, 3]);
+    }
+}

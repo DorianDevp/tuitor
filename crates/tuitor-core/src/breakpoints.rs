@@ -48,6 +48,10 @@ pub struct Breakpoint {
     /// until a line that reads as its did comes back.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub lost: bool,
+    /// The configurations its sets are bound to, kept with it so that they are saved: a set
+    /// bound to a configuration goes only to that configuration's sessions.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub bound: std::collections::BTreeMap<SetId, String>,
     #[serde(skip)]
     pub hits: u32,
     #[serde(skip)]
@@ -128,13 +132,22 @@ pub struct Breakpoints {
     active: SetId,
     /// The number of the latest `setBreakpoints` sent to a session for a file.
     sent: HashMap<(SessionId, PathBuf), u64>,
+    /// Sets that go only to the sessions of one configuration, by its name.
+    bound: std::collections::BTreeMap<SetId, String>,
 }
 
 impl Default for Breakpoints {
     /// One set, in the first colour [`palette::next`] gives.
     fn default() -> Self {
         let first = palette::next(&[]);
-        Self { items: Vec::new(), next_id: 0, sets: vec![first], active: first, sent: HashMap::new() }
+        Self {
+            items: Vec::new(),
+            next_id: 0,
+            sets: vec![first],
+            active: first,
+            sent: HashMap::new(),
+            bound: std::collections::BTreeMap::new(),
+        }
     }
 }
 
@@ -154,6 +167,7 @@ impl Breakpoints {
             sets.push(if items.is_empty() { palette::next(&[]) } else { SetId::FIRST_OF_OLD });
         }
         let first = sets[0];
+        let mut bound = std::collections::BTreeMap::new();
         for bp in &mut items {
             let mut kept: Vec<SetId> = Vec::new();
             for set in bp.sets.iter().copied().filter(|s| sets.contains(s)) {
@@ -162,11 +176,13 @@ impl Breakpoints {
                 }
             }
             bp.sets = if kept.is_empty() { vec![first] } else { kept };
+            bp.bound.retain(|set, _| sets.contains(set));
+            bound.extend(bp.bound.iter().map(|(set, config)| (*set, config.clone())));
         }
         items.sort_by(|a, b| (&a.path, a.line).cmp(&(&b.path, b.line)));
         let next_id = items.iter().map(|b| b.id).max().unwrap_or(0);
         let active = active.filter(|a| sets.contains(a)).unwrap_or(first);
-        Self { items, next_id, sets, active, sent: HashMap::new() }
+        Self { items, next_id, sets, active, sent: HashMap::new(), bound }
     }
 
     pub fn saved(&self) -> &[Breakpoint] {
@@ -220,6 +236,7 @@ impl Breakpoints {
 
     pub fn add_in(&mut self, path: PathBuf, line: u32, set: SetId) -> BreakpointId {
         self.next_id += 1;
+        let bound = self.bound.get(&set).map(|config| (set, config.clone())).into_iter().collect();
         let bp = Breakpoint {
             id: self.next_id,
             path,
@@ -231,12 +248,47 @@ impl Breakpoints {
             sets: vec![set],
             anchor: None,
             lost: false,
+            bound,
             hits: 0,
             bindings: HashMap::new(),
         };
         let at = self.items.partition_point(|b| (&b.path, b.line) < (&bp.path, bp.line));
         self.items.insert(at, bp);
         self.next_id
+    }
+
+    /// Binds `set` to the sessions of configuration `config` alone, or to every session again.
+    pub fn bind_set(&mut self, set: SetId, config: Option<String>) -> Result<()> {
+        if !self.sets.contains(&set) {
+            bail!("there is no such set");
+        }
+        match &config {
+            Some(config) => self.bound.insert(set, config.clone()),
+            None => self.bound.remove(&set),
+        };
+        for bp in &mut self.items {
+            bp.bound = bp.sets.iter().filter_map(|s| Some((*s, self.bound.get(s)?.clone()))).collect();
+        }
+        Ok(())
+    }
+
+    /// The configuration `set` is bound to.
+    pub fn bound_to(&self, set: SetId) -> Option<&str> {
+        self.bound.get(&set).map(String::as_str)
+    }
+
+    /// [`Breakpoints::for_adapter`] for a session of configuration `config`: a breakpoint goes
+    /// there when one of its sets is bound to no configuration, or to that one.
+    pub fn for_adapter_in(&self, path: &Path, hits: bool, config: &str) -> (Vec<BreakpointId>, Vec<SourceBreakpoint>) {
+        let (ids, sources): (Vec<BreakpointId>, Vec<SourceBreakpoint>) = self.for_adapter(path, hits);
+        ids.into_iter()
+            .zip(sources)
+            .filter(|(id, _)| {
+                self.get(*id).is_some_and(|b| {
+                    b.sets.iter().any(|s| self.bound.get(s).is_none_or(|c| c.eq_ignore_ascii_case(config)))
+                })
+            })
+            .unzip()
     }
 
     pub fn remove(&mut self, id: BreakpointId) -> Option<Breakpoint> {

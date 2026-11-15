@@ -629,6 +629,13 @@ fn breakpoints(engine: &mut Engine, line: &str) -> Result<String> {
             engine.activate_set(set)?;
             format!("set {name} is active")
         }
+        ["set", "bind", rest @ ..] => {
+            let set = engine.breakpoints().active_set();
+            let config = Some(rest.join(" ")).filter(|c| !c.is_empty());
+            engine.bind_set(set, config.clone())?;
+            let name = palette::name(set, engine.breakpoints().sets());
+            config.map_or(format!("set {name} goes to every session"), |c| format!("set {name} goes only to {c}"))
+        }
         ["watch", "delete", rest @ ..] => {
             let expr = rest.join(" ");
             if engine.remove_watch(&expr) { format!("watch {expr} deleted") } else { format!("no watch {expr}") }

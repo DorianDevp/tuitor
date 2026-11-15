@@ -1695,7 +1695,8 @@ impl Engine {
 
     fn send_breakpoints(&mut self, sid: SessionId, client: &Client, path: PathBuf) {
         let hits = self.session(sid).is_some_and(|s| s.capabilities.supports_hit_conditional_breakpoints);
-        let (ids, breakpoints) = self.breakpoints.for_adapter(&path, hits);
+        let config = self.session(self.root(sid)).map(|s| s.config.name.clone()).unwrap_or_default();
+        let (ids, breakpoints) = self.breakpoints.for_adapter_in(&path, hits, &config);
         let request = self.breakpoints.sending(sid, &path);
         let source = Source {
             name: path.file_name().map(|n| n.to_string_lossy().into_owned()),

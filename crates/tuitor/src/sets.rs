@@ -105,6 +105,33 @@ pub enum Membership {
 }
 
 impl App {
+    /// `/set bind [configuration]`: the active set's breakpoints go only to the sessions of
+    /// that configuration, by its name in launch.json; without one, to every session again.
+    pub(crate) fn set_bind(&mut self, config: Option<String>) -> Outcome {
+        let config = config.map(|c| c.trim().to_owned()).filter(|c| !c.is_empty());
+        let tab = self.tab();
+        let config = match config {
+            None => None,
+            Some(asked) => {
+                let names: Vec<&str> = tab
+                    .project
+                    .as_ref()
+                    .map(|p| p.configurations.iter().map(|c| c.name()).collect())
+                    .unwrap_or_default();
+                let found = names.iter().find(|n| n.eq_ignore_ascii_case(&asked)).map(|n| (*n).to_owned());
+                Some(found.ok_or_else(|| format!("no configuration `{asked}`; there are: {}", names.join(", ")))?)
+            }
+        };
+        let engine = &mut self.tab_mut().engine;
+        let set = engine.breakpoints().active_set();
+        engine.bind_set(set, config.clone()).map_err(|e| e.to_string())?;
+        let name = name(engine.breakpoints(), set);
+        Ok(match config {
+            Some(config) => format!("set {name} goes only to {config}"),
+            None => format!("set {name} goes to every session"),
+        })
+    }
+
     /// `/set new [file:line…]`: a set in a new colour, made active. The breakpoints at the
     /// places, made where there are none, else the breakpoint selected or on the SOURCE line,
     /// if there is one, are in it from the start.
