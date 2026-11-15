@@ -24,6 +24,7 @@
 - [Breakpoints and configurations](features/breakpoints.md)
 - [Sets, COMPARE and PATHS](sets.md)
 - [Rebases](features/rebases.md)
+- [Shared sessions](features/sessions.md)
 - [Commands and DOCTOR](features/commands.md)
 
 # Reference

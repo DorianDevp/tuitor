@@ -7,6 +7,10 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Shared sessions: `tuitor --session ‹name›` puts several tuitors on one debug session through an
+  append-only journal, with a monitor process per session that holds the adapters; the program
+  moves on when every peer votes yes. `tuitor session ‹name› ‹verb›` is a peer on the command line.
+  A session reopened picks up where it was.
 - `tuitor send ‹command line›` runs a command in the running tuitor, so editors can toggle
   breakpoints and show lines in it; ready-made bindings in `editors/` for Vim, Neovim, Emacs, Helix,
   VS Code, Zed, Kakoune and Sublime Text, and a JetBrains recipe.

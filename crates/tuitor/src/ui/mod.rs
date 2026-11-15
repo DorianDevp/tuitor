@@ -606,8 +606,15 @@ fn status(p: &mut Painter<'_>, app: &App, area: Rect) {
         }
         return;
     }
+    let shared = app.shared_banner();
+    let open_vote = app.tab().link.as_ref().is_some_and(|link| !link.proposals.open().is_empty());
+    if let Some(banner) = shared.as_ref().filter(|_| open_vote) {
+        p.text(1, y, banner, bold(AMBER), area.right());
+        return;
+    }
     let Some(status) = &app.ui.status else {
-        p.text(1, y, "/ opens the command line · ? lists every command and key", fg(GHOST), area.right());
+        let hint = shared.unwrap_or_else(|| "/ opens the command line · ? lists every command and key".to_owned());
+        p.text(1, y, &hint, fg(GHOST), area.right());
         return;
     };
     let mut segs = Vec::new();

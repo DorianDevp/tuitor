@@ -12,6 +12,7 @@ mod engine;
 pub mod flow;
 pub mod follow;
 pub mod install;
+pub mod journal;
 mod jsonc;
 pub mod log;
 pub mod palette;
@@ -25,4 +26,4 @@ pub mod store;
 mod tmpdir;
 pub mod trace;
 
-pub use engine::{Engine, EngineMsg, EngineOptions, Level, Notice, Step};
+pub use engine::{Engine, EngineMsg, EngineOptions, Level, Notice, Outbox, Published, Step};

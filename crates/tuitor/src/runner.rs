@@ -87,10 +87,13 @@ async fn event_loop(
     // The editor that ran in tuitor's terminal and stopped, ctrl-z in it, for `edit` to resume.
     let mut stopped = Stopped(None);
     let stopped = &mut stopped.0;
-    // The time in the top bar needs one redraw a second.
-    let mut tick = tokio::time::interval(Duration::from_secs(1));
+    // The time in the top bar needs one redraw a second; a shared session's journal is read
+    // more often.
+    let every = if crate::shared::active() { crate::shared::SYNC_EVERY } else { Duration::from_secs(1) };
+    let mut tick = tokio::time::interval(every);
     let started = Instant::now();
     loop {
+        app.sync_shared();
         app.poll();
         app.ui.clock = Some(started.elapsed());
         terminal.draw(|frame| ui::draw(frame, app))?;

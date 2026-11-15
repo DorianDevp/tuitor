@@ -7,8 +7,8 @@ exclude = ["examples"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-# Let chains, and the newest of the dependencies' own rust-version.
-rust-version = "1.88"
+# Let chains, File::lock for shared sessions, and the newest of the dependencies' own rust-version.
+rust-version = "1.89"
 license = "GPL-3.0-or-later"
 authors = ["Dorian Donoch"]
 repository = "https://github.com/DorianDevp/tuitor"

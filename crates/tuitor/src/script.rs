@@ -168,7 +168,10 @@ async fn wait(app: &mut App, rx: &mut Inbox, what: &str, before: usize) -> Resul
                 drain(app, rx);
             }
             Ok(None) => bail!("timed out waiting for {what}"),
-            Err(_) => app.poll(),
+            Err(_) => {
+                app.sync_shared();
+                app.poll();
+            }
         }
     }
     // Let the capture that follows a stop arrive.
@@ -184,6 +187,7 @@ async fn pump_for(app: &mut App, rx: &mut Inbox, duration: Duration) {
         app.on_engine(tab, msg);
         drain(app, rx);
     }
+    app.sync_shared();
     app.after_engine();
     app.poll();
 }

@@ -4,6 +4,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::time::Instant;
 
+use serde::{Deserialize, Serialize};
 use tuitor_dap::Client;
 use tuitor_dap::types::{Capabilities, Thread};
 
@@ -15,7 +16,7 @@ use crate::tmpdir::TempDir;
 
 pub type SessionId = u32;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SessionState {
     /// Adapter starting, initializing or waiting for the debuggee.
     Starting,

@@ -200,7 +200,13 @@ pub struct Engine {
     my_code: bool,
     /// Commands adapters asked a terminal for, which the UI runs in its own.
     terminals: Vec<Vec<String>>,
+    /// In a shared session, where a peer's engine asks the monitor for what needs an adapter.
+    link: Option<shared::Outbox>,
 }
+
+mod shared;
+
+pub use shared::{Outbox, Published};
 
 impl Engine {
     pub fn new(options: EngineOptions) -> (Engine, mpsc::UnboundedReceiver<EngineMsg>) {
@@ -231,6 +237,7 @@ impl Engine {
             recordings,
             my_code: saved.my_code,
             terminals: Vec::new(),
+            link: None,
         };
         engine.restore_runs();
         (engine, rx)
@@ -301,6 +308,11 @@ impl Engine {
 
     /// Starts the adapter for `config`; progress arrives through [`Engine::handle`].
     pub fn start(&mut self, config: LaunchConfig) -> Result<SessionId> {
+        if self.link.is_some() {
+            let sid = self.next_session;
+            self.ask(crate::journal::Call::Start { config: Value::Object(config.arguments) })?;
+            return Ok(sid);
+        }
         self.launch(config, None)
     }
 
@@ -336,6 +348,9 @@ impl Engine {
     /// Ends the session's debuggee and adapter. A child session runs part of the program
     /// its parent launched, so stopping it stops the parent, which ends the children.
     pub fn stop(&mut self, sid: SessionId) -> Result<()> {
+        if self.link.is_some() {
+            return self.ask(crate::journal::Call::Stop { session: sid });
+        }
         let sid = self.root(sid);
         let session = self.session_ref(sid)?;
         let client = session.client.clone().ok_or_else(|| anyhow!("{} is not connected", session.name))?;
@@ -364,6 +379,11 @@ impl Engine {
     /// parent's, since the adapter made up the child's. The new session keeps the name: the
     /// old one is on its way out, and a `#2` would outlast it.
     pub fn restart(&mut self, sid: SessionId) -> Result<SessionId> {
+        if self.link.is_some() {
+            let next = self.next_session;
+            self.ask(crate::journal::Call::Restart { session: sid })?;
+            return Ok(next);
+        }
         let sid = self.root(sid);
         let config = self.session_ref(sid)?.config.clone();
         if self.session_ref(sid)?.is_alive() {
@@ -389,6 +409,9 @@ impl Engine {
     // ---- execution ------------------------------------------------------------------
 
     pub fn resume(&mut self, sid: SessionId, step: Step) -> Result<()> {
+        if self.link.is_some() {
+            return self.ask(crate::journal::Call::Resume { session: sid, step: step.name().to_owned() });
+        }
         let my_code = self.my_code;
         let session = self.session_mut(sid)?;
         if !session.is_stopped() {
@@ -416,6 +439,9 @@ impl Engine {
     }
 
     pub fn pause(&mut self, sid: SessionId) -> Result<()> {
+        if self.link.is_some() {
+            return self.ask(crate::journal::Call::Pause { session: sid });
+        }
         // Stopped already, at a breakpoint of another set, and about to go on: it stays.
         if let Ok(session) = self.session_mut(sid)
             && session.passing
@@ -542,6 +568,11 @@ impl Engine {
     }
 
     pub fn toggle_exception_filter(&mut self, sid: SessionId, filter: &str) -> Result<bool> {
+        if self.link.is_some() {
+            let on = self.session_ref(sid)?.exception_filters.iter().any(|f| f.filter == filter && !f.enabled);
+            self.ask(crate::journal::Call::ExceptionFilter { session: sid, filter: filter.to_owned() })?;
+            return Ok(on);
+        }
         let session = self.session_mut(sid)?;
         let entry = session
             .exception_filters
@@ -665,6 +696,9 @@ impl Engine {
 
     /// Evaluates in frame `frame` of the live stop (or globally while running).
     pub fn evaluate(&mut self, sid: SessionId, frame: usize, expr: &str) -> Result<()> {
+        if self.link.is_some() {
+            return self.ask(crate::journal::Call::Evaluate { session: sid, frame, expr: expr.to_owned() });
+        }
         let session = self.session_ref(sid)?;
         let client = session.client.clone().ok_or_else(|| anyhow!("{} is not connected", session.name))?;
         let frame_id = session.live().and_then(|s| s.frames.get(frame)).map(|f| f.id);
@@ -680,6 +714,9 @@ impl Engine {
     /// Expands a scope (`[scope]`) or variable path in frame `frame` of a snapshot; it stays
     /// expanded at later stops, and in other frames.
     pub fn expand(&mut self, sid: SessionId, number: u32, frame: usize, path: VarPath) -> Result<()> {
+        if self.link.is_some() {
+            return self.ask(crate::journal::Call::Expand { session: sid, stop: number, frame, path });
+        }
         let session = self.session_mut(sid)?;
         session.expanded.insert(path.clone());
         let snapshot = session.snapshot(number).ok_or_else(|| anyhow!("no stop #{number}"))?;
@@ -705,6 +742,9 @@ impl Engine {
     /// Reads the scopes of frame `frame` of stop `number`, picked in STACK, as the stop read
     /// those of the top frame. Only the live stop can still be read, and only once.
     pub fn read_frame(&mut self, sid: SessionId, number: u32, frame: usize) {
+        if self.link.is_some() {
+            return self.ask_once(crate::journal::Call::ReadFrame { session: sid, stop: number, frame });
+        }
         let Ok(session) = self.session_ref(sid) else { return };
         let (Some(snapshot), Some(client)) = (session.live(), session.client.clone()) else { return };
         let Some(target) = snapshot.frames.get(frame) else { return };

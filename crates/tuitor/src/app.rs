@@ -876,6 +876,8 @@ impl App {
             }
             Action::BpExport(file) => self.bp_export(file),
             Action::BpImport(file) => self.bp_import(file),
+            Action::Vote(answer) => self.vote(answer),
+            Action::Note(text) => self.note(text),
             Action::MyCode => Ok(if self.tab_mut().engine.toggle_my_code() {
                 "my code only: a step into library code goes on until the project's code".into()
             } else {

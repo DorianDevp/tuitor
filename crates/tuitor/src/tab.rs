@@ -302,6 +302,8 @@ pub struct Tab {
     pub code: Code,
     /// REBASE, once `/rebase` read the reflog.
     pub rebase: Option<crate::rebase::RebaseView>,
+    /// Its place in a shared session, with `--session`.
+    pub link: Option<crate::shared::Link>,
 }
 
 impl Tab {
@@ -317,19 +319,23 @@ impl Tab {
             flows: FlowState::default(),
             code,
             rebase: None,
+            link: None,
         }
     }
 
     /// A tab for `project`, and the channel its engine reports on.
     pub fn open(project: Project, adapters: &Adapters, servers: &Servers) -> (Tab, UnboundedReceiver<EngineMsg>) {
-        let (engine, rx) = Engine::new(EngineOptions {
+        let options = EngineOptions {
             adapters: adapters.clone(),
             workspace: project.dir.clone(),
             state_file: persist::state_file(&project.dir),
-        });
+        };
+        let (engine, rx, link) = crate::shared::engine_for(&project.dir, options);
         let flows = FlowState::open(&project.dir);
         let code = Code::new(project.dir.clone(), servers.clone());
-        (Tab { project: Some(project), engine, ui: TabUi::default(), files: None, flows, code, rebase: None }, rx)
+        let tab =
+            Tab { project: Some(project), engine, ui: TabUi::default(), files: None, flows, code, rebase: None, link };
+        (tab, rx)
     }
 
     /// The line of FLOW under the cursor among `items`: the file where execution is until
@@ -340,8 +346,12 @@ impl Tab {
         followed.unwrap_or(self.ui.flow.pos).min(items.len().saturating_sub(1))
     }
 
-    /// Ends what the tab runs: its debug sessions and its language servers.
+    /// Ends what the tab runs: its debug sessions and its language servers. A tab in a shared
+    /// session leaves it; the session runs on in its monitor.
     pub async fn shutdown(&mut self) {
+        if let Some(link) = self.link.take() {
+            link.leave();
+        }
         futures::future::join(self.engine.shutdown(), self.code.shutdown()).await;
     }
 

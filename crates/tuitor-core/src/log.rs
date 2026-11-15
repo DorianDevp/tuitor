@@ -3,10 +3,11 @@
 use std::collections::VecDeque;
 
 use chrono::{DateTime, Local};
+use serde::{Deserialize, Serialize};
 
 use crate::session::SessionId;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum OutputKind {
     Stdout,
     Stderr,
@@ -32,7 +33,7 @@ impl OutputKind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputLine {
     pub time: DateTime<Local>,
     pub session: SessionId,
@@ -40,7 +41,7 @@ pub struct OutputLine {
     pub text: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventLine {
     pub time: DateTime<Local>,
     pub session: SessionId,
@@ -53,11 +54,13 @@ pub struct EventLine {
 pub struct Bounded<T> {
     items: VecDeque<T>,
     cap: usize,
+    /// Entries ever pushed, the dropped ones too: what is new since a count read before.
+    pushed: u64,
 }
 
 impl<T> Bounded<T> {
     pub fn new(cap: usize) -> Self {
-        Self { items: VecDeque::with_capacity(cap.min(1024)), cap }
+        Self { items: VecDeque::with_capacity(cap.min(1024)), cap, pushed: 0 }
     }
 
     pub fn push(&mut self, item: T) {
@@ -65,6 +68,7 @@ impl<T> Bounded<T> {
             self.items.pop_front();
         }
         self.items.push_back(item);
+        self.pushed += 1;
     }
 
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = &T> + ExactSizeIterator {
@@ -81,5 +85,15 @@ impl<T> Bounded<T> {
 
     pub fn clear(&mut self) {
         self.items.clear();
+    }
+
+    pub fn pushed(&self) -> u64 {
+        self.pushed
+    }
+
+    /// The entries pushed after the count was `since`, oldest first, as many as are kept.
+    pub fn since(&self, since: u64) -> impl Iterator<Item = &T> {
+        let new = usize::try_from(self.pushed.saturating_sub(since)).unwrap_or(usize::MAX).min(self.items.len());
+        self.items.iter().skip(self.items.len() - new)
     }
 }

@@ -189,6 +189,10 @@ pub enum Action {
     Help,
     Suspend,
     Quit,
+    /// In a shared session: yes or no to the call that waits for votes.
+    Vote(Option<String>),
+    /// In a shared session: a note every peer sees.
+    Note(Option<String>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -248,6 +252,20 @@ fn text(arg: Option<&str>) -> Option<String> {
 }
 
 pub static COMMANDS: &[Spec] = &[
+    Spec {
+        name: "vote",
+        arg: Arg::Required("yes|no"),
+        help: "shared session: yes or no to the call that waits for your vote",
+        group: Group::Session,
+        parse: |a| Ok(Action::Vote(text(a))),
+    },
+    Spec {
+        name: "note",
+        arg: Arg::Required("‹text›"),
+        help: "shared session: a note every peer sees, at the stop and frame on screen",
+        group: Group::Session,
+        parse: |a| Ok(Action::Note(text(a))),
+    },
     Spec {
         name: "continue",
         arg: Arg::None,

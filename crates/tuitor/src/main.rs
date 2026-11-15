@@ -12,9 +12,11 @@ mod job;
 mod keymap;
 mod mappings;
 mod model;
+mod monitor;
 mod outline;
 mod overlay;
 mod paths;
+mod peer;
 mod picker;
 mod places;
 mod rebase;
@@ -25,6 +27,7 @@ mod script;
 mod search;
 mod sets;
 mod share;
+mod shared;
 mod signals;
 mod sources;
 mod tab;
@@ -56,6 +59,15 @@ use crate::signals::Signals;
 struct Cli {
     /// Launch configuration to start (a name from .vscode/launch.json or tuitor's own).
     config: Option<String>,
+
+    /// Join shared session NAME (or a directory): every tuitor in it sees the same stops, and
+    /// the program moves on when all of them say yes.
+    #[arg(long, value_name = "NAME")]
+    session: Option<String>,
+
+    /// The name this tuitor goes by in a shared session; the user's by default.
+    #[arg(long = "as", value_name = "PEER", global = true)]
+    peer: Option<String>,
 
     /// Project directory; defaults to the current directory.
     #[arg(short = 'C', long, global = true)]
@@ -145,10 +157,20 @@ enum Command {
         #[arg(long, short)]
         yes: bool,
     },
+    /// Be a peer of shared session NAME from the command line: show the stop, wait for the next,
+    /// run a command, vote, note. Plain text, for scripts and agents.
+    Session {
+        name: String,
+        #[command(subcommand)]
+        verb: peer::Verb,
+    },
+    /// The process of a shared session that talks to the adapters; tuitor starts it.
+    #[command(hide = true)]
+    Monitor { name: String },
 }
 
 fn main() -> Result<ExitCode> {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
     // A client of another tuitor, which needs none of what follows.
     if let Some(Command::Send { words }) = &cli.command {
         #[cfg(unix)]
@@ -164,12 +186,38 @@ fn main() -> Result<ExitCode> {
     let settings = Settings::load(config_dir.as_ref().map(|d| d.join("config.toml")).as_deref())?;
     let store = Store::new(Store::default_path().context("no config directory for tuitor's configurations")?);
     let workspace = directory(cli.workspace.as_deref().unwrap_or(Path::new(".")))?;
+    if let Some(Command::Monitor { name }) = &cli.command {
+        let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+        return runtime.block_on(async move {
+            let signals = Signals::new().context("listening for signals")?;
+            monitor::run(name, workspace, adapters, signals).await
+        });
+    }
+    if matches!(cli.command, Some(Command::Session { .. }))
+        && let Some(Command::Session { name, verb }) = cli.command.take()
+    {
+        let context = peer::Context {
+            name,
+            peer: shared::peer_name(cli.peer.as_deref()),
+            workspace,
+            adapters,
+            store,
+            launch_json: cli.launch_json.clone(),
+            servers: settings.lsp.clone(),
+        };
+        let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+        return runtime.block_on(peer::run(context, verb));
+    }
+    if let Some(name) = &cli.session {
+        let peer = shared::peer_name(cli.peer.as_deref());
+        shared::join(shared::Joined { name: name.clone(), workspace: workspace.clone(), peer });
+    }
     let first = Project::open(&workspace, &store, cli.launch_json.as_deref());
     let others = cli.open.iter().map(|dir| directory(dir)).collect::<Result<Vec<_>>>()?;
 
     let start = match &cli.command {
         // Answered above.
-        Some(Command::Send { .. }) => None,
+        Some(Command::Send { .. } | Command::Session { .. } | Command::Monitor { .. }) => None,
         Some(Command::Configs) => {
             let mut projects = vec![first];
             projects.extend(others.iter().map(|dir| Project::open(dir, &store, None)));
@@ -203,7 +251,7 @@ fn main() -> Result<ExitCode> {
         },
     };
     // Unless asked for, the current directory gets a tab only if it is a project.
-    let open_first = cli.workspace.is_some() || start.is_some() || first.is_project();
+    let open_first = cli.workspace.is_some() || cli.session.is_some() || start.is_some() || first.is_project();
 
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     runtime.block_on(async move {
