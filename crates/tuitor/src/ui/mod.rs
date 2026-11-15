@@ -101,7 +101,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Some(Overlay::Value(view)) => overlays::value(&mut p, view, area),
         // On the status line, over SOURCE and its highlights.
         Some(Overlay::Search(_)) => {}
-        None => {}
+        None => crate::shared::draw_vote(&mut p, app, area),
     }
 }
 

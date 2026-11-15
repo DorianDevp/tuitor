@@ -364,6 +364,9 @@ impl App {
 
     pub fn on_key(&mut self, event: KeyEvent) {
         let Some(key) = Key::from_event(event) else { return };
+        if self.vote_key(&key) {
+            return;
+        }
         if self.ui.overlay.is_some() {
             self.overlay_key(key);
             return;

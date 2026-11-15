@@ -1,6 +1,8 @@
 //! A tab in a shared session: its engine is a peer's (see [`tuitor_core::journal`]). Each
 //! turn of the loop reads what the journal got since, takes in what the monitor recorded,
-//! and records the breakpoints this tuitor changed. `/vote` and `/note` speak in the session.
+//! and records the breakpoints this tuitor changed. A call that waits for votes shows in a
+//! popup over the screen until it is decided: `y` or `n` on another's, `w` withdraws one's
+//! own, `esc` hides it until `/vote` shows it again.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -8,12 +10,16 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use ratatui::layout::Rect;
 use serde_json::Value;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tuitor_core::journal::{At, Body, Journal, Peers, Proposals, Reader, Record, State, session_dir};
 use tuitor_core::{Engine, EngineMsg, EngineOptions, Outbox, persist};
 
 use crate::app::{App, Outcome};
+use crate::keymap::Key;
+use crate::ui::paint::{Painter, Panel, seg};
+use crate::ui::theme::{AMBER_BG, DIM, FAINT, FG, WHITE, bold, fg};
 
 /// How often a peer looks at the journal.
 pub const SYNC_EVERY: Duration = Duration::from_millis(100);
@@ -55,6 +61,16 @@ pub struct Link {
     pub notes: Vec<Record>,
     breakpoints: Option<Value>,
     checked: Instant,
+    /// The call whose popup `esc` hid.
+    hidden: Option<String>,
+}
+
+/// What the vote popup asks.
+pub enum Prompt {
+    /// Another peer's call, waiting for this peer's yes or no.
+    Theirs { id: String, by: String, what: String, waiting: Vec<String> },
+    /// This peer's call, waiting for the others.
+    Mine { id: String, what: String, waiting: Vec<String> },
 }
 
 /// The engine of a tab for `dir`: a peer's, keeping nothing in the project's state file, when
@@ -97,6 +113,7 @@ fn link(joined: &Joined, options: EngineOptions) -> Result<(Engine, UnboundedRec
         notes: Vec::new(),
         breakpoints: None,
         checked: Instant::now(),
+        hidden: None,
     };
     let mut seeded = false;
     for record in &records {
@@ -207,23 +224,49 @@ impl Link {
         let _ = self.journal.append(&Record::new(&self.peer, Body::Leave));
     }
 
+    /// The open call this peer has to answer, else its own that waits, oldest first.
+    fn open_prompt(&self) -> Option<Prompt> {
+        let attached = self.peers.attached();
+        let named = |names: Vec<String>| -> Vec<String> {
+            names.into_iter().map(|n| if n == self.peer { "you".to_owned() } else { n }).collect()
+        };
+        let open = self.proposals.open();
+        let theirs = open.iter().find(|p| p.by != self.peer && !p.yes.contains(&self.peer) && p.no.is_none());
+        if let Some(p) = theirs {
+            let waiting = named(p.waiting_for(&attached));
+            return Some(Prompt::Theirs { id: p.id.clone(), by: p.by.clone(), what: p.call.describe(), waiting });
+        }
+        open.iter().find(|p| p.by == self.peer && p.no.is_none()).map(|p| Prompt::Mine {
+            id: p.id.clone(),
+            what: p.call.describe(),
+            waiting: named(p.waiting_for(&attached)),
+        })
+    }
+
+    /// What the popup shows now: the open prompt unless `esc` hid it.
+    pub fn prompt(&self) -> Option<Prompt> {
+        self.open_prompt().filter(|prompt| {
+            let id = match prompt {
+                Prompt::Theirs { id, .. } | Prompt::Mine { id, .. } => id,
+            };
+            self.hidden.as_ref() != Some(id)
+        })
+    }
+
+    fn vote(&self, id: &str, yes: bool) -> Result<()> {
+        self.journal.append(&Record::new(&self.peer, Body::Vote { call: id.to_owned(), yes }))
+    }
+
     /// What the status line says when nothing else is: who is in, and what waits for votes.
     pub fn banner(&self) -> String {
-        let attached = self.peers.attached();
-        let mut said: Vec<String> = Vec::new();
-        for proposal in self.proposals.open() {
-            let waiting = proposal.waiting_for(&attached);
-            if proposal.by != self.peer && !proposal.yes.contains(&self.peer) {
-                said.push(format!("{} proposes {}: /vote yes, /vote no", proposal.by, proposal.call.describe()));
-            } else if !waiting.is_empty() {
-                said.push(format!("{} waits for {}", proposal.call.describe(), waiting.join(", ")));
+        match self.open_prompt() {
+            Some(Prompt::Theirs { by, what, .. }) => format!("VOTE: {by} proposes {what} · /vote shows it"),
+            Some(Prompt::Mine { what, waiting, .. }) => format!("VOTE: {what} waits for {}", waiting.join(", ")),
+            None => {
+                let names: Vec<String> = self.peers.attached().into_iter().collect();
+                format!("shared {}: {}", self.name, names.join(", "))
             }
         }
-        if said.is_empty() {
-            let names: Vec<String> = attached.into_iter().collect();
-            said.push(format!("shared {}: {}", self.name, names.join(", ")));
-        }
-        said.join(" · ")
     }
 }
 
@@ -241,23 +284,51 @@ impl App {
         }
     }
 
-    /// `/vote yes|no`: on the call that waits for this peer's vote.
+    /// A key while the vote popup shows: `y` and `n` answer another's call, `w` withdraws
+    /// one's own, `esc` hides it. Other keys go on as usual; true when the popup took it.
+    pub fn vote_key(&mut self, key: &Key) -> bool {
+        if self.ui.overlay.is_some() {
+            return false;
+        }
+        let Some(link) = self.tab_mut().link.as_mut() else { return false };
+        let Some(prompt) = link.prompt() else { return false };
+        let (said, result) = match (&prompt, key) {
+            (Prompt::Theirs { id, what, .. }, key) if key.is("y") => (format!("yes to {what}"), link.vote(id, true)),
+            (Prompt::Theirs { id, what, .. }, key) if key.is("n") => (format!("no to {what}"), link.vote(id, false)),
+            (Prompt::Mine { id, what, .. }, key) if key.is("w") => (format!("withdrew {what}"), link.vote(id, false)),
+            (Prompt::Theirs { id, .. } | Prompt::Mine { id, .. }, key) if key.is("esc") => {
+                link.hidden = Some(id.clone());
+                ("hidden; /vote shows it again".to_owned(), Ok(()))
+            }
+            _ => return false,
+        };
+        let outcome = result.map(|()| said).map_err(|e| format!("{e:#}").into());
+        self.report(outcome);
+        true
+    }
+
+    /// `/vote [yes|no]`: answers the call that waits for this peer's vote; without an answer,
+    /// shows its popup again.
     pub fn vote(&mut self, answer: Option<String>) -> Outcome {
         let yes = match answer.as_deref().map(str::trim) {
             Some("yes" | "y") => true,
             Some("no" | "n") => false,
-            _ => return Err("/vote yes or /vote no".to_owned().into()),
+            None | Some("") => {
+                let link = self.tab_mut().link.as_mut().ok_or("not in a shared session")?;
+                link.hidden = None;
+                return Ok(if link.open_prompt().is_some() {
+                    String::new()
+                } else {
+                    "nothing waits for a vote".into()
+                });
+            }
+            Some(other) => return Err(format!("/vote yes or /vote no, not `{other}`").into()),
         };
         let link = self.tab().link.as_ref().ok_or("not in a shared session")?;
-        let proposal = link
-            .proposals
-            .open()
-            .iter()
-            .rev()
-            .find(|p| p.by != link.peer && !p.yes.contains(&link.peer))
-            .ok_or("nothing waits for your vote")?;
-        let (id, what) = (proposal.id.clone(), proposal.call.describe());
-        link.journal.append(&Record::new(&link.peer, Body::Vote { call: id, yes })).map_err(|e| format!("{e:#}"))?;
+        let Some(Prompt::Theirs { id, what, .. }) = link.open_prompt() else {
+            return Err("nothing waits for your vote".into());
+        };
+        link.vote(&id, yes).map_err(|e| format!("{e:#}"))?;
         Ok(format!("{} {what}", if yes { "yes to" } else { "no to" }))
     }
 
@@ -274,5 +345,33 @@ impl App {
 
     pub fn shared_banner(&self) -> Option<String> {
         self.tab().link.as_ref().map(Link::banner)
+    }
+}
+
+/// The vote popup, over the middle of the screen, while a call waits for votes.
+pub fn draw_vote(p: &mut Painter<'_>, app: &App, screen: Rect) {
+    let Some(prompt) = app.tab().link.as_ref().and_then(Link::prompt) else { return };
+    let (title, lines, keys): (&str, Vec<String>, Vec<(&str, &str)>) = match &prompt {
+        Prompt::Theirs { by, what, waiting, .. } => (
+            "VOTE",
+            vec![format!("{by} proposes"), what.clone(), format!("waiting for: {}", waiting.join(", "))],
+            vec![("y", "yes"), ("n", "no"), ("esc", "later")],
+        ),
+        Prompt::Mine { what, waiting, .. } => (
+            "YOUR CALL WAITS",
+            vec!["you proposed".to_owned(), what.clone(), format!("waiting for: {}", waiting.join(", "))],
+            vec![("w", "withdraw"), ("esc", "hide")],
+        ),
+    };
+    let width = 56.min(screen.width.saturating_sub(4));
+    let height = 7;
+    let rect = Rect::new((screen.width - width) / 2, screen.height.saturating_sub(height) / 2, width, height);
+    p.fill(rect, AMBER_BG);
+    p.panel(rect, &Panel { title, sub: vec![seg("shared session", fg(DIM))], keys, focus: true, ..Panel::default() });
+    let inner = crate::ui::paint::inner(rect);
+    let styles = [fg(FG), bold(WHITE), fg(FAINT)];
+    for (i, (line, style)) in lines.iter().zip(styles).enumerate() {
+        let y = inner.y + 1 + u16::try_from(i).unwrap_or(0);
+        p.text(inner.x + 2, y, line, style, inner.right());
     }
 }

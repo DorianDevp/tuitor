@@ -26,9 +26,17 @@ Continue, the steps, pause, stop and restart wait until every peer in the sessio
 no drops them. Alone in a session, they run at once. Breakpoints, sets, watches, expanding
 variables, eval and notes need no vote.
 
+A call that waits shows in a VOTE popup in the middle of every peer's screen until it is decided:
+
+| key | does |
+|---|---|
+| `y`, `n` | yes or no to another peer's call |
+| `w` | withdraw your own call |
+| `esc` | hide the popup; the status line still says VOTE, and `/vote` shows it again |
+
 | command | does |
 |---|---|
-| `/vote yes`, `/vote no` | answer the call that waits for you (the status line names it) |
+| `/vote yes`, `/vote no` | answer the call that waits for you; `/vote` alone shows its popup |
 | `/note ‹text›` | a note every peer sees, at the stop and frame on screen |
 
 ## Several debuggers on the same files
